@@ -1,0 +1,20 @@
+#!/bin/sh
+# Installs or updates Claude Code to the latest version in .runtime/
+set -e
+
+MODULE_DIR=$(cd "$(dirname "$0")/.." && pwd)
+RUNTIME="$MODULE_DIR/.runtime"
+
+mkdir -p "$RUNTIME"
+echo "Завантажую свіжу версію Claude Code…"
+npm install --prefix "$RUNTIME" --no-audit --no-fund --silent @anthropic-ai/claude-code@latest
+touch "$RUNTIME/.last-update"
+
+ver() { node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).$2" "$1" 2>/dev/null || true; }
+PINNED=$(ver "$MODULE_DIR/package.json" "dependencies['@anthropic-ai/claude-agent-sdk']")
+INSTALLED=$(ver "$MODULE_DIR/node_modules/@anthropic-ai/claude-agent-sdk/package.json" version)
+if [ -f "$MODULE_DIR/package.json" ] && [ "$PINNED" != "$INSTALLED" ]; then
+	npm install --prefix "$MODULE_DIR" --no-audit --no-fund --silent || echo "Failed to install module dependencies"
+fi
+
+"$RUNTIME/node_modules/.bin/claude" --version

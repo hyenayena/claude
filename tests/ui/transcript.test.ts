@@ -1,0 +1,140 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import type {ChatEvent, UiEvent} from '../../src/chat/events.js';
+import type {ToolRequest} from '../../src/chat/permission.js';
+import {initialTranscript, reduceTranscript, type Out, type TranscriptState} from '../../src/ui/transcript.js';
+
+const ui = (event: UiEvent): ChatEvent => ({type: 'ui', event});
+
+function run(events: ChatEvent[]): {state: TranscriptState; out: Out[]} {
+	let state = initialTranscript();
+	const out: Out[] = [];
+	for (const e of events) {
+		const step = reduceTranscript(state, e);
+		state = step.state;
+		out.push(...step.out);
+	}
+	return {state, out};
+}
+
+test('deltas accumulate raw and the text event is the single flush', () => {
+	const {state, out} = run([
+		{type: 'state', state: 'running'},
+		ui({kind: 'text-delta', text: 'Hel'}),
+		ui({kind: 'text-delta', text: 'lo'}),
+	]);
+	assert.equal(state.liveRaw, 'Hello');
+	assert.equal(state.phase, 'running');
+	assert.deepEqual(out, []);
+
+	const done = run([
+		ui({kind: 'text-delta', text: 'Hello'}),
+		ui({kind: 'text', messageId: 'm1', text: 'Hello'}),
+		ui({kind: 'result', ok: true, subtype: 'success', costUsd: 0.5}),
+		{type: 'turn-end', outcome: 'ok'},
+		{type: 'state', state: 'idle'},
+	]);
+	assert.deepEqual(
+		done.out.map(o => o.kind),
+		['assistant', 'blank'],
+	);
+	assert.equal(done.state.liveRaw, '');
+	assert.equal(done.state.costUsd, 0.5);
+	assert.equal(done.state.phase, 'idle');
+});
+
+test('unfinished text is printed once, marked interrupted', () => {
+	const {out, state} = run([
+		{type: 'state', state: 'running'},
+		ui({kind: 'text-delta', text: 'partial'}),
+		{type: 'turn-end', outcome: 'interrupted'},
+		{type: 'state', state: 'idle'},
+	]);
+	const assistants = out.filter(o => o.kind === 'assistant');
+	assert.equal(assistants.length, 1);
+	assert.deepEqual(assistants[0], {kind: 'assistant', text: 'partial', interrupted: true});
+	assert.ok(out.some(o => o.kind === 'outcome' && o.outcome === 'interrupted'));
+	assert.equal(state.liveRaw, '');
+});
+
+test('aborted text block is marked interrupted', () => {
+	const {out} = run([ui({kind: 'text', messageId: 'm', text: 'cut', aborted: true})]);
+	assert.deepEqual(out[0], {kind: 'assistant', text: 'cut', interrupted: true});
+});
+
+test('tool lifecycle: running, progress, result prints once', () => {
+	const events: ChatEvent[] = [
+		ui({kind: 'tool-use', toolUseId: 't1', name: 'Bash', input: {command: 'ls'}}),
+		ui({kind: 'tool-progress', toolUseId: 't1', name: 'Bash', elapsedSeconds: 4}),
+	];
+	const mid = run(events);
+	assert.equal(mid.state.tools.get('t1')?.elapsedSeconds, 4);
+	const end = run([...events, ui({kind: 'tool-result', toolUseId: 't1', isError: false, text: 'a\nb'})]);
+	assert.equal(end.state.tools.size, 0);
+	assert.deepEqual(end.out, [{kind: 'tool', name: 'Bash', input: {command: 'ls'}, isError: false, text: 'a\nb'}]);
+});
+
+test('non-ok outcomes print an error; ok prints none', () => {
+	for (const outcome of ['error', 'timeout', 'max-turns'] as const) {
+		const {out} = run([{type: 'turn-end', outcome, error: 'boom'}]);
+		assert.ok(out.some(o => o.kind === 'outcome' && o.outcome === outcome));
+	}
+	assert.deepEqual(run([{type: 'turn-end', outcome: 'ok'}]).out, []);
+});
+
+test('session, status and retry update state', () => {
+	const {state} = run([
+		ui({kind: 'session', sessionId: 'abcdef123456', model: 'm1'}),
+		ui({kind: 'retry', attempt: 2, maxRetries: 5, delayMs: 3000}),
+	]);
+	assert.equal(state.sessionId, 'abcdef123456');
+	assert.equal(state.model, 'm1');
+	assert.deepEqual(state.status, {kind: 'retry', attempt: 2, maxRetries: 5, delayMs: 3000});
+	assert.equal(run([ui({kind: 'status', status: 'compacting'})]).state.status?.kind, 'compacting');
+});
+
+test('raw delta cap keeps the tail', () => {
+	const {state} = run([ui({kind: 'text-delta', text: 'x'.repeat(2_500_000)})]);
+	assert.equal(state.liveRaw.length, 2_000_000);
+});
+
+test('permission events track pending, the per-turn approval counter and the mode', () => {
+	const req: ToolRequest = {
+		kind: 'tool',
+		id: 'r',
+		seq: 1,
+		toolName: 'Bash',
+		input: {command: 'ls'},
+		cwd: '/app',
+		highlights: [],
+		defaultToNo: false,
+		always: false,
+		oversize: false,
+	};
+	const a = run([
+		{type: 'permission-requested', request: req, pending: 1},
+		{type: 'permission-requested', request: {...req, id: 'r2'}, pending: 2},
+		{type: 'permission-requested', request: {kind: 'question', id: 'q', seq: 3, questions: []}, pending: 3},
+	]);
+	assert.equal(a.state.pending, 3);
+	assert.equal(a.state.approvals, 2);
+	const b = run([
+		{type: 'permission-requested', request: req, pending: 1},
+		{type: 'permission-resolved', id: 'r', pending: 0},
+		{type: 'turn-end', outcome: 'ok'},
+	]);
+	assert.equal(b.state.pending, 0);
+	assert.equal(b.state.approvals, 0);
+
+	const m = run([
+		{type: 'mode', mode: 'acceptEdits'},
+		{type: 'mode', mode: 'acceptEdits'},
+		{type: 'audit', entry: {outcome: 'allowed', toolName: 'Bash', summary: 'ls'}},
+	]);
+	assert.equal(m.state.mode, 'acceptEdits');
+	assert.deepEqual(
+		m.out.map(o => o.kind),
+		['mode', 'audit'],
+	);
+	assert.equal(initialTranscript().mode, 'default');
+});

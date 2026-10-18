@@ -1,0 +1,55 @@
+import {readFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import type {Logger} from '../../../src/api.js';
+import {atomicWriteFile} from './fsutil.js';
+import {noopLog} from './log.js';
+import type {ClaudeState} from './types.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PRINTABLE = /^[\x20-\x7e]+$/;
+
+const sanitize = (raw: unknown): ClaudeState => {
+	const state: ClaudeState = {};
+	if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return state;
+	const r = raw as Record<string, unknown>;
+	if (typeof r.lastSessionId === 'string' && UUID.test(r.lastSessionId)) state.lastSessionId = r.lastSessionId;
+	if (typeof r.lastModel === 'string' && r.lastModel.length <= 200 && PRINTABLE.test(r.lastModel)) {
+		state.lastModel = r.lastModel;
+	}
+	if (typeof r.subscriptionNoticeShown === 'boolean') state.subscriptionNoticeShown = r.subscriptionNoticeShown;
+	return state;
+};
+
+// Module-level so that several stores over the same file still serialise.
+let chain: Promise<unknown> = Promise.resolve();
+
+export const createStore = (dataDir: string, log: Logger = noopLog) => {
+	const file = join(dataDir, 'state.json');
+
+	const read = async (): Promise<ClaudeState> => {
+		try {
+			return sanitize(JSON.parse(await readFile(file, 'utf8')));
+		} catch {
+			return {};
+		}
+	};
+
+	const update = (patch: Partial<ClaudeState>): Promise<ClaudeState> => {
+		const run = async (): Promise<ClaudeState> => {
+			const next = sanitize({...(await read()), ...patch});
+			try {
+				await atomicWriteFile(file, JSON.stringify(next, null, '\t') + '\n');
+			} catch (err) {
+				const code = (err as {code?: unknown} | null)?.code;
+				log.warn('state write failed', {code: typeof code === 'string' ? code : undefined});
+				throw err;
+			}
+			return next;
+		};
+		const result = chain.then(run, run);
+		chain = result.catch(() => {});
+		return result;
+	};
+
+	return {read, update};
+};

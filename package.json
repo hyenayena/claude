@@ -1,0 +1,15 @@
+{
+	"name": "claude",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"typecheck": "tsc -p . && tsc -p tests",
+		"test": "node --import tsx --test \"tests/**/*.test.ts\" \"tests/**/*.test.tsx\""
+	},
+	"dependencies": {
+		"@anthropic-ai/claude-agent-sdk": "0.3.302",
+		"@anthropic-ai/sdk": "^0.93.0",
+		"@modelcontextprotocol/sdk": "^1.29.0",
+		"zod": "^4.0.0"
+	}
+}

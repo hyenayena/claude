@@ -1,0 +1,994 @@
+[
+ {
+  "type": "system",
+  "subtype": "init",
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "model": "claude-haiku-5-5",
+  "tools": [
+   "Glob",
+   "Grep",
+   "Read"
+  ],
+  "apiKeySource": "none",
+  "permissionMode": "default",
+  "uuid": "ffe78b15-3385-4566-9e67-5cb116d0240e"
+ },
+ {
+  "type": "system",
+  "subtype": "status",
+  "status": "requesting",
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "uuid": "bcdcf1f2-0621-43cb-8b2f-9a1d1026e957",
+  "user_message_uuids": [
+   "f355a533-341c-43e2-bb83-f483791c84b0"
+  ]
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "message_start",
+   "message": {
+    "model": "claude-haiku-5-5",
+    "id": "msg_011CgA3EttPnStAeSBtW1r9a",
+    "type": "message",
+    "role": "assistant",
+    "content": [],
+    "container": null,
+    "stop_reason": null,
+    "stop_sequence": null,
+    "stop_details": null,
+    "usage": {
+     "input_tokens": 2,
+     "cache_creation_input_tokens": 5468,
+     "cache_read_input_tokens": 5686,
+     "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 5468
+     },
+     "output_tokens": 16,
+     "service_tier": "standard",
+     "inference_geo": "global",
+     "speed": "standard"
+    },
+    "input_transformations": [],
+    "diagnostics": null,
+    "context_management": null
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "8063f80d-5c9a-4b55-a38f-1942fa2c0413",
+  "ttft_ms": 1043,
+  "thinking_display": "updates",
+  "api_message_id": "msg_011CgA3EttPnStAeSBtW1r9a",
+  "user_message_uuid": "f355a533-341c-43e2-bb83-f483791c84b0",
+  "user_message_uuids": [
+   "f355a533-341c-43e2-bb83-f483791c84b0"
+  ]
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_start",
+   "index": 0,
+   "content_block": {
+    "type": "tool_use",
+    "id": "toolu_01KerAj7Sij7Td45EMYvbfyz",
+    "name": "Read",
+    "input": {},
+    "caller": {
+     "type": "direct"
+    }
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "52cffcf9-f619-442e-aaf3-ab0582213fa6",
+  "api_message_id": "msg_011CgA3EttPnStAeSBtW1r9a"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": ""
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "6dfea4a8-6005-47d4-affa-0f799b20c943",
+  "api_message_id": "msg_011CgA3EttPnStAeSBtW1r9a"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": "{\"file_path\": \"/app/package"
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "312d655c-b7c6-42a0-b723-4289584c5f17",
+  "api_message_id": "msg_011CgA3EttPnStAeSBtW1r9a"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": ".json"
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "1e1e8265-0bdc-4480-8a1f-1ad08d853156",
+  "api_message_id": "msg_011CgA3EttPnStAeSBtW1r9a"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "input_json_delta",
+    "partial_json": "\"}"
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "720cf7ed-44d1-428e-9802-c9f1839b45f3",
+  "api_message_id": "msg_011CgA3EttPnStAeSBtW1r9a"
+ },
+ {
+  "type": "assistant",
+  "message": {
+   "model": "claude-haiku-5-5",
+   "id": "msg_011CgA3EttPnStAeSBtW1r9a",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01KerAj7Sij7Td45EMYvbfyz",
+     "name": "Read",
+     "input": {
+      "file_path": "/app/package.json"
+     },
+     "caller": {
+      "type": "direct"
+     }
+    }
+   ],
+   "container": null,
+   "stop_reason": null,
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 5468,
+    "cache_read_input_tokens": 5686,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 5468
+    },
+    "output_tokens": 16,
+    "service_tier": "standard",
+    "inference_geo": "global",
+    "speed": "standard"
+   },
+   "input_transformations": [],
+   "diagnostics": null,
+   "context_management": null
+  },
+  "parent_tool_use_id": null,
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "uuid": "a10d1417-182d-475a-9d5b-dda48abbd402",
+  "timestamp": "2026-10-18T16:44:37.184Z",
+  "request_id": "req_011CgA3EtfzUrjBJaHTGiKL6",
+  "wire_tool_inputs": {
+   "toolu_01KerAj7Sij7Td45EMYvbfyz": {
+    "file_path": "/app/package.json"
+   }
+  },
+  "user_message_uuid": "f355a533-341c-43e2-bb83-f483791c84b0",
+  "user_message_uuids": [
+   "f355a533-341c-43e2-bb83-f483791c84b0"
+  ]
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_stop",
+   "index": 0
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "94bcebf0-5e83-4ad3-96fa-e9d0a1a15da8",
+  "api_message_id": "msg_011CgA3EttPnStAeSBtW1r9a"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "message_delta",
+   "delta": {
+    "stop_reason": "tool_use",
+    "stop_sequence": null,
+    "stop_details": null,
+    "container": null
+   },
+   "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 5468,
+    "cache_read_input_tokens": 5686,
+    "output_tokens": 53,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "iterations": [
+     {
+      "input_tokens": 2,
+      "output_tokens": 53,
+      "cache_read_input_tokens": 5686,
+      "cache_creation_input_tokens": 5468,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 0,
+       "ephemeral_1h_input_tokens": 5468
+      },
+      "type": "message"
+     }
+    ]
+   },
+   "context_management": {
+    "applied_edits": []
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "cddd6c38-c7f4-45ec-8df3-af6435fc766c",
+  "api_message_id": "msg_011CgA3EttPnStAeSBtW1r9a"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "message_stop"
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "11a0e5c9-c34f-488b-9841-dc303c96a09e",
+  "api_message_id": "msg_011CgA3EttPnStAeSBtW1r9a"
+ },
+ {
+  "type": "user",
+  "message": {
+   "role": "user",
+   "content": [
+    {
+     "tool_use_id": "toolu_01KerAj7Sij7Td45EMYvbfyz",
+     "type": "tool_result",
+     "content": "1\t{\n2\t  \"name\": \"yena\",\n3\t  \"version\": \"0.1.0\",\n4\t  \"private\": true,\n5\t  \"type\": \"module\",\n6\t  \"bin\": {\n7\t    \"yena\": \"dist/cli.js\"\n8\t  },\n9\t  \"scripts\": {\n10\t    \"dev\": \"tsx src/cli.ts\",\n11\t    \"build\": \"tsc\",\n12\t    \"start\": \"node dist/cli.js\",\n13\t    \"typecheck\": \"tsc --noEmit\",\n14\t    \"test\": \"node --import tsx --test \\\"src/**/*.test.ts\\\"\",\n15\t    \"typecheck:modules\": \"sh scripts/each-module.sh typecheck\",\n16\t    \"test:modules\": \"sh scripts/each-module.sh test\",\n17\t    \"check\": \"npm run typecheck && npm test && npm run typecheck:modules && npm run test:modules\"\n18\t  },\n19\t  \"dependencies\": {\n20\t    \"ink\": \"^8.0.0\",\n21\t    \"react\": \"^19.3.1\",\n22\t    \"tsx\": \"^4.23.15\"\n23\t  },\n24\t  \"devDependencies\": {\n25\t    \"@types/node\": \"^26.6.5\",\n26\t    \"@types/react\": \"^19.3.0\",\n27\t    \"typescript\": \"^7.0.2\"\n28\t  }\n29\t}\n30\t"
+    }
+   ]
+  },
+  "parent_tool_use_id": null,
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "uuid": "b7e86fd5-7355-412f-8997-b9d0b09916d7",
+  "timestamp": "2026-10-18T16:44:37.214Z",
+  "tool_use_result": {
+   "type": "text",
+   "file": {
+    "filePath": "/app/package.json",
+    "content": "{\n  \"name\": \"yena\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"bin\": {\n    \"yena\": \"dist/cli.js\"\n  },\n  \"scripts\": {\n    \"dev\": \"tsx src/cli.ts\",\n    \"build\": \"tsc\",\n    \"start\": \"node dist/cli.js\",\n    \"typecheck\": \"tsc --noEmit\",\n    \"test\": \"node --import tsx --test \\\"src/**/*.test.ts\\\"\",\n    \"typecheck:modules\": \"sh scripts/each-module.sh typecheck\",\n    \"test:modules\": \"sh scripts/each-module.sh test\",\n    \"check\": \"npm run typecheck && npm test && npm run typecheck:modules && npm run test:modules\"\n  },\n  \"dependencies\": {\n    \"ink\": \"^8.0.0\",\n    \"react\": \"^19.3.1\",\n    \"tsx\": \"^4.23.15\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"^26.6.5\",\n    \"@types/react\": \"^19.3.0\",\n    \"typescript\": \"^7.0.2\"\n  }\n}\n",
+    "numLines": 30,
+    "startLine": 1,
+    "totalLines": 30
+   }
+  },
+  "tool_result_meta": [
+   {
+    "id": "toolu_01KerAj7Sij7Td45EMYvbfyz",
+    "permission_decision": {
+     "decision": "accept",
+     "source": "config",
+     "reason_type": "mode"
+    }
+   }
+  ]
+ },
+ {
+  "type": "system",
+  "subtype": "status",
+  "status": "requesting",
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "uuid": "26419f6c-aaa1-427b-b6bf-e8f917f14f15",
+  "user_message_uuids": [
+   "f355a533-341c-43e2-bb83-f483791c84b0"
+  ]
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "message_start",
+   "message": {
+    "model": "claude-haiku-5-5",
+    "id": "msg_011CgA3F17hJK2gL3Myb1LXS",
+    "type": "message",
+    "role": "assistant",
+    "content": [],
+    "container": null,
+    "stop_reason": null,
+    "stop_sequence": null,
+    "stop_details": null,
+    "usage": {
+     "input_tokens": 2,
+     "cache_creation_input_tokens": 511,
+     "cache_read_input_tokens": 11154,
+     "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 511
+     },
+     "output_tokens": 5,
+     "service_tier": "standard",
+     "inference_geo": "global",
+     "speed": "standard"
+    },
+    "input_transformations": [],
+    "diagnostics": null,
+    "context_management": null
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "6428074b-9385-419c-ad6d-bc57d5b1e7e5",
+  "ttft_ms": 867,
+  "thinking_display": "updates",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_start",
+   "index": 0,
+   "content_block": {
+    "type": "text",
+    "text": ""
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "8dde1fe8-f52b-468d-93f5-4115baeaf281",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": "The package name is **"
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "aaa12197-2dee-49b5-8aeb-8d3c92a87f6f",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": "yena**"
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "6810da78-f646-413a-92b6-0ff3ad0db28b",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": " (version 0.1.0"
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "ec6bc309-a124-48fe-ad4f-58966dc19c3d",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": "),"
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "072f89db-003e-4e00-a378-d48ab54959db",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": " a private "
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "e1cfb5ac-59de-4c43-b299-29c6ee576327",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": "ESM project"
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "2f30eac4-c0de-4306-ab3f-a4043ca31646",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": "."
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "83acb572-9e4c-4e30-aa40-41fa7eb6764d",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "type": "assistant",
+  "message": {
+   "model": "claude-haiku-5-5",
+   "id": "msg_011CgA3F17hJK2gL3Myb1LXS",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "The package name is **yena** (version 0.1.0), a private ESM project."
+    }
+   ],
+   "container": null,
+   "stop_reason": null,
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 511,
+    "cache_read_input_tokens": 11154,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 511
+    },
+    "output_tokens": 5,
+    "service_tier": "standard",
+    "inference_geo": "global",
+    "speed": "standard"
+   },
+   "input_transformations": [],
+   "diagnostics": null,
+   "context_management": null
+  },
+  "parent_tool_use_id": null,
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "uuid": "a13ba4cc-86f3-41fa-b42f-fd98e2361906",
+  "timestamp": "2026-10-18T16:44:38.156Z",
+  "request_id": "req_011CgA3Ezt48GNSHG7gCrxtX"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_stop",
+   "index": 0
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "7bdb12ab-7532-4373-acae-1ee8ceb3bd38",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "message_delta",
+   "delta": {
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "stop_details": null,
+    "container": null
+   },
+   "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 511,
+    "cache_read_input_tokens": 11154,
+    "output_tokens": 26,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "iterations": [
+     {
+      "input_tokens": 2,
+      "output_tokens": 26,
+      "cache_read_input_tokens": 11154,
+      "cache_creation_input_tokens": 511,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 0,
+       "ephemeral_1h_input_tokens": 511
+      },
+      "type": "message"
+     }
+    ]
+   },
+   "context_management": {
+    "applied_edits": []
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "4c925b11-f4bf-4c20-9e6e-241145ae155d",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "message_stop"
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "206d60a8-985b-425f-8c84-aac846b23034",
+  "api_message_id": "msg_011CgA3F17hJK2gL3Myb1LXS"
+ },
+ {
+  "duration_api_ms": 3454,
+  "stop_reason": "end_turn",
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "total_cost_usd": 0.0015314999999999999,
+  "usage": {
+   "input_tokens": 4,
+   "cache_creation_input_tokens": 5979,
+   "cache_read_input_tokens": 16840,
+   "output_tokens": 79,
+   "output_tokens_details": {
+    "thinking_tokens": 0
+   },
+   "server_tool_use": {
+    "web_search_requests": 0,
+    "web_fetch_requests": 0
+   },
+   "service_tier": "standard",
+   "cache_creation": {
+    "ephemeral_1h_input_tokens": 5979,
+    "ephemeral_5m_input_tokens": 0
+   },
+   "inference_geo": "global",
+   "iterations": [
+    {
+     "input_tokens": 2,
+     "output_tokens": 26,
+     "cache_read_input_tokens": 11154,
+     "cache_creation_input_tokens": 511,
+     "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 511
+     },
+     "type": "message"
+    }
+   ],
+   "speed": "standard",
+   "fallback_credit": null
+  },
+  "modelUsage": {
+   "claude-haiku-5-5": {
+    "inputTokens": 1198,
+    "outputTokens": 95,
+    "cacheReadInputTokens": 16840,
+    "cacheCreationInputTokens": 5979,
+    "webSearchRequests": 0,
+    "costUSD": 0.0015314999999999999,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000,
+    "thinkingTokens": 0,
+    "canonicalModel": "claude-haiku-5-5",
+    "provider": "firstParty",
+    "costBasis": "list"
+   }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "origin": {
+   "kind": "human"
+  },
+  "subagent_stats": {
+   "spawned": 0,
+   "requested": {
+    "background": 0,
+    "foreground": 0,
+    "unset": 0
+   },
+   "started_in_background": 0,
+   "max_depth": 0,
+   "spawned_by_subagents": 0,
+   "completed": 0,
+   "failed": 0,
+   "killed": {
+    "parent": 0,
+    "user": 0,
+    "system": 0
+   },
+   "refused": {
+    "depth_limit": 0,
+    "concurrency_limit": 0,
+    "budget": 0
+   },
+   "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 2,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "The package name is **yena** (version 0.1.0), a private ESM project.",
+  "ttft_ms": 1627,
+  "type": "result",
+  "duration_ms": 2624,
+  "uuid": "0980b13c-e71d-44b0-82ab-91cdb5ae1228",
+  "ttft_stream_ms": 1255,
+  "time_to_request_ms": 212,
+  "first_content_frame_ms": 1255,
+  "user_message_uuid": "f355a533-341c-43e2-bb83-f483791c84b0",
+  "user_message_uuids": [
+   "f355a533-341c-43e2-bb83-f483791c84b0"
+  ],
+  "request_sent_wall_ms": 1792341875770,
+  "first_request_input_tokens": 11156,
+  "queued_turn_count": 0,
+  "result_index": 0
+ },
+ {
+  "type": "system",
+  "subtype": "init",
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "model": "claude-haiku-5-5",
+  "tools": [
+   "Glob",
+   "Grep",
+   "Read"
+  ],
+  "apiKeySource": "none",
+  "permissionMode": "default",
+  "uuid": "88932bdd-9fb0-4fe4-b6d3-afed178ea138"
+ },
+ {
+  "type": "system",
+  "subtype": "status",
+  "status": "requesting",
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "uuid": "b8aff666-71b9-40f9-a601-c2ddcb0e0b94",
+  "user_message_uuids": [
+   "e3067fff-7600-4247-b7b2-f9b0d2197670"
+  ]
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "message_start",
+   "message": {
+    "model": "claude-haiku-5-5",
+    "id": "msg_011CgA3F5GjYVHbAGdWFsC7z",
+    "type": "message",
+    "role": "assistant",
+    "content": [],
+    "container": null,
+    "stop_reason": null,
+    "stop_sequence": null,
+    "stop_details": null,
+    "usage": {
+     "input_tokens": 2,
+     "cache_creation_input_tokens": 64,
+     "cache_read_input_tokens": 11665,
+     "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 64
+     },
+     "output_tokens": 4,
+     "service_tier": "standard",
+     "inference_geo": "global",
+     "speed": "standard"
+    },
+    "input_transformations": [],
+    "diagnostics": null,
+    "context_management": null
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "bb263b28-987b-4756-b3fe-d55931e17463",
+  "ttft_ms": 1072,
+  "thinking_display": "updates",
+  "api_message_id": "msg_011CgA3F5GjYVHbAGdWFsC7z",
+  "user_message_uuid": "e3067fff-7600-4247-b7b2-f9b0d2197670",
+  "user_message_uuids": [
+   "e3067fff-7600-4247-b7b2-f9b0d2197670"
+  ]
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_start",
+   "index": 0,
+   "content_block": {
+    "type": "text",
+    "text": ""
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "2482843f-af58-4f58-a9e2-a58fbeef0b8b",
+  "api_message_id": "msg_011CgA3F5GjYVHbAGdWFsC7z"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_delta",
+   "index": 0,
+   "delta": {
+    "type": "text_delta",
+    "text": "OK"
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "664331c8-e1e9-4881-b1d4-c6f5264c7d72",
+  "api_message_id": "msg_011CgA3F5GjYVHbAGdWFsC7z"
+ },
+ {
+  "type": "assistant",
+  "message": {
+   "model": "claude-haiku-5-5",
+   "id": "msg_011CgA3F5GjYVHbAGdWFsC7z",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "OK"
+    }
+   ],
+   "container": null,
+   "stop_reason": null,
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 64,
+    "cache_read_input_tokens": 11665,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 64
+    },
+    "output_tokens": 4,
+    "service_tier": "standard",
+    "inference_geo": "global",
+    "speed": "standard"
+   },
+   "input_transformations": [],
+   "diagnostics": null,
+   "context_management": null
+  },
+  "parent_tool_use_id": null,
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "uuid": "0cabee33-8086-4365-9291-993edcb4fa38",
+  "timestamp": "2026-10-18T16:44:39.282Z",
+  "request_id": "req_011CgA3F52qWkL32coAPWx12",
+  "user_message_uuid": "e3067fff-7600-4247-b7b2-f9b0d2197670",
+  "user_message_uuids": [
+   "e3067fff-7600-4247-b7b2-f9b0d2197670"
+  ]
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "content_block_stop",
+   "index": 0
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "6433a14a-7117-4b9c-bd81-f1b35df793de",
+  "api_message_id": "msg_011CgA3F5GjYVHbAGdWFsC7z"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "message_delta",
+   "delta": {
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "stop_details": null,
+    "container": null
+   },
+   "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 64,
+    "cache_read_input_tokens": 11665,
+    "output_tokens": 4,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "iterations": [
+     {
+      "input_tokens": 2,
+      "output_tokens": 4,
+      "cache_read_input_tokens": 11665,
+      "cache_creation_input_tokens": 64,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 0,
+       "ephemeral_1h_input_tokens": 64
+      },
+      "type": "message"
+     }
+    ]
+   },
+   "context_management": {
+    "applied_edits": []
+   }
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "37c4e8a6-754e-4066-9a40-51655960cd46",
+  "api_message_id": "msg_011CgA3F5GjYVHbAGdWFsC7z"
+ },
+ {
+  "type": "stream_event",
+  "event": {
+   "type": "message_stop"
+  },
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "parent_tool_use_id": null,
+  "uuid": "65da0da5-439d-4edd-89b8-d5d71cf902ef",
+  "api_message_id": "msg_011CgA3F5GjYVHbAGdWFsC7z"
+ },
+ {
+  "duration_api_ms": 4534,
+  "stop_reason": "end_turn",
+  "session_id": "bfc750c8-2ac0-49ef-ab1e-0d6915225132",
+  "total_cost_usd": 0.00166315,
+  "usage": {
+   "input_tokens": 2,
+   "cache_creation_input_tokens": 64,
+   "cache_read_input_tokens": 11665,
+   "output_tokens": 4,
+   "output_tokens_details": {
+    "thinking_tokens": 0
+   },
+   "server_tool_use": {
+    "web_search_requests": 0,
+    "web_fetch_requests": 0
+   },
+   "service_tier": "standard",
+   "cache_creation": {
+    "ephemeral_1h_input_tokens": 64,
+    "ephemeral_5m_input_tokens": 0
+   },
+   "inference_geo": "global",
+   "iterations": [
+    {
+     "input_tokens": 2,
+     "output_tokens": 4,
+     "cache_read_input_tokens": 11665,
+     "cache_creation_input_tokens": 64,
+     "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 64
+     },
+     "type": "message"
+    }
+   ],
+   "speed": "standard",
+   "fallback_credit": null
+  },
+  "modelUsage": {
+   "claude-haiku-5-5": {
+    "inputTokens": 1200,
+    "outputTokens": 99,
+    "cacheReadInputTokens": 28505,
+    "cacheCreationInputTokens": 6043,
+    "webSearchRequests": 0,
+    "costUSD": 0.00166315,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000,
+    "thinkingTokens": 0,
+    "canonicalModel": "claude-haiku-5-5",
+    "provider": "firstParty",
+    "costBasis": "list"
+   }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "origin": {
+   "kind": "human"
+  },
+  "subagent_stats": {
+   "spawned": 0,
+   "requested": {
+    "background": 0,
+    "foreground": 0,
+    "unset": 0
+   },
+   "started_in_background": 0,
+   "max_depth": 0,
+   "spawned_by_subagents": 0,
+   "completed": 0,
+   "failed": 0,
+   "killed": {
+    "parent": 0,
+    "user": 0,
+    "system": 0
+   },
+   "refused": {
+    "depth_limit": 0,
+    "concurrency_limit": 0,
+    "budget": 0
+   },
+   "by_type": {}
+  },
+  "safety_stops": 0,
+  "is_error": false,
+  "num_turns": 1,
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "OK",
+  "ttft_ms": 1092,
+  "type": "result",
+  "duration_ms": 1101,
+  "uuid": "bca5ebad-2fd1-4d55-b63e-9d5a2cca49e1",
+  "ttft_stream_ms": 1090,
+  "time_to_request_ms": 19,
+  "first_content_frame_ms": 1091,
+  "user_message_uuid": "e3067fff-7600-4247-b7b2-f9b0d2197670",
+  "user_message_uuids": [
+   "e3067fff-7600-4247-b7b2-f9b0d2197670"
+  ],
+  "request_sent_wall_ms": 1792341878210,
+  "first_request_input_tokens": 11731,
+  "queued_turn_count": 0,
+  "result_index": 1
+ }
+]

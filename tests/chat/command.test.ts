@@ -1,0 +1,429 @@
+import assert from 'node:assert/strict';
+import {mkdir, mkdtemp, readFile, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {test} from 'node:test';
+import type {CommandContext} from '../../../../src/api.js';
+import {CHAT_DISALLOWED_TOOLS, CHAT_TOOLS} from '../../src/policy.js';
+import {createClaudeCommand, type ClaudeDeps} from '../../src/commands.js';
+import type {ChatQueryFn, QueryFn} from '../../src/types.js';
+import type {ChatUi} from '../../src/chat/command.js';
+import {makeFakeLog, serialized} from '../helpers/fake-log.js';
+
+const OAUTH = 'sk-ant-oat-TESTVALUE0123456789abcdef';
+const SID1 = '11111111-aaaa-4bbb-8ccc-222222222222';
+const SID2 = '33333333-aaaa-4bbb-8ccc-444444444444';
+
+type Props = Parameters<ChatUi['createChatElement']>[0];
+
+const makeChatQuery = (failFirst = false) => {
+	const calls: Array<{options: Record<string, unknown>}> = [];
+	let closed = 0;
+	const query = ((arg: {prompt: AsyncIterable<unknown>; options: Record<string, unknown>}) => {
+		calls.push({options: arg.options});
+		const gen = (async function* () {
+			for await (const _ of arg.prompt) {
+				yield {type: 'system', subtype: 'init', session_id: SID2, model: 'claude-test-1', apiKeySource: 'x'};
+				if (failFirst) {
+					yield {type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['boom'], session_id: SID2};
+				} else {
+					yield {type: 'result', subtype: 'success', is_error: false, result: 'hi', session_id: SID2};
+				}
+			}
+		})();
+		return Object.assign(gen, {close: () => void closed++, interrupt: async () => {}});
+	}) as unknown as ChatQueryFn;
+	return {query, calls, closed: () => closed};
+};
+
+const turnDone = (props: Props): Promise<void> =>
+	new Promise(resolve => {
+		props.controller.subscribe(e => {
+			if (e.type === 'turn-end') resolve();
+		});
+	});
+
+const setup = async (opts: {mount?: boolean; failFirst?: boolean; run?: (p: Props) => Promise<void>; deps?: Partial<ClaudeDeps>} = {}) => {
+	const dataDir = await mkdtemp(join(tmpdir(), 'claude-chat-'));
+	const printed: string[] = [];
+	const props: Props[] = [];
+	let mounts = 0;
+	const ctx: CommandContext = {print: t => printed.push(t), clear: () => {}, exit: () => {}};
+	if (opts.mount !== false) {
+		ctx.mount = async build => {
+			mounts++;
+			const el = build({close: () => {}});
+			assert.equal(typeof el, 'object');
+			await opts.run?.(props[props.length - 1]!);
+		};
+	}
+	const q = makeChatQuery(opts.failFirst);
+	const aborts: AbortController[] = [];
+	let unregistered = 0;
+	const real = createClaudeCommand({
+		dataDir,
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+		loadChatQuery: async () => q.query,
+		loadUi: async () => ({
+			createChatElement: p => {
+				props.push(p);
+				return {};
+			},
+		}),
+		registerAbort: c => {
+			aborts.push(c);
+			return () => void unregistered++;
+		},
+		...opts.deps,
+	});
+	const command = {run: async (args: string[], c: CommandContext) => real.run(args, c)};
+	return {command, dataDir, printed, ctx, q, props, aborts, mounts: () => mounts, unregistered: () => unregistered};
+};
+
+const readState = async (dir: string) => JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')) as Record<string, unknown>;
+
+test('chat without mount throws', async () => {
+	const {command, ctx} = await setup({mount: false});
+	await assert.rejects(command.run(['chat'], ctx), {message: '"claude chat" needs an interface that can show views'});
+});
+
+test('chat rejects unknown arguments', async () => {
+	const {command, ctx, mounts} = await setup();
+	await assert.rejects(command.run(['chat', '--bogus'], ctx), {message: 'Usage: claude chat [--new]'});
+	await assert.rejects(command.run(['chat', 'text'], ctx), {message: 'Usage: claude chat [--new]'});
+	assert.equal(mounts(), 0);
+});
+
+test('missing credential throws before mount', async () => {
+	const {command, ctx, mounts} = await setup({deps: {env: {}}});
+	await assert.rejects(command.run(['chat'], ctx), /No credentials found\./);
+	assert.equal(mounts(), 0);
+});
+
+test('missing SDK maps to the friendly error before mount', async () => {
+	const {command, ctx, mounts} = await setup({
+		deps: {
+			loadChatQuery: async () => {
+				throw Object.assign(new Error('Cannot find package'), {code: 'ERR_MODULE_NOT_FOUND'});
+			},
+		},
+	});
+	await assert.rejects(command.run(['chat'], ctx), {message: 'The Claude Agent SDK is not installed. Run modules/claude/bin/install.'});
+	assert.equal(mounts(), 0);
+});
+
+test('missing ink or react maps to the host dependency error before mount', async () => {
+	const {command, ctx, mounts} = await setup({
+		deps: {
+			loadUi: async () => {
+				throw Object.assign(new Error("Cannot find package 'ink' imported from /app/modules/claude/src/ui/ChatView.tsx"), {
+					code: 'ERR_MODULE_NOT_FOUND',
+				});
+			},
+		},
+	});
+	await assert.rejects(command.run(['chat'], ctx), {
+		message: 'The chat interface dependencies (ink, react) are not installed in the yena host. Run "make install".',
+	});
+	assert.equal(mounts(), 0);
+});
+
+test('a missing module that names the SDK keeps the SDK message even when ink is mentioned', async () => {
+	const {command, ctx } = await setup({
+		deps: {
+			loadUi: async () => {
+				throw Object.assign(new Error("Cannot find package '@anthropic-ai/claude-agent-sdk' imported from ink-wrapper.ts"), {
+					code: 'ERR_MODULE_NOT_FOUND',
+				});
+			},
+		},
+	});
+	await assert.rejects(command.run(['chat'], ctx), {
+		message: 'The Claude Agent SDK is not installed. Run modules/claude/bin/install.',
+	});
+});
+
+test('mounts once, passes props without the secret, prints the subscription notice once', async () => {
+	const s = await setup({run: async p => assert.equal(p.credentialLabel, 'subscription token')});
+	await s.command.run(['chat'], s.ctx);
+	assert.equal(s.mounts(), 1);
+	assert.equal(s.printed.filter(l => l.startsWith('Notice:')).length, 1);
+	assert.equal(JSON.stringify(s.printed).includes(OAUTH), false);
+	await s.command.run(['chat'], s.ctx);
+	assert.equal(s.printed.filter(l => l.startsWith('Notice:')).length, 1);
+});
+
+test('first successful turn persists state; resume and --new', async () => {
+	const s = await setup({
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	assert.equal(s.q.calls[0]!.options.resume, undefined);
+	assert.equal(s.q.calls[0]!.options.includePartialMessages, true);
+	assert.equal(s.q.calls[0]!.options.permissionMode, 'default');
+	const st = await readState(s.dataDir);
+	assert.equal(st.lastSessionId, SID2);
+	assert.equal(st.lastModel, 'claude-test-1');
+
+	await s.command.run(['chat'], s.ctx);
+	assert.equal(s.props[1]!.initialSessionId, SID2);
+	await s.command.run(['chat', '--new'], s.ctx);
+	assert.equal(s.props[2]!.initialSessionId, undefined);
+});
+
+test('resume uses lastSessionId on the first send', async () => {
+	const s = await setup({
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	await s.command.run(['chat'], s.ctx);
+	assert.equal(s.q.calls[1]!.options.resume, SID2);
+	await s.command.run(['chat', '--new'], s.ctx);
+	assert.equal(s.q.calls[2]!.options.resume, undefined);
+});
+
+test('a failed first turn does not write state', async () => {
+	const s = await setup({
+		failFirst: true,
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	assert.equal((await readState(s.dataDir)).lastSessionId, undefined);
+});
+
+test('finally closes the session, unregisters, and prints the closing line', async () => {
+	const s = await setup({
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	assert.equal(s.q.closed(), 1);
+	assert.equal(s.unregistered(), 1);
+	assert.equal(s.printed.at(-1), '[chat closed · session 33333333 · model claude-test-1]');
+	assert.equal(s.props[0]!.controller.state, 'closed');
+});
+
+test('aborting the lifetime controller closes the session', async () => {
+	const s = await setup({
+		run: async p => {
+			s.aborts[0]!.abort();
+			assert.equal(p.controller.state, 'closed');
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+});
+
+test('chat and ask are mutually exclusive', async () => {
+	let release!: () => void;
+	const gate = new Promise<void>(r => (release = r));
+	const s = await setup({run: () => gate});
+	const running = s.command.run(['chat'], s.ctx);
+	await new Promise(r => setTimeout(r, 20));
+	await assert.rejects(s.command.run(['chat'], s.ctx), {message: 'A chat is already open'});
+	await assert.rejects(s.command.run(['ask', 'x'], s.ctx), {message: 'A chat is already open'});
+	release();
+	await running;
+	await s.command.run(['chat'], s.ctx).catch(() => {});
+});
+
+test('closing line carries no control bytes or secret from the model name', async () => {
+	const s = await setup({
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+		},
+	});
+	const evil = `m\x1b]0;x\x07\x1b]52;c;QUJD\x07${OAUTH}`;
+	const q = ((arg: {prompt: AsyncIterable<unknown>}) =>
+		Object.assign(
+			(async function* () {
+				for await (const _ of arg.prompt) {
+					yield {type: 'system', subtype: 'init', session_id: SID2, model: evil, apiKeySource: 'x'};
+					yield {type: 'result', subtype: 'success', is_error: false, result: 'hi', session_id: SID2};
+				}
+			})(),
+			{close: () => {}},
+		)) as unknown as ChatQueryFn;
+	const cmd = createClaudeCommand({
+		dataDir: s.dataDir,
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+		loadChatQuery: async () => q,
+		loadUi: async () => ({createChatElement: p => (s.props.push(p), {})}),
+	});
+	const ctx: CommandContext = {
+		print: t => s.printed.push(t),
+		clear: () => {},
+		exit: () => {},
+		mount: async build => {
+			build({close: () => {}});
+			const p = s.props.at(-1)!;
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+		},
+	};
+	await cmd.run(['chat'], ctx);
+	const out = s.printed.join('\n');
+	assert.equal(/[\x1b\x07]/.test(out), false);
+	assert.equal(out.includes(OAUTH), false);
+	assert.ok(s.printed.at(-1)!.startsWith('[chat closed'));
+});
+
+test('chat logs start and close with labels only, registers the redactor first, and leaks nothing', async () => {
+	const log = makeFakeLog();
+	const s = await setup({
+		deps: {log},
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('PROMPT-SENTINEL-1');
+			await done;
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	assert.equal(log.trail[0], '<addRedactor>');
+	assert.equal(log.redactors.length, 1);
+	const find = (m: string) => log.records.find(r => r.msg === m)!;
+	assert.deepEqual(find('chat starting').fields, {fresh: false, kind: 'oauth', source: 'env', resuming: false});
+	assert.equal(find('turn ended').fields.outcome, 'ok');
+	const closed = find('chat closed');
+	assert.equal(closed.level, 'info');
+	assert.equal(closed.fields.session8, SID2.slice(0, 8));
+	assert.equal(closed.fields.model, 'claude-test-1');
+	const out = serialized(log);
+	for (const secret of ['PROMPT-SENTINEL-1', OAUTH, 'sk-ant']) assert.equal(out.includes(secret), false, secret);
+});
+
+test('chat with a missing SDK logs an error with missingModule', async () => {
+	const log = makeFakeLog();
+	const s = await setup({
+		deps: {
+			log,
+			loadChatQuery: async () => {
+				throw Object.assign(new Error('Cannot find package claude-agent-sdk'), {code: 'ERR_MODULE_NOT_FOUND'});
+			},
+		},
+	});
+	await assert.rejects(async () => s.command.run(['chat'], s.ctx), /not installed/);
+	const rec = log.records.find(r => r.level === 'error')!;
+	assert.equal(rec.fields.missingModule, true);
+});
+
+test('chat builds its options with the chat toolset and a canUseTool, without bypass flags', async () => {
+	const s = await setup({
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	const o = s.q.calls[0]!.options;
+	assert.deepEqual(o.tools, CHAT_TOOLS);
+	assert.deepEqual(o.disallowedTools, CHAT_DISALLOWED_TOOLS);
+	assert.equal(o.permissionMode, 'default');
+	assert.equal(typeof o.canUseTool, 'function');
+	assert.equal('allowedTools' in o, false);
+	assert.equal('allowDangerouslySkipPermissions' in o, false);
+	assert.notEqual(o.permissionMode, 'bypassPermissions');
+	assert.equal(o.includePartialMessages, true);
+});
+
+test('chat passes reveal and the project directory to the view', async () => {
+	const s = await setup({
+		run: async p => {
+			assert.equal(typeof p.reveal, 'function');
+			const shown = p.reveal!(`a\u001b[31m b ${OAUTH}`);
+			assert.equal(shown.includes('\u001b'), false);
+			assert.equal(shown.includes('\\x1b'), true);
+			assert.equal(shown.includes(OAUTH), false);
+			assert.equal(typeof p.projectDir, 'string');
+			assert.equal(p.controller.mode, 'default');
+			assert.deepEqual(p.controller.pendingPermissions, []);
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	assert.equal(s.props.length, 1);
+});
+
+test('the chat permission bridge asks through the session instead of allowing silently', async () => {
+	const s = await setup({
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+			const canUseTool = s.q.calls[0]!.options.canUseTool as (
+				name: string,
+				input: Record<string, unknown>,
+				opts: Record<string, unknown>,
+			) => Promise<{behavior: string}>;
+			const pending = canUseTool('Bash', {command: 'echo hi'}, {signal: new AbortController().signal, toolUseID: 't1', suggestions: []});
+			await new Promise(r => setTimeout(r, 20));
+			assert.equal(p.controller.pendingPermissions.length, 1);
+			assert.equal(p.controller.pendingPermissions[0]!.kind, 'tool');
+			p.controller.answerPermission(p.controller.pendingPermissions[0]!.id, {kind: 'allow'});
+			assert.equal((await pending).behavior, 'allow');
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+});
+
+test('the shipped bridge gets the real preview and highlight builders', async () => {
+	const dir = await mkdtemp(join(tmpdir(), 'claude-wire-'));
+	const projectDir = dir;
+	await mkdir(join(dir, 'modules', 'claude'), {recursive: true});
+	const file = join(projectDir, 'a.txt');
+	await writeFile(file, 'one\ntwo\nthree\n');
+	let canUse!: (name: string, input: Record<string, unknown>, opts: Record<string, unknown>) => Promise<unknown>;
+	const query = ((arg: {prompt: AsyncIterable<unknown>; options: Record<string, unknown>}) => {
+		canUse = arg.options.canUseTool as typeof canUse;
+		const gen = (async function* () {
+			for await (const _ of arg.prompt) {
+				yield {type: 'result', subtype: 'success', is_error: false, result: 'hi', session_id: SID2};
+			}
+		})();
+		return Object.assign(gen, {close: () => {}, interrupt: async () => {}});
+	}) as unknown as ChatQueryFn;
+	const s = await setup({
+		deps: {
+			moduleDir: join(dir, 'modules', 'claude'),
+			loadChatQuery: async () => query,
+		},
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('go');
+			await done;
+			const opts = (id: string) => ({signal: new AbortController().signal, toolUseID: id, suggestions: []});
+			void canUse('Edit', {file_path: file, old_string: 'two', new_string: '2'}, opts('e1'));
+			void canUse('Bash', {command: 'rm -rf x'}, opts('b1'));
+			await new Promise(r => setTimeout(r, 200));
+			const edit = p.controller.pendingPermissions.find(r => r.kind === 'tool' && r.toolName === 'Edit');
+			const bash = p.controller.pendingPermissions.find(r => r.kind === 'tool' && r.toolName === 'Bash');
+			assert.equal(edit?.kind, 'tool');
+			assert.ok(edit.kind === 'tool' && edit.preview && edit.preview.rows.length > 0, 'edit preview rows');
+			assert.ok(bash?.kind === 'tool' && bash.highlights.some(h => h.level === 'warn'), 'bash warn highlight');
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+});
