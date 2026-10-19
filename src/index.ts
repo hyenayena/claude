@@ -1,5 +1,5 @@
 import type {Logger, ModulePlugin} from '../../../src/api.js';
-import {createClaudeCommand} from './commands.js';
+import {createClaudeCommands} from './commands.js';
 import type {ChatUi} from './chat/command.js';
 import {noopLog} from './log.js';
 import type {ChatQueryFn, QueryFn} from './types.js';
@@ -44,7 +44,7 @@ const plugin: ModulePlugin = host => {
 	exitLog = log;
 	log.info('plugin loaded');
 	return [
-		createClaudeCommand({dataDir: host.dataDir, env: process.env, log, loadQuery, loadChatQuery, loadUi, registerAbort}),
+		...createClaudeCommands({dataDir: host.dataDir, env: process.env, log, loadQuery, loadChatQuery, loadUi, registerAbort}),
 	];
 };
 

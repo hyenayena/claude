@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import type {CommandContext} from '../../../../src/api.js';
 import {CHAT_DISALLOWED_TOOLS, CHAT_TOOLS} from '../../src/policy.js';
-import {createClaudeCommand, type ClaudeDeps} from '../../src/commands.js';
+import {createClaudeCommand, createClaudeCommands, type ClaudeDeps} from '../../src/commands.js';
 import type {ChatQueryFn, QueryFn} from '../../src/types.js';
 import type {ChatUi} from '../../src/chat/command.js';
 import {makeFakeLog, serialized} from '../helpers/fake-log.js';
@@ -231,17 +231,27 @@ test('aborting the lifetime controller closes the session', async () => {
 	await s.command.run(['chat'], s.ctx);
 });
 
-test('chat and ask are mutually exclusive', async () => {
+test('an open chat blocks ask, and opening another chat replaces it', async () => {
 	let release!: () => void;
 	const gate = new Promise<void>(r => (release = r));
+	let closes = 0;
 	const s = await setup({run: () => gate});
+	s.ctx.mount = async build => {
+		build({
+			close: () => {
+				closes++;
+				release();
+			},
+		});
+		await gate;
+	};
 	const running = s.command.run(['chat'], s.ctx);
 	await new Promise(r => setTimeout(r, 20));
-	await assert.rejects(s.command.run(['chat'], s.ctx), {message: 'A chat is already open'});
 	await assert.rejects(s.command.run(['ask', 'x'], s.ctx), {message: 'A chat is already open'});
-	release();
+	const second = s.command.run(['chat'], s.ctx);
 	await running;
-	await s.command.run(['chat'], s.ctx).catch(() => {});
+	await second;
+	assert.equal(closes, 1);
 });
 
 test('closing line carries no control bytes or secret from the model name', async () => {
@@ -305,7 +315,13 @@ test('chat logs start and close with labels only, registers the redactor first, 
 	assert.equal(log.trail[0], '<addRedactor>');
 	assert.equal(log.redactors.length, 1);
 	const find = (m: string) => log.records.find(r => r.msg === m)!;
-	assert.deepEqual(find('chat starting').fields, {fresh: false, kind: 'oauth', source: 'env', resuming: false});
+	assert.deepEqual(find('chat starting').fields, {
+		fresh: false,
+		kind: 'oauth',
+		source: 'env',
+		resuming: false,
+		model: 'default',
+	});
 	assert.equal(find('turn ended').fields.outcome, 'ok');
 	const closed = find('chat closed');
 	assert.equal(closed.level, 'info');
@@ -426,4 +442,92 @@ test('the shipped bridge gets the real preview and highlight builders', async ()
 		},
 	});
 	await s.command.run(['chat'], s.ctx);
+});
+
+const setupChat = async (opts: Parameters<typeof setup>[0] = {}) => {
+	const s = await setup(opts);
+	const [, chat] = createClaudeCommands({
+		dataDir: s.dataDir,
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+		loadChatQuery: async () => s.q.query,
+		loadUi: async () => ({
+			createChatElement: p => {
+				s.props.push(p);
+				return {};
+			},
+		}),
+	});
+	return {...s, chat: chat!};
+};
+
+const sendOnce = async (p: Props) => {
+	const done = turnDone(p);
+	p.controller.send('hi');
+	await done;
+};
+
+test('top-level chat starts a fresh chat with the model from the settings', async () => {
+	const s = await setupChat({run: sendOnce});
+	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({lastSessionId: SID1, chatModel: 'opus'}));
+	await s.chat.run([], s.ctx);
+	assert.equal(s.q.calls[0]!.options.model, 'opus');
+	assert.equal(s.q.calls[0]!.options.resume, undefined);
+	assert.equal(s.props[0]!.initialModel, 'opus');
+});
+
+test('top-level chat takes a model argument that overrides the setting for that chat only', async () => {
+	const s = await setupChat({run: sendOnce});
+	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({chatModel: 'opus'}));
+	await s.chat.run(['haiku'], s.ctx);
+	assert.equal(s.q.calls[0]!.options.model, 'haiku');
+	assert.equal((await readState(s.dataDir)).chatModel, 'opus');
+});
+
+test('top-level chat without a setting leaves the model to the account default', async () => {
+	const s = await setupChat({run: sendOnce});
+	await s.chat.run([], s.ctx);
+	assert.equal('model' in s.q.calls[0]!.options, false);
+});
+
+test('top-level chat rejects bad model ids and extra arguments before mounting', async () => {
+	const s = await setupChat();
+	await assert.rejects(async () => s.chat.run(['bad model\x1b'], s.ctx), /Invalid model/);
+	await assert.rejects(async () => s.chat.run(['a', 'b'], s.ctx), {message: 'Usage: chat [model]'});
+	assert.equal(s.mounts(), 0);
+});
+
+test('the Claude settings tab reads and writes the chat model', async () => {
+	const s = await setupChat();
+	const setting = s.chat.settings!.settings[0]!;
+	assert.equal(setting.key, 'chatModel');
+	assert.equal(await setting.get(), '');
+	await setting.set('sonnet');
+	assert.equal(await setting.get(), 'sonnet');
+	assert.equal((await readState(s.dataDir)).chatModel, 'sonnet');
+	await setting.set('');
+	assert.equal('chatModel' in (await readState(s.dataDir)), false);
+	await assert.rejects(Promise.resolve(setting.set('no spaces allowed')), /Invalid model id/);
+	assert.ok(setting.options.some(o => o.value === ''));
+});
+
+test('the chat view gets the host and the print of the mount control', async () => {
+	const s = await setupChat();
+	const printed: string[] = [];
+	const host = {
+		isFocused: () => true,
+		columns: () => 40,
+		subscribe: () => () => {},
+		move: () => false,
+		isHostKey: () => false,
+	};
+	s.ctx.mount = async build => {
+		build({close: () => {}, print: t => printed.push(t), host});
+	};
+	await s.chat.run([], s.ctx);
+	assert.equal(s.props[0]!.host, host);
+	s.props[0]!.print('x');
+	assert.deepEqual(printed, ['x']);
 });

@@ -1,7 +1,7 @@
 import {constants} from 'node:fs';
 import {lstat, open, realpath, stat} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
-import type {Command, CommandContext, Logger} from '../../../src/api.js';
+import type {Command, CommandContext, Logger, SettingOption} from '../../../src/api.js';
 import {buildEnv, buildOptions, resolvePaths, runtimeInfo} from './config.js';
 import {
 	describeCredential,
@@ -15,10 +15,10 @@ import {
 	storeApiKey,
 } from './credentials.js';
 import {clip, errClass, noopLog} from './log.js';
-import {runChat, type ChatUi} from './chat/command.js';
+import {openChat, runChat, type ChatRunDeps, type ChatUi} from './chat/command.js';
 import {makeScrub} from './chat/scrub.js';
 import {runTurn} from './session.js';
-import {createStore} from './store.js';
+import {createStore, isModelId} from './store.js';
 import type {ChatQueryFn, Credential, CredentialInfo, QueryFn} from './types.js';
 
 export type ClaudeDeps = {
@@ -37,7 +37,16 @@ const USAGE = 'Usage: claude <ping|ask|chat|new|session|auth>';
 const ASK_USAGE = 'Usage: claude ask [--new] <text>';
 const AUTH_USAGE = 'Usage: claude auth <status|key|logout|login>';
 const KEY_USAGE = 'Usage: claude auth key --from-file <path>';
+const CHAT_NEW_USAGE = 'Usage: chat [model]';
 const MAX_KEY_FILE_BYTES = 4096;
+
+export const MODEL_OPTIONS: SettingOption[] = [
+	{value: '', label: 'Default', description: 'the account default'},
+	{value: 'claude-fable-5-1', label: 'Fable 5.1'},
+	{value: 'opus', label: 'Opus', description: 'latest Opus'},
+	{value: 'sonnet', label: 'Sonnet', description: 'latest Sonnet'},
+	{value: 'haiku', label: 'Haiku', description: 'latest Haiku'},
+];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 const SUBSCRIPTION_NOTICE =
@@ -80,7 +89,10 @@ const readKeyFile = async (rawPath: string): Promise<string> => {
 	}
 };
 
-export const createClaudeCommand = (deps: ClaudeDeps): Command => {
+export const createClaudeCommand = (deps: ClaudeDeps): Command => createClaudeCommands(deps)[0]!;
+
+/** The `claude` command and the top-level `chat` command, sharing one chat slot. */
+export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const {dataDir, env} = deps;
 	const log = deps.log ?? noopLog;
 	const store = createStore(dataDir, log);
@@ -199,28 +211,74 @@ export const createClaudeCommand = (deps: ClaudeDeps): Command => {
 		throw new Error('The chat is not available in this build');
 	};
 
-	const chat = (args: string[], ctx: CommandContext): Promise<void> =>
-		runChat(args, ctx, {
-			dataDir,
-			env,
-			moduleDir: deps.moduleDir,
-			log,
-			loadChatQuery: deps.loadChatQuery ?? unavailable,
-			loadUi: deps.loadUi ?? unavailable,
-			registerAbort: deps.registerAbort,
-			store,
-			showNoticeOnce,
-			kindLabel,
-			isMissingModule,
-			acquire: () => {
-				if (busy === 'ask') throw new Error('An ask is already running');
-				if (busy === 'chat') throw new Error('A chat is already open');
-				busy = 'chat';
-				return () => {
-					busy = undefined;
-				};
+	const chatDeps = (onMount: (close: () => void) => void): ChatRunDeps => ({
+		dataDir,
+		env,
+		moduleDir: deps.moduleDir,
+		log,
+		loadChatQuery: deps.loadChatQuery ?? unavailable,
+		loadUi: deps.loadUi ?? unavailable,
+		registerAbort: deps.registerAbort,
+		store,
+		showNoticeOnce,
+		kindLabel,
+		isMissingModule,
+		onMount,
+		acquire: () => {
+			if (busy === 'ask') throw new Error('An ask is already running');
+			if (busy === 'chat') throw new Error('A chat is already open');
+			busy = 'chat';
+			return () => {
+				busy = undefined;
+			};
+		},
+	});
+
+	let openHandle: {close: () => void; done: Promise<void>} | undefined;
+
+	// Opening a chat replaces the one that is open.
+	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>): Promise<void> => {
+		if (busy === 'ask') throw new Error('An ask is already running');
+		const previous = openHandle;
+		if (previous) {
+			previous.close();
+			await previous.done.catch(() => {});
+		}
+		let close: (() => void) | undefined;
+		let closeRequested = false;
+		const done = start(
+			chatDeps(c => {
+				close = c;
+				// Deferred: the host registers the view only after `build` returns.
+				if (closeRequested) queueMicrotask(c);
+			}),
+		);
+		const handle = {
+			close: () => {
+				closeRequested = true;
+				close?.();
 			},
-		});
+			done,
+		};
+		openHandle = handle;
+		try {
+			await done;
+		} finally {
+			if (openHandle === handle) openHandle = undefined;
+		}
+	};
+
+	const chat = (args: string[], ctx: CommandContext): Promise<void> => replaceChat(d => runChat(args, ctx, d));
+
+	const newChat = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length > 1) throw new Error(CHAT_NEW_USAGE);
+		const requested = args[0];
+		if (requested !== undefined && !isModelId(requested)) {
+			throw new Error(`Invalid model "${makeScrub(s => s)(requested).slice(0, 100)}". ${CHAT_NEW_USAGE}`);
+		}
+		const model = requested ?? (await store.read()).chatModel;
+		await replaceChat(d => openChat({fresh: true, ...(model && {model})}, ctx, d));
+	};
 
 	const newSession = async (ctx: CommandContext): Promise<void> => {
 		await store.update({lastSessionId: undefined});
@@ -234,6 +292,7 @@ export const createClaudeCommand = (deps: ClaudeDeps): Command => {
 		const scrub = makeScrub(active ? makeRedactor(active) : s => s);
 		ctx.print(scrub(`Session: ${state.lastSessionId ?? '(none)'}`));
 		ctx.print(scrub(`Model: ${state.lastModel ?? '(unknown)'}`));
+		ctx.print(scrub(`Chat model: ${state.chatModel ?? 'default'}`));
 		ctx.print(scrub(`Claude Code runtime: ${rt.cli ?? '(not installed)'}`));
 		ctx.print(scrub(`Agent SDK: ${rt.sdk}`));
 		ctx.print(scrub(`Binary in use: ${rt.binary}`));
@@ -329,7 +388,7 @@ export const createClaudeCommand = (deps: ClaudeDeps): Command => {
 		}
 	};
 
-	return {
+	const claude: Command = {
 		name: 'claude',
 		description: 'Claude Code integration',
 		usage: 'claude <ping|ask|chat|new|session|auth>',
@@ -367,4 +426,31 @@ export const createClaudeCommand = (deps: ClaudeDeps): Command => {
 			}
 		},
 	};
+
+	const chatCommand: Command = {
+		name: 'chat',
+		description: 'Start a new chat with the assistant',
+		usage: 'chat [model]',
+		autostart: true,
+		settings: {
+			title: 'Claude',
+			settings: [
+				{
+					key: 'chatModel',
+					label: 'Chat model',
+					description: 'Used by new chats',
+					options: MODEL_OPTIONS,
+					get: async () => (await store.read()).chatModel ?? '',
+					set: async value => {
+						if (value !== '' && !isModelId(value)) throw new Error('Invalid model id');
+						await store.update({chatModel: value === '' ? undefined : value});
+						log.info('chat model set', {model: value === '' ? 'default' : value});
+					},
+				},
+			],
+		},
+		run: newChat,
+	};
+
+	return [claude, chatCommand];
 };

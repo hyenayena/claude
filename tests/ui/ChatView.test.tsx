@@ -720,3 +720,72 @@ test('question prompt: single choice, multi choice and Other', async () => {
 	await dismissed.settle();
 	assert.deepEqual(dismissed.controller.calls.answers.map(a => a.decision), [{kind: 'deny'}]);
 });
+
+function fakeHost(columns = 50) {
+	const state = {focused: true, columns, moves: [] as string[], listeners: new Set<() => void>()};
+	const host = {
+		isFocused: () => state.focused,
+		columns: () => state.columns,
+		subscribe: (l: () => void) => {
+			state.listeners.add(l);
+			return () => void state.listeners.delete(l);
+		},
+		move: (d: 'left' | 'right') => {
+			state.moves.push(d);
+			return true;
+		},
+		isHostKey: (input: string) => input === '§',
+	};
+	const set = (patch: Partial<{focused: boolean; columns: number}>) => {
+		Object.assign(state, patch);
+		for (const l of state.listeners) l();
+	};
+	return {host, state, set};
+}
+
+test('with a host: input is read only while focused', async () => {
+	const f = fakeHost();
+	const t = setup(undefined, 'API key', {host: f.host});
+	await t.settle();
+	f.set({focused: false});
+	await t.settle();
+	t.press('abc');
+	await t.settle();
+	assert.doesNotMatch(t.lastFrame(), /> abc/);
+	f.set({focused: true});
+	await t.settle();
+	t.press('abc');
+	await t.settle();
+	assert.match(t.lastFrame(), /> abc/);
+});
+
+test('with a host: the host key is never typed, → on an empty draft moves focus, Esc idle stays', async () => {
+	const f = fakeHost();
+	const t = setup(undefined, 'API key', {host: f.host});
+	await t.settle();
+	t.press('§');
+	await t.settle();
+	assert.doesNotMatch(t.lastFrame(), /§/);
+	t.press(`${ESC}[C`);
+	await t.settle();
+	assert.deepEqual(f.state.moves, ['right']);
+	t.press('ab');
+	await t.settle();
+	t.press(`${ESC}[C`);
+	await t.settle();
+	assert.deepEqual(f.state.moves, ['right']);
+	t.press(ESC);
+	await t.settle(60);
+	t.press(ESC);
+	await t.settle(60);
+	assert.equal(t.closed.count, 0);
+});
+
+test('with a host: lines fit the width the host gives', async () => {
+	const f = fakeHost(30);
+	const t = setup({columns: 100, rows: 24}, 'API key', {host: f.host});
+	await t.settle();
+	t.press('x'.repeat(80));
+	await t.settle();
+	for (const line of t.lastFrame().split('\n')) assert.ok([...line].length <= 30, line);
+});

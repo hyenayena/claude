@@ -7,6 +7,9 @@ import type {ClaudeState} from './types.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRINTABLE = /^[\x20-\x7e]+$/;
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,99}$/;
+
+export const isModelId = (value: string): boolean => MODEL_ID.test(value);
 
 const sanitize = (raw: unknown): ClaudeState => {
 	const state: ClaudeState = {};
@@ -16,6 +19,7 @@ const sanitize = (raw: unknown): ClaudeState => {
 	if (typeof r.lastModel === 'string' && r.lastModel.length <= 200 && PRINTABLE.test(r.lastModel)) {
 		state.lastModel = r.lastModel;
 	}
+	if (typeof r.chatModel === 'string' && isModelId(r.chatModel)) state.chatModel = r.chatModel;
 	if (typeof r.subscriptionNoticeShown === 'boolean') state.subscriptionNoticeShown = r.subscriptionNoticeShown;
 	return state;
 };

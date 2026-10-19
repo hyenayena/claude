@@ -11,10 +11,14 @@ const setup = async () => {
 	return {command: commands[0]!, commands, printed, ctx};
 };
 
-test('plugin returns exactly one command named claude', async () => {
+test('plugin returns the claude command and the autostarted chat command', async () => {
 	const {commands} = await setup();
-	assert.equal(commands.length, 1);
-	assert.equal(commands[0]!.name, 'claude');
+	assert.deepEqual(
+		commands.map(c => c.name),
+		['claude', 'chat'],
+	);
+	assert.equal(commands[1]!.autostart, true);
+	assert.equal(commands[1]!.settings?.title, 'Claude');
 });
 
 test('ping prints pong', async () => {

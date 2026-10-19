@@ -73,12 +73,11 @@ const absRule = (p: string) => `/${p}`;
 
 export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 	return {
-		roots: [paths.projectDir, paths.mdDir],
+		roots: [paths.projectDir, paths.mdDir, paths.configDir],
 		denied: [
 			paths.tokenFile,
 			paths.credentialsFile,
 			paths.stateFile,
-			paths.configDir,
 			path.join(paths.projectDir, '.yena'),
 			'/proc',
 			path.join(home, '.ssh'),
@@ -97,7 +96,6 @@ export function buildAskSettings(paths: PolicyPaths): {
 				`Read(${absRule(paths.tokenFile)})`,
 				`Read(${absRule(paths.credentialsFile)})`,
 				`Read(${absRule(paths.stateFile)})`,
-				`Read(${absRule(paths.configDir)}/**)`,
 				'Read(//proc/**)',
 				'Read(~/.ssh/**)',
 				'Read(**/.env*)',

@@ -26,6 +26,8 @@ export type TurnResult = {
 export type ClaudeState = {
 	lastSessionId?: string;
 	lastModel?: string;
+	// Model for new chats (an alias such as "opus" or a full model id); unset means the account default.
+	chatModel?: string;
 	subscriptionNoticeShown?: boolean;
 };
 

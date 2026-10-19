@@ -104,6 +104,7 @@ export function buildOptions(p: {
 	cred: Credential;
 	abortController: AbortController;
 	resume?: string;
+	model?: string;
 	env?: Record<string, string | undefined>;
 	runtimeBin?: string;
 }): Options {
@@ -112,7 +113,7 @@ export function buildOptions(p: {
 	const options: Options = {
 		cwd: paths.projectDir,
 		env: p.env ?? buildEnv(process.env, paths, p.cred),
-		additionalDirectories: [paths.mdDir],
+		additionalDirectories: [paths.mdDir, paths.configDir],
 		settingSources: ['user', 'project', 'local'],
 		abortController: p.abortController,
 		systemPrompt: {type: 'preset', preset: 'claude_code', append: buildHint(paths)},
@@ -130,6 +131,9 @@ export function buildOptions(p: {
 	}
 	if (p.resume !== undefined) {
 		options.resume = p.resume;
+	}
+	if (p.model !== undefined) {
+		options.model = p.model;
 	}
 	return options;
 }
@@ -202,6 +206,7 @@ export function buildChatOptions(p: {
 	abortController: AbortController;
 	canUseTool: CanUseTool;
 	resume?: string;
+	model?: string;
 	env?: Record<string, string | undefined>;
 	runtimeBin?: string;
 }): Options {

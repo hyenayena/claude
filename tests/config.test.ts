@@ -105,7 +105,7 @@ describe('buildOptions', () => {
 	it('sets cwd, directories and setting sources', () => {
 		const o = buildOptions(base);
 		assert.equal(o.cwd, paths.projectDir);
-		assert.deepEqual(o.additionalDirectories, [paths.mdDir]);
+		assert.deepEqual(o.additionalDirectories, [paths.mdDir, paths.configDir]);
 		assert.deepEqual(o.settingSources, ['user', 'project', 'local']);
 		assert.equal(o.permissionMode, 'default');
 		assert.deepEqual(o.tools, ['Read', 'Glob', 'Grep']);
@@ -132,6 +132,10 @@ describe('buildOptions', () => {
 		assert.ok(!json.includes('bypassPermissions'));
 		assert.ok(!('allowDangerouslySkipPermissions' in o));
 		assert.ok(!('model' in o));
+	});
+
+	it('passes a chosen model through', () => {
+		assert.equal(buildOptions({...base, model: 'opus'}).model, 'opus');
 	});
 
 	it('contains no secret outside env', () => {

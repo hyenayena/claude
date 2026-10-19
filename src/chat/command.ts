@@ -30,7 +30,11 @@ export type ChatRunDeps = {
 	kindLabel: (cred: CredentialInfo) => string;
 	isMissingModule: (err: unknown) => boolean;
 	acquire: () => () => void;
+	// Receives the view's close function once the chat is shown.
+	onMount?: (close: () => void) => void;
 };
+
+export type ChatOpen = {fresh: boolean; model?: string};
 
 export const runChat = async (args: string[], ctx: CommandContext, deps: ChatRunDeps): Promise<void> => {
 	let fresh = false;
@@ -39,18 +43,24 @@ export const runChat = async (args: string[], ctx: CommandContext, deps: ChatRun
 		else throw new Error(CHAT_USAGE);
 	}
 	if (!ctx.mount) throw new Error(NEEDS_MOUNT_MESSAGE);
-	const mount = ctx.mount;
 
+	const state = await deps.store.read();
+	await openChat({fresh, ...(state.chatModel && {model: state.chatModel})}, ctx, deps);
+};
+
+export const openChat = async (open: ChatOpen, ctx: CommandContext, deps: ChatRunDeps): Promise<void> => {
+	if (!ctx.mount) throw new Error(NEEDS_MOUNT_MESSAGE);
+	const mount = ctx.mount;
 	const release = deps.acquire();
 	try {
-		await runLocked(fresh, ctx, mount, deps);
+		await runLocked(open, ctx, mount, deps);
 	} finally {
 		release();
 	}
 };
 
 const runLocked = async (
-	fresh: boolean,
+	{fresh, model}: ChatOpen,
 	ctx: CommandContext,
 	mount: NonNullable<CommandContext['mount']>,
 	deps: ChatRunDeps,
@@ -95,7 +105,13 @@ const runLocked = async (
 	const paths = resolvePaths(dataDir, deps.moduleDir);
 	const scope = buildScope(paths);
 	const resume = fresh ? undefined : state.lastSessionId;
-	log.info('chat starting', {fresh, kind: cred.kind, source: cred.source, resuming: resume !== undefined});
+	log.info('chat starting', {
+		fresh,
+		kind: cred.kind,
+		source: cred.source,
+		resuming: resume !== undefined,
+		model: model ?? 'default',
+	});
 	const startedAt = Date.now();
 	const session = new ChatSession({
 		query,
@@ -108,6 +124,7 @@ const runLocked = async (
 				cred,
 				abortController,
 				resume: id,
+				...(model !== undefined && {model}),
 				env: buildEnv(env, paths, cred),
 				canUseTool: createChatCanUseTool({
 					scope,
@@ -141,19 +158,23 @@ const runLocked = async (
 	});
 
 	try {
-		await mount(control =>
-			ui.createChatElement({
+		await mount(control => {
+			deps.onMount?.(control.close);
+			return ui.createChatElement({
 				controller: session,
-				print: ctx.print,
+				print: control.print ?? ctx.print,
 				close: control.close,
+				...(control.host && {host: control.host}),
 				scrub,
 				reveal,
 				projectDir: paths.projectDir,
 				credentialLabel: deps.kindLabel(cred),
-				...(state.lastModel && !fresh && {initialModel: state.lastModel}),
+				...(model !== undefined
+					? {initialModel: model}
+					: state.lastModel && !fresh && {initialModel: state.lastModel}),
 				...(resume && {initialSessionId: resume}),
-			}),
-		);
+			});
+		});
 	} finally {
 		const sessionId = session.sessionId;
 		const model = session.model;

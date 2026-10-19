@@ -78,3 +78,14 @@ test('a failed state write logs the error code at warn and rethrows', async () =
 	assert.equal(log.records[0]!.msg, 'state write failed');
 	assert.equal(typeof log.records[0]!.fields.code, 'string');
 });
+
+test('chatModel keeps model ids and drops anything else', async () => {
+	const dir = await mkdtemp(join(tmpdir(), 'claude-store-model-'));
+	const store = createStore(dir);
+	await store.update({chatModel: 'claude-fable-5-1'});
+	assert.equal((await store.read()).chatModel, 'claude-fable-5-1');
+	await store.update({chatModel: 'sonnet[1m]'});
+	assert.equal((await store.read()).chatModel, 'sonnet[1m]');
+	await store.update({chatModel: 'bad id\u001b'});
+	assert.equal((await store.read()).chatModel, undefined);
+});

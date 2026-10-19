@@ -1,5 +1,6 @@
 import React, {useCallback, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {Box, Text, useInput, usePaste, useWindowSize, type Key} from 'ink';
+import type {ViewHost} from '../../../../src/api.js';
 import type {ChatController, ChatEvent} from '../chat/events.js';
 import {MODE_CYCLE, QUESTION_LIMITS, REASON_MAX} from '../chat/permission.js';
 import type {ChatMode, PermissionDecision, PermissionRequest} from '../chat/permission.js';
@@ -35,6 +36,7 @@ import {
 } from './prompt-state.js';
 import {QuestionPrompt} from './QuestionPrompt.js';
 import {StatusBar} from './StatusBar.js';
+import {useViewHost} from './view-host.js';
 import {
 	initialTranscript,
 	LIVE,
@@ -56,6 +58,8 @@ export interface ChatViewProps {
 	reveal?: (s: string) => string;
 	projectDir?: string;
 	armMs?: number;
+	// Set when the chat shares the screen with the console: focus, width and reserved keys.
+	host?: ViewHost;
 }
 
 type PromptEntry =
@@ -74,6 +78,7 @@ export const HELP_TEXT = [
 	'  /exit  leave the chat (alias /quit)',
 	'  /mode  show or change the mode (default, accept-edits)',
 	'  /help  show this help',
+	'Ctrl+§ opens the console (commands such as "chat <model>" and "settings"); ← and → move between them.',
 	'Shift+Tab switches between default and accept-edits mode.',
 	'Esc interrupts a running answer; Esc or Ctrl+C when idle leaves the chat.',
 ].join('\n');
@@ -84,7 +89,10 @@ export function ChatView(props: ChatViewProps) {
 	const {controller, print, close, scrub, credentialLabel} = props;
 	const reveal = props.reveal ?? scrub;
 	const armMs = props.armMs ?? ARM_MS;
-	const {columns, rows} = useWindowSize();
+	const terminal = useWindowSize();
+	const rows = terminal.rows;
+	const {focused, columns} = useViewHost(props.host, terminal.columns);
+	const host = props.host;
 
 	// Keys and events can arrive faster than React re-renders, so refs hold the truth.
 	const tRef = useRef<TranscriptState>(
@@ -264,8 +272,9 @@ export function ChatView(props: ChatViewProps) {
 		if (phase === 'running') interrupt();
 		else if (phase === 'interrupting') leave();
 		else if (edRef.current.text !== '') edit({type: 'clear'});
-		else leave();
-	}, [edit, interrupt, leave]);
+		// The chat is the main screen next to the console, so Esc never leaves it there.
+		else if (!host) leave();
+	}, [edit, host, interrupt, leave]);
 
 	const ctrlC = useCallback(() => {
 		const phase = tRef.current.phase;
@@ -353,6 +362,7 @@ export function ChatView(props: ChatViewProps) {
 
 	useInput((input: string, key: Key) => {
 		if (closedRef.current) return;
+		if (host?.isHostKey(input)) return;
 		const prompt = currentPrompt();
 		if (prompt) return promptKey(prompt, input, key);
 		if (pendingModeRef.current) return modeKey(key);
@@ -366,7 +376,10 @@ export function ChatView(props: ChatViewProps) {
 		}
 		if (key.backspace || key.delete) return edit({type: 'backspace'});
 		if (key.leftArrow) return edit({type: 'left'});
-		if (key.rightArrow) return edit({type: 'right'});
+		if (key.rightArrow) {
+			if (host && edRef.current.text === '' && host.move('right')) return;
+			return edit({type: 'right'});
+		}
 		if (key.home) return edit({type: 'home'});
 		if (key.end) return edit({type: 'end'});
 		if (key.ctrl) {
@@ -377,15 +390,16 @@ export function ChatView(props: ChatViewProps) {
 		}
 		if (key.meta || key.tab || key.upArrow || key.downArrow || key.pageUp || key.pageDown) return;
 		if (input) insertPasted(input);
-	});
+	}, {isActive: focused});
 
 	usePaste((text: string) => {
 		if (closedRef.current) return;
+		if (host?.isHostKey(text)) return;
 		const prompt = currentPrompt();
 		if (prompt) return promptPaste(prompt, text);
 		if (pendingModeRef.current) return;
 		insertPasted(text);
-	});
+	}, {isActive: focused});
 
 	useEffect(() => {
 		const p = promptRef.current;

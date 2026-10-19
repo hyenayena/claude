@@ -11,9 +11,10 @@ It is a yena plugin (`runtime: "node"`, `entry: src/index.ts`, version 0.4.0): t
   <answer>
   [session d503c507 · model claude-haiku-5-5 · subscription token]
   ```
-- `claude chat [--new]` — opens an interactive streaming chat (see below). Continues the last session; `--new` starts a fresh one.
+- `chat [model]` — top-level command: opens a new chat (fresh session) with `model` or, without it, the chat model from the settings. It has `autostart: true`, so core opens it at startup, and it contributes the `Claude` settings tab (`Chat model`: Default, Fable 5.1, Opus, Sonnet, Haiku; stored as `chatModel` in `state.json`, unset means the account default). A model argument must match `[A-Za-z0-9][A-Za-z0-9._[\]-]*` (at most 100 chars) and is used for that chat only.
+- `claude chat [--new]` — opens an interactive streaming chat (see below). Continues the last session; `--new` starts a fresh one. Uses the chat model from the settings.
 - `claude new` — the next ask starts a new session (`Next ask starts a new session`).
-- `claude session` — prints `Session`, `Model`, `Claude Code runtime`, `Agent SDK` and `Binary in use` (`runtime` or `bundled`).
+- `claude session` — prints `Session`, `Model`, `Chat model`, `Claude Code runtime`, `Agent SDK` and `Binary in use` (`runtime` or `bundled`).
 - `claude auth status` — active credential (for example `Active credential: subscription token (from environment)`), other available sources, file-mode warnings, and the one-time subscription notice.
 - `claude auth key --from-file <path>` — stores an API key from a file in `<dataDir>/credentials.json` (mode 0600). The source file is left untouched; delete it yourself.
 - `claude auth logout` — removes only `credentials.json`. Environment variables and `.token` are untouched.
@@ -24,7 +25,9 @@ Without a subcommand, or with an unknown one, the command fails with `Usage: cla
 `<dataDir>` is `<YENA_DATA>/claude` (`/data/claude` in the container). It holds `md/`, `config/`, `state.json`, `credentials.json` and `.token`.
 
 ## Chat
-`claude chat [--new]` replaces the prompt with a chat view (needs a core that provides `ctx.mount`; otherwise it fails with `"claude chat" needs an interface that can show views`). Only one chat, and not together with an ask (`A chat is already open`, `An ask is already running`). Unknown arguments give `Usage: claude chat [--new]`.
+`chat` and `claude chat [--new]` show the chat as core's main view (needs a core that provides `ctx.mount`; otherwise it fails with `"claude chat" needs an interface that can show views`). Opening a chat closes the open one first; a chat cannot run together with an ask (`A chat is already open`, `An ask is already running`). Unknown arguments give `Usage: claude chat [--new]` / `Usage: chat [model]`.
+
+Next to core's console (`control.host` present) the chat reads keys only while focused, lays out in the width the host gives, ignores the console toggle (`§`), moves the input to the console with → on an empty draft, and Esc while idle never leaves it (Ctrl+C or `/exit` does).
 
 Keys:
 - Enter sends. Alt+Enter or Shift+Enter inserts a newline; a bracketed paste is inserted sanitized and never submitted. Input is limited to 32000 characters (`Input truncated to 32000 characters`).
@@ -75,12 +78,12 @@ Anthropic's documentation says that, unless previously approved, third-party dev
 Layers:
 - Tools allowlist: `Read`, `Glob`, `Grep`. Bash, Edit, Write, web tools, agents, skills and MCP tools are disallowed; MCP servers are not loaded.
 - `disableAllHooks`.
-- Permission deny rules: the credential, state and config files under `<dataDir>`, the whole `config/` directory, `.yena`, `/proc`, `~/.ssh`, `.env*`, `*.pem`, `id_rsa*`, and edits of `CLAUDE.md`, `CLAUDE.local.md` and `.claude/` in the project. Only `md/` stays readable in `<dataDir>`.
+- Permission deny rules: the credential and state files under `<dataDir>`, edits (not reads) of the `config/` directory, `.yena`, `/proc`, `~/.ssh`, `.env*`, `*.pem`, `id_rsa*`, and edits of `CLAUDE.md`, `CLAUDE.local.md` and `.claude/` in the project. `md/` and `config/` stay readable in `<dataDir>`.
 - `canUseTool`: every path is resolved with realpath and must be inside the project (`/app`) or the md dir; symlinks leaving them are refused.
 - At most 20 turns and a 5-minute timeout. `bypassPermissions` is never used.
 
 Residual risks:
-- The model can read any non-denied file in `/app` and the md dir. Its content goes to the Anthropic API and into session transcripts under `<dataDir>/config/projects`.
+- The model can read any non-denied file in `/app`, the md dir and the config dir (including agents, commands, settings, history and transcripts). Its content goes to the Anthropic API and into session transcripts under `<dataDir>/config/projects`.
 - Hiding of hidden/secret files from Grep and Glob rests partly on ripgrep and Claude Code behaviour plus best-effort deny rules.
 - A `.env` in `/app` is readable unless the deny rules match it (they deny `**/.env*`).
 
@@ -95,7 +98,7 @@ Records (level, message, fields):
 - warn `no credential` (ask and chat); info `credential resolved` {kind, source} (ask).
 - info `ask started` {fresh, promptChars}; info `ask finished` {outcome, ms, model, numTurns, session8}; warn `ask failed` {outcome (`timeout`|`error`), ms, errClass, reason}; warn `ask timed out` {timeoutMs}; error `sdk load failed` {missingModule, err}.
 - warn `result error` {subtype, authFailed}; warn `query threw` {errClass, aborted}.
-- info `chat starting` {fresh, kind, source, resuming}; error `chat dependencies failed to load` {missingModule, err}; info `chat closed` {ms, session8, model}.
+- info `chat starting` {fresh, kind, source, resuming, model} (`model` is the chosen id or `default`); info `chat model set` {model}; error `chat dependencies failed to load` {missingModule, err}; info `chat closed` {ms, session8, model}.
 - info `sdk session spawned` {resuming}; info `turn started` {chars}; info `turn aborting` {outcome}; info `turn ended` {outcome, ms, reason?}; warn `sdk stream threw` {errClass}; warn `sdk stream ended unexpectedly` {authFailed}; warn `authentication failed`; warn `interrupt grace expired; recycling` {graceMs}; warn `session recycled`.
 - warn `state write failed` {code}; warn `exit hook aborting requests` {count}.
 

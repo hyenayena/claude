@@ -56,6 +56,8 @@ describe('isPathAllowed', () => {
 		assert.ok(await isPathAllowed('a.txt', scope));
 		assert.ok(await isPathAllowed(path.join(projectDir, 'new', 'file.txt'), scope));
 		assert.ok(await isPathAllowed(path.join(paths.mdDir, 'CLAUDE.md'), scope));
+		assert.ok(await isPathAllowed(path.join(paths.configDir, 'agents', 'coder.md'), scope));
+		assert.ok(await isPathAllowed(paths.configDir, scope));
 	});
 
 	it('denies outside paths, traversal and symlink escapes', async () => {
@@ -71,7 +73,6 @@ describe('isPathAllowed', () => {
 			paths.tokenFile,
 			paths.credentialsFile,
 			paths.stateFile,
-			paths.configDir,
 			path.join(projectDir, '.env'),
 			path.join(projectDir, 'sub', '.env.local'),
 			path.join(projectDir, 'k.pem'),
@@ -167,7 +168,6 @@ describe('ask policy snapshot', () => {
 					`Read(/${paths.tokenFile})`,
 					`Read(/${paths.credentialsFile})`,
 					`Read(/${paths.stateFile})`,
-					`Read(/${paths.configDir}/**)`,
 					'Read(//proc/**)',
 					'Read(~/.ssh/**)',
 					'Read(**/.env*)',
@@ -181,7 +181,7 @@ describe('ask policy snapshot', () => {
 	});
 
 	it('keeps the ask canUseTool scope', async () => {
-		assert.deepEqual(scope.roots, [projectDir, paths.mdDir]);
+		assert.deepEqual(scope.roots, [projectDir, paths.mdDir, paths.configDir]);
 		assert.equal((await run('Bash', {command: 'ls'})).behavior, 'deny');
 		assert.equal((await run('Read', {file_path: path.join(projectDir, 'a.txt')})).behavior, 'allow');
 	});
