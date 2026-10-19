@@ -15,6 +15,12 @@ class FakeQuery {
 	closed = 0;
 	interrupts = 0;
 	interruptImpl: () => Promise<void> = () => Promise.resolve();
+	readonly permissionModes: string[] = [];
+	setPermissionModeImpl: () => Promise<void> = () => Promise.resolve();
+	setPermissionMode(mode: string): Promise<void> {
+		this.permissionModes.push(mode);
+		return this.setPermissionModeImpl();
+	}
 	readonly sent: SDKUserMessage[] = [];
 	private buf: Array<{msg?: SDKMessage; err?: Error; end?: boolean}> = [];
 	private wake: (() => void) | undefined;
@@ -626,4 +632,84 @@ test('permission logging is metadata only', async () => {
 	const out = JSON.stringify(log.records);
 	assert.ok(log.records.some(x => x.msg.startsWith('permission')));
 	assert.doesNotMatch(out, /SENTINEL/);
+});
+
+test('auto mode is passed to a running query and switching away restores default', async () => {
+	const {session, queries} = setup();
+	session.send('x');
+	await tick();
+	const q = queries[0]!;
+	session.setMode('acceptEdits');
+	assert.deepEqual(q.permissionModes, []);
+	session.setMode('auto');
+	session.setMode('acceptEdits');
+	session.setMode('default');
+	await tick();
+	assert.deepEqual(q.permissionModes, ['auto', 'default']);
+	session.close();
+});
+
+test('a rejected auto mode falls back to default with a redacted reason', async () => {
+	const {session, queries, events} = setup();
+	session.send('x');
+	await tick();
+	queries[0]!.setPermissionModeImpl = () => Promise.reject(new Error(`not available for ${SECRET}`));
+	session.setMode('auto');
+	await tick();
+	await tick();
+	assert.equal(session.mode, 'default');
+	const last = events.filter(e => e.type === 'mode').at(-1) as {mode: string; error?: string};
+	assert.equal(last.mode, 'default');
+	assert.match(last.error ?? '', /not available for \[redacted\]/);
+	session.close();
+});
+
+test('a prompter in auto mode reports it to buildOptions on the next spawn', () => {
+	const {session, prompters} = setup();
+	session.setMode('auto');
+	session.send('x');
+	assert.equal(prompters[0]?.mode, 'auto');
+	session.close();
+});
+
+test('typed text starting with / is delivered as written; console commands are dispatched', async () => {
+	const {session, queries} = setup();
+	session.send('/etc/hosts looks odd');
+	await tick();
+	const q = queries[0]!;
+	assert.equal((q.sent[0] as {client_composed?: boolean}).client_composed, true);
+	q.emit(init());
+	q.emit(ok());
+	await tick();
+	session.send('/compact', {command: true});
+	await tick();
+	assert.equal('client_composed' in q.sent[1]!, false);
+	session.close();
+});
+
+test('the session learns its Claude Code commands from init and supportedCommands', async () => {
+	const {session, queries} = setup();
+	session.send('hi');
+	await tick();
+	const q = queries[0]!;
+	q.emit({...init(), slash_commands: ['compact', 'pipeline', 'bad name']});
+	await tick();
+	assert.deepEqual(session.commands.map(c => c.name), ['compact', 'pipeline']);
+	session.close();
+});
+
+test('supportedCommands adds descriptions and argument hints', async () => {
+	const {session} = setup();
+	const list = [{name: 'pipeline', description: 'Run it', argumentHint: '<request>'}, {name: 7}];
+	const orig = FakeQuery.prototype as unknown as {supportedCommands?: () => Promise<unknown>};
+	orig.supportedCommands = () => Promise.resolve(list);
+	try {
+		session.send('hi');
+		await tick();
+		await tick();
+		assert.deepEqual(session.commands, [{name: 'pipeline', description: 'Run it', argumentHint: '<request>'}]);
+	} finally {
+		delete orig.supportedCommands;
+		session.close();
+	}
 });

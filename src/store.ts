@@ -25,6 +25,7 @@ const sanitize = (raw: unknown): ClaudeState => {
 	if (r.chatThinking === 'disabled') state.chatThinking = 'disabled';
 	if (r.chatFastMode === true) state.chatFastMode = true;
 	if (isOutputStyle(r.chatOutputStyle)) state.chatOutputStyle = r.chatOutputStyle;
+	if (r.chatPermissionMode === 'acceptEdits' || r.chatPermissionMode === 'auto') state.chatPermissionMode = r.chatPermissionMode;
 	if (typeof r.subscriptionNoticeShown === 'boolean') state.subscriptionNoticeShown = r.subscriptionNoticeShown;
 	return state;
 };

@@ -128,51 +128,24 @@ test('Ctrl+C in each state', async () => {
 	assert.equal(running.controller.calls.closes, 1);
 });
 
-test('chat slash commands', async () => {
+test('the chat has no slash commands: text starting with / is sent as a message', async () => {
 	const t = setup();
 	await t.settle();
-	t.press('/help');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle();
-	assert.match(t.printed.at(-1) as string, /Chat commands/);
-
-	t.press('/new');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle();
-	assert.equal(t.controller.calls.resets, 1);
-	assert.match(t.printed.at(-1) as string, /new conversation/);
-
-	t.press('/x');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle();
-	assert.deepEqual(t.controller.calls.sent, []);
-	assert.match(t.lastFrame(), /Unknown chat command "\/x"\. Type \/help\./);
-
-	t.press(ESC);
-	await t.settle(50);
-	t.press('/exit');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle();
-	assert.equal(t.closed.count, 1);
-	assert.deepEqual(t.controller.calls.sent, []);
-});
-
-test('/new is refused while running', async () => {
-	const t = setup();
-	t.controller.setState('running');
-	await t.settle();
-	t.press('/new');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle();
+	for (const text of ['/help', '/new', '/exit', '/mode auto']) {
+		t.press(text);
+		await t.settle();
+		t.press(ENTER);
+		await t.settle();
+		t.controller.setState('idle');
+		await t.settle();
+	}
+	assert.deepEqual(t.controller.calls.sent, ['/help', '/new', '/exit', '/mode auto']);
 	assert.equal(t.controller.calls.resets, 0);
+	assert.equal(t.closed.count, 0);
+	assert.deepEqual(t.controller.calls.modes, []);
 });
 
-test('/new while running shows the busy hint and keeps the draft', async () => {
+test('a slash line while running shows the busy hint and keeps the draft', async () => {
 	const t = setup();
 	t.controller.setState('running');
 	await t.settle();
@@ -182,7 +155,7 @@ test('/new while running shows the busy hint and keeps the draft', async () => {
 	await t.settle();
 	assert.match(t.lastFrame(), new RegExp(BUSY_HINT));
 	assert.match(t.lastFrame(), /> \/new/);
-	assert.equal(t.controller.calls.resets, 0);
+	assert.deepEqual(t.controller.calls.sent, []);
 });
 
 test('a paste beyond the input limit is truncated with a notice', async () => {
@@ -581,8 +554,17 @@ test('Shift+Tab asks for confirmation before accept-edits; Enter applies it', as
 	assert.match(t.lastFrame(), /mode: accept edits/);
 	assert.ok(t.printed.some(p => p.includes('auto-accept edits (this chat only)')));
 	t.press(SHIFT_TAB);
+	await t.settle(ARM + 50);
+	assert.match(t.lastFrame().replace(/\s+/g, ' '), /Let a model classifier approve or deny tool calls/);
+	assert.deepEqual(t.controller.calls.modes, ['acceptEdits']);
+	t.press(ENTER);
 	await t.settle();
-	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'default']);
+	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'auto']);
+	assert.match(t.lastFrame(), /mode: auto/);
+	assert.ok(t.printed.some(p => p.includes('Mode: auto (a classifier approves')));
+	t.press(SHIFT_TAB);
+	await t.settle();
+	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'auto', 'default']);
 	assert.match(t.lastFrame(), /mode: default/);
 });
 
@@ -600,34 +582,6 @@ test('any other key cancels the accept-edits confirmation and Enter before armin
 	assert.equal(t.controller.calls.modes.length, 0);
 	assert.doesNotMatch(t.lastFrame(), /Auto-accept/);
 	assert.doesNotMatch(t.lastFrame(), /> x/);
-});
-
-test('/mode shows, sets and rejects modes', async () => {
-	const t = setup(undefined, 'API key', armed);
-	await t.settle();
-	t.press('/mode');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle();
-	assert.match(t.lastFrame(), /Mode: default/);
-	t.press('/mode bogus');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle();
-	assert.match(t.lastFrame(), /Usage: \/mode/);
-	t.press('/mode accept-edits');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle(ARM + 50);
-	t.press(ENTER);
-	await t.settle();
-	assert.deepEqual(t.controller.calls.modes, ['acceptEdits']);
-	t.press('/mode default');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle();
-	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'default']);
-	assert.deepEqual(t.controller.calls.sent, []);
 });
 
 test('audit entries are printed once, without content', async () => {
@@ -734,7 +688,7 @@ function fakeHost(columns = 50) {
 			state.moves.push(d);
 			return true;
 		},
-		isHostKey: (input: string) => input === '§',
+		isHostKey: (input: string, key?: {ctrl?: boolean}) => Boolean(key?.ctrl) && input === 't',
 	};
 	const set = (patch: Partial<{focused: boolean; columns: number}>) => {
 		Object.assign(state, patch);
@@ -763,9 +717,13 @@ test('with a host: the host key is never typed, → on an empty draft moves focu
 	const f = fakeHost();
 	const t = setup(undefined, 'API key', {host: f.host});
 	await t.settle();
-	t.press('§');
+	t.press('ab');
 	await t.settle();
-	assert.doesNotMatch(t.lastFrame(), /§/);
+	t.press('\x14');
+	await t.settle();
+	assert.match(t.lastFrame(), /> ab/);
+	t.press('\x15');
+	await t.settle();
 	t.press(`${ESC}[C`);
 	await t.settle();
 	assert.deepEqual(f.state.moves, ['right']);
@@ -788,4 +746,72 @@ test('with a host: lines fit the width the host gives', async () => {
 	t.press('x'.repeat(80));
 	await t.settle();
 	for (const line of t.lastFrame().split('\n')) assert.ok([...line].length <= 30, line);
+});
+
+test('with a host: Esc twice on an idle, empty chat opens the console', async () => {
+	const f = fakeHost();
+	let toggles = 0;
+	const host = {...f.host, togglePanel: () => (toggles++, true)};
+	const t = setup(undefined, 'API key', {host});
+	await t.settle();
+	t.press(ESC);
+	await t.settle(40);
+	t.press(ESC);
+	await t.settle(40);
+	assert.equal(toggles, 1);
+	t.press('ab');
+	await t.settle();
+	t.press(ESC);
+	await t.settle(40);
+	t.press(ESC);
+	await t.settle(40);
+	assert.equal(toggles, 1, 'the first Esc only clears the draft');
+	t.press(ESC);
+	await t.settle(40);
+	assert.equal(toggles, 2);
+	t.controller.setState('running');
+	await t.settle();
+	t.press(ESC);
+	await t.settle(40);
+	t.press(ESC);
+	await t.settle(40);
+	assert.equal(toggles, 2, 'Esc interrupts while running');
+	assert.equal(t.closed.count, 0);
+});
+
+test('with a host title bar: the chat name and status go up there, without a price', async () => {
+	const f = fakeHost();
+	const bars: Array<[string | undefined, string | undefined]> = [];
+	const host = {...f.host, setTitle: (title: string | undefined, detail?: string) => void bars.push([title, detail])};
+	const t = setup(undefined, 'API key', {host});
+	await t.settle();
+	assert.deepEqual(bars.at(-1), ['New chat', 'API key · idle · mode: default']);
+	assert.doesNotMatch(t.lastFrame(), /API key · idle/);
+	(t.controller as {title?: string}).title = 'Build fix';
+	t.controller.emit({type: 'title', title: 'Build fix'});
+	t.controller.ui({kind: 'result', ok: true, subtype: 'success', costUsd: 0.5});
+	await t.settle();
+	assert.equal(bars.at(-1)![0], 'Build fix');
+	assert.doesNotMatch(bars.at(-1)![1] ?? '', /\$/);
+});
+
+test(':q in the chat quits through the host, or leaves the chat without one; it is never sent', async () => {
+	const f = fakeHost();
+	let quits = 0;
+	const t = setup(undefined, 'API key', {host: {...f.host, quit: () => void quits++}});
+	await t.settle();
+	t.press(':q');
+	await t.settle();
+	t.press(ENTER);
+	await t.settle();
+	assert.equal(quits, 1);
+	assert.deepEqual(t.controller.calls.sent, []);
+	const plain = setup();
+	await plain.settle();
+	plain.press(':q!');
+	await plain.settle();
+	plain.press(ENTER);
+	await plain.settle();
+	assert.equal(plain.closed.count, 1);
+	assert.deepEqual(plain.controller.calls.sent, []);
 });

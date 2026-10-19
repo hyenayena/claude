@@ -1,5 +1,8 @@
-export type ChatMode = 'default' | 'acceptEdits';
-export const MODE_CYCLE: readonly ChatMode[] = ['default', 'acceptEdits'];
+export type ChatMode = 'default' | 'acceptEdits' | 'auto';
+export const MODE_CYCLE: readonly ChatMode[] = ['default', 'acceptEdits', 'auto'];
+
+/** The SDK permission mode behind a chat mode; accept-edits is implemented by the bridge. */
+export const sdkPermissionMode = (mode: ChatMode): 'auto' | 'default' => (mode === 'auto' ? 'auto' : 'default');
 
 export type Highlight = {level: 'info' | 'warn'; text: string};
 

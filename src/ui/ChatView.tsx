@@ -11,7 +11,6 @@ import {LiveTools, toolLayout} from './LiveTools.js';
 import {PermissionPrompt} from './PermissionPrompt.js';
 import {
 	formatError,
-	formatNotice,
 	formatOut,
 	formatUserLine,
 	liveTail,
@@ -42,7 +41,6 @@ import {
 	LIVE,
 	markInterrupting,
 	reduceTranscript,
-	resetTranscript,
 	setNotice,
 	type TranscriptState,
 } from './transcript.js';
@@ -72,18 +70,9 @@ const promptSig = (p: PromptEntry, tier: string): string =>
 		: `${p.id}:${(p.state as QuestionPromptState).index}:${(p.state as QuestionPromptState).view}:${tier}`;
 
 export const BUSY_HINT = 'Wait for the answer or press Esc to interrupt';
-export const HELP_TEXT = [
-	'Chat commands:',
-	'  /new   start a new conversation',
-	'  /exit  leave the chat (alias /quit)',
-	'  /mode  show or change the mode (default, accept-edits)',
-	'  /help  show this help',
-	'Ctrl+§ opens the console (commands such as "chat <model>" and "settings"); ← and → move between them.',
-	'Shift+Tab switches between default and accept-edits mode.',
-	'Esc interrupts a running answer; Esc or Ctrl+C when idle leaves the chat.',
-].join('\n');
-
-const MODE_ARG: Record<string, ChatMode> = {default: 'default', 'accept-edits': 'acceptEdits', acceptedits: 'acceptEdits'};
+export const DOUBLE_ESC_MS = 500;
+export const NEW_CHAT_TITLE = 'New chat';
+const MODE_NAME: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept-edits', auto: 'auto'};
 
 export function ChatView(props: ChatViewProps) {
 	const {controller, print, close, scrub, credentialLabel} = props;
@@ -129,6 +118,10 @@ export function ChatView(props: ChatViewProps) {
 	const feed = useCallback(
 		(event: ChatEvent) => {
 			if (closedRef.current) return;
+			if (event.type === 'sent') {
+				print(formatUserLine(event.text, scrub));
+				return;
+			}
 			if (event.type === 'permission-resolved') {
 				batchRef.current = event.pending === 0 ? 0 : batchRef.current + 1;
 			}
@@ -187,7 +180,7 @@ export function ChatView(props: ChatViewProps) {
 	const requestMode = useCallback(
 		(mode: ChatMode) => {
 			if (mode === controller.mode) {
-				setT(setNotice(tRef.current, `Already in ${mode === 'acceptEdits' ? 'accept-edits' : 'default'} mode.`));
+				setT(setNotice(tRef.current, `Already in ${MODE_NAME[mode]} mode.`));
 				return;
 			}
 			if (mode === 'default') {
@@ -210,54 +203,20 @@ export function ChatView(props: ChatViewProps) {
 	const submit = useCallback(() => {
 		const text = edRef.current.text.trim();
 		if (text === '') return;
+		// Vim-style ":q" exits the application (or leaves the chat when there is no host).
+		if (text === ':q' || text === ':q!') {
+			edRef.current = emptyEditor;
+			if (host?.quit) host.quit();
+			else leave();
+			return;
+		}
 		const t = tRef.current;
 		if (t.phase !== 'idle') {
 			setT(setNotice(t, BUSY_HINT));
 			return;
 		}
-		if (text.startsWith('/')) {
-			const word = text.split(/\s+/)[0] as string;
-			switch (word) {
-				case '/exit':
-				case '/quit':
-					leave();
-					return;
-				case '/new':
-					controller.reset();
-					pendingModeRef.current = undefined;
-					edRef.current = emptyEditor;
-					setT({...resetTranscript(tRef.current), mode: controller.mode});
-					print(formatNotice('Started a new conversation.', scrub));
-					return;
-				case '/mode': {
-					const arg = text.split(/\s+/)[1];
-					edRef.current = emptyEditor;
-					if (arg === undefined) {
-						const label = controller.mode === 'acceptEdits' ? 'accept-edits' : 'default';
-						setT(setNotice(tRef.current, `Mode: ${label}. Use /mode default or /mode accept-edits.`));
-						return;
-					}
-					const next = MODE_ARG[arg.toLowerCase()];
-					if (next === undefined) {
-						setT(setNotice(tRef.current, 'Usage: /mode [default|accept-edits]'));
-						return;
-					}
-					requestMode(next);
-					return;
-				}
-				case '/help':
-					edRef.current = emptyEditor;
-					setT(setNotice(tRef.current, undefined));
-					print(formatNotice(HELP_TEXT, scrub));
-					return;
-				default:
-					setT(setNotice(t, `Unknown chat command "${scrub(word)}". Type /help.`));
-					return;
-			}
-		}
 		edRef.current = emptyEditor;
 		setT(setNotice(tRef.current, undefined));
-		print(formatUserLine(text, scrub));
 		try {
 			controller.send(text);
 		} catch (error) {
@@ -265,15 +224,26 @@ export function ChatView(props: ChatViewProps) {
 			return;
 		}
 		if (controller.state === 'running') feed({type: 'state', state: 'running'});
-	}, [controller, feed, leave, print, requestMode, scrub, setT]);
+	}, [controller, feed, host, leave, print, requestMode, scrub, setT]);
 
+	// Time of an Esc on an idle, empty chat; a second one soon after opens the console.
+	const lastEmptyEscRef = useRef(0);
 	const escape = useCallback(() => {
 		const phase = tRef.current.phase;
+		const first = lastEmptyEscRef.current;
+		lastEmptyEscRef.current = 0;
 		if (phase === 'running') interrupt();
-		else if (phase === 'interrupting') leave();
-		else if (edRef.current.text !== '') edit({type: 'clear'});
+		// Next to the console the chat is the main screen: only Ctrl+C leaves it.
+		else if (phase === 'interrupting') {
+			if (!host) leave();
+		} else if (edRef.current.text !== '') edit({type: 'clear'});
 		// The chat is the main screen next to the console, so Esc never leaves it there.
 		else if (!host) leave();
+		else {
+			const now = Date.now();
+			if (first !== 0 && now - first <= DOUBLE_ESC_MS) host.togglePanel?.();
+			else lastEmptyEscRef.current = now;
+		}
 	}, [edit, host, interrupt, leave]);
 
 	const ctrlC = useCallback(() => {
@@ -362,12 +332,13 @@ export function ChatView(props: ChatViewProps) {
 
 	useInput((input: string, key: Key) => {
 		if (closedRef.current) return;
-		if (host?.isHostKey(input)) return;
+		if (host?.isHostKey(input, key)) return;
 		const prompt = currentPrompt();
 		if (prompt) return promptKey(prompt, input, key);
 		if (pendingModeRef.current) return modeKey(key);
 		if (key.ctrl && input === 'c') return ctrlC();
 		if (key.escape) return escape();
+		lastEmptyEscRef.current = 0;
 		if (key.tab && key.shift) return cycleMode();
 		if (tRef.current.notice !== undefined) setT(setNotice(tRef.current, undefined));
 		if (key.return) {
@@ -402,6 +373,10 @@ export function ChatView(props: ChatViewProps) {
 	}, {isActive: focused});
 
 	useEffect(() => {
+		host?.setTitle?.(barTitle, barStatus);
+	});
+
+	useEffect(() => {
 		const p = promptRef.current;
 		if (!p) return;
 		const sig = promptSig(p, layoutPrompt(rows, columns).tier);
@@ -413,22 +388,20 @@ export function ChatView(props: ChatViewProps) {
 	const prompt = currentPrompt();
 	const t = tRef.current;
 	const ed = edRef.current;
-	const statusBar = (
-		<StatusBar
-			text={statusBarText(
-				{
-					credentialLabel,
-					model: t.model,
-					sessionId: t.sessionId,
-					phase: t.phase,
-					costUsd: t.costUsd,
-					mode: controller.mode,
-					pending: controller.pendingPermissions.length,
-				},
-				scrub,
-			)}
-		/>
+	const barStatus = statusBarText(
+		{
+			credentialLabel,
+			model: t.model,
+			sessionId: t.sessionId,
+			phase: t.phase,
+			mode: controller.mode,
+			pending: controller.pendingPermissions.length,
+		},
+		scrub,
 	);
+	// A host with a title bar shows the chat's name and this status above the chat instead.
+	const barTitle = scrub(controller.title ?? NEW_CHAT_TITLE);
+	const statusBar = host?.setTitle ? null : <StatusBar text={barStatus} />;
 
 	if (prompt) {
 		const layout = layoutPrompt(rows, columns);
@@ -465,9 +438,13 @@ export function ChatView(props: ChatViewProps) {
 
 	const tools = [...t.tools.values()];
 	const statusText = statusLineText(t.status);
-	const noticeText = pendingModeRef.current
-		? `Auto-accept Edit/Write inside ${scrub(props.projectDir ?? 'the project')} for this chat? Enter to confirm, any other key cancels.`
-		: t.notice;
+	const pendingMode = pendingModeRef.current?.mode;
+	const noticeText =
+		pendingMode === 'auto'
+			? 'Let a model classifier approve or deny tool calls (Bash and edits included) for this chat? It asks you only when unsure. Enter to confirm, any other key cancels.'
+			: pendingMode
+				? `Auto-accept Edit/Write inside ${scrub(props.projectDir ?? 'the project')} for this chat? Enter to confirm, any other key cancels.`
+				: t.notice;
 	// Stay under the terminal height or Ink falls back to clearing the screen every frame
 	const cap = rows >= 12 ? rows - 3 : rows - 1;
 	let rem = Math.max(0, cap - 1);

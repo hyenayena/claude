@@ -35,14 +35,24 @@ const fromSystem = (msg: Loose): UiEvent[] => {
 			if (!sessionId) return [];
 			const model = str(msg['model']);
 			const apiKeySource = str(msg['apiKeySource']);
+			const commands = msg['slash_commands'];
+			const slashCommands = Array.isArray(commands) ? commands.filter((c): c is string => typeof c === 'string') : undefined;
 			return [
 				{
 					kind: 'session',
 					sessionId,
 					...(model !== undefined && {model}),
 					...(apiKeySource !== undefined && {apiKeySource}),
+					...(slashCommands !== undefined && {slashCommands}),
 				},
 			];
+		}
+		case 'local_command_output':
+		case 'informational': {
+			// Output of a Claude Code command run from the console; info-level banners stay hidden as in Claude Code.
+			const content = str(msg['content']);
+			if (!content || msg['level'] === 'info') return [];
+			return [{kind: 'text', messageId: str(msg['uuid']) ?? 'local', text: content}];
 		}
 		case 'status': {
 			const s = msg['status'];

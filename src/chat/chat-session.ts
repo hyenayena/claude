@@ -17,6 +17,7 @@ import {
 	type PermissionDecision,
 	type PermissionPrompter,
 	type PermissionRequest,
+	sdkPermissionMode,
 } from './permission.js';
 
 export const MAX_TURNS_MESSAGE = 'Reached the maximum number of turns for one request';
@@ -28,8 +29,14 @@ export type ChatSessionOptions = {
 	timeoutMs?: number;
 	graceMs?: number;
 	initialResume?: string;
+	initialMode?: ChatMode;
 	log?: Logger;
 };
+
+export type SlashCommandInfo = {name: string; description?: string; argumentHint?: string};
+
+const MAX_COMMANDS = 300;
+export const isCommandName = (name: string): boolean => /^[A-Za-z0-9][A-Za-z0-9:._-]{0,63}$/.test(name);
 
 type Handle = {
 	q: ReturnType<ChatQueryFn>;
@@ -102,6 +109,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private turnDeadline = 0;
 	private turnRemaining: number | undefined;
 	private _mode: ChatMode = 'default';
+	private _commands: SlashCommandInfo[] = [];
+	private _title: string | undefined;
 	private readonly queue: Entry[] = [];
 	private readonly approved = new Set<string>();
 
@@ -111,6 +120,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.graceMs = opts.graceMs ?? 8_000;
 		this.log = opts.log ?? noopLog;
 		this._sessionId = opts.initialResume;
+		if (opts.initialMode && MODE_CYCLE.includes(opts.initialMode)) this._mode = opts.initialMode;
 	}
 
 	get state(): ChatState {
@@ -133,6 +143,19 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	get mode(): ChatMode {
 		return this._mode;
 	}
+	/** The chat's name: Claude Code's session title, or a stand-in until it exists. */
+	get title(): string | undefined {
+		return this._title;
+	}
+	setTitle(title: string): void {
+		if (this._state === 'closed' || title === '' || title === this._title) return;
+		this._title = title;
+		this.emit({type: 'title', title});
+	}
+	/** Claude Code commands of this session (names without the slash), known once a query has started. */
+	get commands(): readonly SlashCommandInfo[] {
+		return this._commands;
+	}
 	get pendingPermissions(): readonly PermissionRequest[] {
 		return this.queue.map(e => e.req);
 	}
@@ -144,7 +167,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		};
 	}
 
-	send(text: string): void {
+	send(text: string, opts: {command?: boolean} = {}): void {
 		if (this._state === 'closed') throw new Error('The chat is closed');
 		if (this._state === 'running') throw new Error('A request is already running');
 		if (this._needsNewSession) throw new Error(RESUME_MESSAGE);
@@ -164,7 +187,10 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			uuid: randomUUID(),
 			session_id: this._sessionId ?? '',
 			origin: {kind: 'human'},
+			// Typed text that starts with "/" is a message, not a command; commands come from the console.
+			...(!opts.command && text.startsWith('/') && {client_composed: true as const}),
 		});
+		this.emit({type: 'sent', text});
 	}
 
 	async interrupt(): Promise<void> {
@@ -176,9 +202,23 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	setMode(mode: ChatMode): void {
 		if (this._state === 'closed') throw new Error('The chat is closed');
 		if (!MODE_CYCLE.includes(mode)) throw new Error('Unknown permission mode');
+		const previous = this._mode;
 		this._mode = mode;
 		this.log.info('permission mode set', {mode});
 		this.emit({type: 'mode', mode});
+		// A query that is already running learns the change here; a new one gets it in its options.
+		const handle = this.handle;
+		if (!handle?.q.setPermissionMode || sdkPermissionMode(previous) === sdkPermissionMode(mode)) return;
+		handle.q.setPermissionMode(sdkPermissionMode(mode)).catch((error: unknown) => {
+			if (this._state === 'closed' || this._mode !== mode) return;
+			this.log.warn('permission mode rejected', {mode, err: error});
+			this._mode = 'default';
+			this.emit({
+				type: 'mode',
+				mode: 'default',
+				error: this.opts.redact(error instanceof Error ? error.message : String(error)),
+			});
+		});
 	}
 
 	answerPermission(id: string, decision: PermissionDecision): boolean {
@@ -274,6 +314,35 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.listeners.clear();
 	}
 
+	private mergeCommands(list: SlashCommandInfo[]): void {
+		const byName = new Map(this._commands.map(c => [c.name, c]));
+		for (const c of list) {
+			if (!isCommandName(c.name)) continue;
+			byName.set(c.name, {...byName.get(c.name), ...c});
+		}
+		this._commands = [...byName.values()].slice(0, MAX_COMMANDS);
+	}
+
+	private fetchCommands(handle: Handle): void {
+		const q = handle.q as {supportedCommands?: () => Promise<unknown>};
+		if (typeof q.supportedCommands !== 'function') return;
+		q.supportedCommands().then(
+			list => {
+				if (this.handle !== handle || !Array.isArray(list)) return;
+				this.mergeCommands(
+					list
+						.filter((c): c is {name: string; description?: unknown; argumentHint?: unknown} => typeof c?.name === 'string')
+						.map(c => ({
+							name: c.name,
+							...(typeof c.description === 'string' && {description: c.description}),
+							...(typeof c.argumentHint === 'string' && c.argumentHint !== '' && {argumentHint: c.argumentHint}),
+						})),
+				);
+			},
+			(error: unknown) => this.log.debug('supported commands unavailable', {err: error}),
+		);
+	}
+
 	private spawn(): Handle {
 		const ac = new AbortController();
 		const input = new InputQueue<SDKUserMessage>();
@@ -283,6 +352,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		const handle: Handle = {q, input, ac};
 		this.handle = handle;
 		void this.pump(handle);
+		this.fetchCommands(handle);
 		return handle;
 	}
 
@@ -314,6 +384,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		if (ev.kind === 'session') {
 			this._sessionId = ev.sessionId;
 			this._model = ev.model ?? this._model;
+			if (ev.slashCommands) this.mergeCommands(ev.slashCommands.map(name => ({name})));
 		} else if (ev.kind === 'api-error' && ev.code === 'authentication_failed') {
 			if (!this.authFailed) this.log.warn('authentication failed');
 			this.authFailed = true;

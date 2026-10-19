@@ -49,7 +49,7 @@ export type Out =
 	| {kind: 'api-error'; code: string}
 	| {kind: 'outcome'; outcome: Exclude<TurnOutcome, 'ok'>; error?: string}
 	| {kind: 'audit'; entry: AuditEntry}
-	| {kind: 'mode'; mode: ChatMode}
+	| {kind: 'mode'; mode: ChatMode; error?: string}
 	| {kind: 'blank'};
 
 export interface Step {
@@ -207,8 +207,14 @@ export function reduceTranscript(state: TranscriptState, event: ChatEvent): Step
 			return {state: {...state, pending: event.pending}, out: []};
 		case 'audit':
 			return {state, out: [{kind: 'audit', entry: event.entry}]};
+		case 'sent':
+		case 'title':
+			return {state, out: []};
 		case 'mode':
-			if (event.mode === state.mode) return {state, out: []};
-			return {state: {...state, mode: event.mode}, out: [{kind: 'mode', mode: event.mode}]};
+			if (event.mode === state.mode && !event.error) return {state, out: []};
+			return {
+				state: {...state, mode: event.mode},
+				out: [{kind: 'mode', mode: event.mode, ...(event.error !== undefined && {error: event.error})}],
+			};
 	}
 }

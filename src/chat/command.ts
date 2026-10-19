@@ -4,19 +4,28 @@ import {buildChatOptions, buildEnv, resolvePaths} from '../config.js';
 import {makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
 import {clip, noopLog} from '../log.js';
 import type {ClaudeState, ChatQueryFn, Credential, CredentialInfo} from '../types.js';
-import type {ChatViewProps} from '../ui/mount.js';
+import type {ChatViewProps, SessionPickerProps} from '../ui/mount.js';
+import {formatAssistantBlock, formatNotice, formatUserLine} from '../ui/present.js';
+import {readHistory} from './history.js';
 import {buildScope} from '../policy.js';
 import {ChatSession} from './chat-session.js';
 import {createChatCanUseTool} from './permission-bridge.js';
+import {sdkPermissionMode} from './permission.js';
+import {policyHooks} from './policy-hook.js';
+import {readSessionTitle, titleFromPrompt, transcriptFile} from './title.js';
 import {buildPreview} from './preview.js';
 import {makeReveal} from './reveal.js';
 import {bashHighlights} from './risk.js';
 import {makeScrub} from './scrub.js';
 
 export const CHAT_USAGE = 'Usage: claude chat [--new]';
+const TITLE_RETRY_MS = [3_000, 10_000];
 export const NEEDS_MOUNT_MESSAGE = '"claude chat" needs an interface that can show views';
 
-export type ChatUi = {createChatElement: (props: ChatViewProps) => UiElement};
+export type ChatUi = {
+	createChatElement: (props: ChatViewProps) => UiElement;
+	createPickerElement?: (props: SessionPickerProps) => UiElement;
+};
 
 export type ChatRunDeps = {
 	dataDir: string;
@@ -33,9 +42,12 @@ export type ChatRunDeps = {
 	acquire: () => () => void;
 	// Receives the view's close function once the chat is shown.
 	onMount?: (close: () => void) => void;
+	// Receives the running session, e.g. to apply a permission mode chosen in the settings.
+	onSession?: (session: ChatSession | undefined) => void;
 };
 
-export type ChatOpen = {fresh: boolean; model?: string; tuning?: ChatTuning};
+// `resume` names a session to continue; otherwise `fresh` picks a new one or the last one.
+export type ChatOpen = {fresh: boolean; model?: string; tuning?: ChatTuning; resume?: string};
 
 export const runChat = async (args: string[], ctx: CommandContext, deps: ChatRunDeps): Promise<void> => {
 	let fresh = false;
@@ -61,7 +73,7 @@ export const openChat = async (open: ChatOpen, ctx: CommandContext, deps: ChatRu
 };
 
 const runLocked = async (
-	{fresh, model, tuning}: ChatOpen,
+	{fresh, model, tuning, resume: chosen}: ChatOpen,
 	ctx: CommandContext,
 	mount: NonNullable<CommandContext['mount']>,
 	deps: ChatRunDeps,
@@ -105,7 +117,7 @@ const runLocked = async (
 	const state = await store.read();
 	const paths = resolvePaths(dataDir, deps.moduleDir);
 	const scope = buildScope(paths);
-	const resume = fresh ? undefined : state.lastSessionId;
+	const resume = chosen ?? (fresh ? undefined : state.lastSessionId);
 	log.info('chat starting', {
 		fresh,
 		kind: cred.kind,
@@ -119,6 +131,7 @@ const runLocked = async (
 		redact,
 		log,
 		initialResume: resume,
+		...(state.chatPermissionMode && {initialMode: state.chatPermissionMode}),
 		buildOptions: (abortController, id, prompter) => ({
 			...buildChatOptions({
 				paths,
@@ -138,12 +151,43 @@ const runLocked = async (
 				}),
 			}),
 			includePartialMessages: true,
+			permissionMode: sdkPermissionMode(prompter.mode),
+			hooks: policyHooks(scope),
 		}),
 	});
 
 	const lifetime = new AbortController();
 	const unregister = deps.registerAbort?.(lifetime);
 	lifetime.signal.addEventListener('abort', () => session.close());
+
+	// The chat's name: Claude Code writes a generated title into the transcript some time after a
+	// turn, so it is read after each turn (and again a little later); the first message stands in.
+	const titleTimers = new Set<NodeJS.Timeout>();
+	const refreshTitle = async (): Promise<void> => {
+		const id = session.sessionId;
+		if (!id) return;
+		const title = await readSessionTitle(transcriptFile(paths.configDir, paths.projectDir, id));
+		if (title) session.setTitle(title);
+	};
+	const refreshTitleSoon = (): void => {
+		void refreshTitle();
+		for (const ms of TITLE_RETRY_MS) {
+			const timer = setTimeout(() => {
+				titleTimers.delete(timer);
+				void refreshTitle();
+			}, ms);
+			timer.unref();
+			titleTimers.add(timer);
+		}
+	};
+	if (resume) void refreshTitle();
+	session.subscribe(e => {
+		if (e.type === 'sent' && session.title === undefined && !e.text.startsWith('/')) {
+			const stand = titleFromPrompt(e.text);
+			if (stand) session.setTitle(stand);
+		}
+		if (e.type === 'turn-end' && e.outcome === 'ok') refreshTitleSoon();
+	});
 
 	let saving: Promise<void> = Promise.resolve();
 	session.subscribe(e => {
@@ -159,8 +203,11 @@ const runLocked = async (
 			);
 	});
 
+	deps.onSession?.(session);
 	try {
-		await mount(control => {
+		let printHistory: ((text: string) => void) | undefined;
+		const mounted = mount(control => {
+			printHistory = control.print ?? ctx.print;
 			deps.onMount?.(control.close);
 			return ui.createChatElement({
 				controller: session,
@@ -177,9 +224,20 @@ const runLocked = async (
 				...(resume && {initialSessionId: resume}),
 			});
 		});
+		// A resumed chat shows its earlier messages; the transcript was cleared for the new view.
+		if (resume && printHistory) {
+			const print = printHistory;
+			const earlier = await readHistory(transcriptFile(paths.configDir, paths.projectDir, resume)).catch(() => []);
+			for (const m of earlier) print(m.role === 'user' ? formatUserLine(m.text, scrub) : formatAssistantBlock(m.text, scrub));
+			if (earlier.length > 0) print(formatNotice('Resumed — earlier messages above.', scrub));
+		}
+		await mounted;
 	} finally {
 		const sessionId = session.sessionId;
 		const model = session.model;
+		deps.onSession?.(undefined);
+		for (const timer of titleTimers) clearTimeout(timer);
+		titleTimers.clear();
 		session.close();
 		unregister?.();
 		await saving;

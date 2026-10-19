@@ -52,7 +52,7 @@ export const MODEL_OPTIONS: SettingOption[] = [
 	{value: 'haiku', label: 'Haiku', description: 'latest Haiku'},
 ];
 
-type PrefKey = 'chatModel' | 'chatEffort' | 'chatThinking' | 'chatFastMode' | 'chatOutputStyle';
+type PrefKey = 'chatModel' | 'chatEffort' | 'chatThinking' | 'chatFastMode' | 'chatOutputStyle' | 'chatPermissionMode';
 
 type Store = {read: () => Promise<ClaudeState>; update: (patch: Partial<ClaudeState>) => Promise<unknown>};
 
@@ -64,6 +64,9 @@ type PrefSpec = {
 	// Converts a chosen option value into the stored value; throws on anything not offered.
 	parse: (value: string) => ClaudeState[PrefKey];
 	show: (state: ClaudeState) => string;
+	// Default text: applies to new chats.
+	scope?: string;
+	onSet?: (value: string) => void;
 };
 
 const fromOptions = <T extends string>(options: SettingOption[], value: string): T | undefined => {
@@ -83,14 +86,39 @@ const FAST_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Off'},
 	{value: 'on', label: 'On', description: 'faster output on supported models'},
 ];
+const MODE_OPTIONS: SettingOption[] = [
+	{value: '', label: 'Default', description: 'edits and commands ask first'},
+	{value: 'acceptEdits', label: 'Accept edits', description: 'project edits go through without asking'},
+	{value: 'auto', label: 'Auto', description: 'a classifier approves or denies, asks when unsure'},
+];
 const STYLE_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Default'},
 	{value: 'Explanatory', label: 'Explanatory', description: 'explains its choices'},
 	{value: 'Learning', label: 'Learning', description: 'leaves parts for you to write'},
 ];
 
-export function chatSettings(store: Store, isModelId: (v: string) => boolean, log: Logger): Setting[] {
+export type ChatSettingsHooks = {
+	// Applies a newly chosen permission mode to the open chat, if any.
+	applyMode?: (mode: 'default' | 'acceptEdits' | 'auto') => void;
+};
+
+export function chatSettings(
+	store: Store,
+	isModelId: (v: string) => boolean,
+	log: Logger,
+	hooks: ChatSettingsHooks = {},
+): Setting[] {
 	const specs: PrefSpec[] = [
+		{
+			key: 'chatPermissionMode',
+			label: 'Permission mode',
+			description: 'How tool calls are approved',
+			scope: 'applies now and to new chats',
+			options: MODE_OPTIONS,
+			parse: v => fromOptions<'acceptEdits' | 'auto'>(MODE_OPTIONS, v),
+			show: s => s.chatPermissionMode ?? '',
+			onSet: v => hooks.applyMode?.(v === '' ? 'default' : (v as 'acceptEdits' | 'auto')),
+		},
 		{
 			key: 'chatModel',
 			label: 'Chat model',
@@ -138,13 +166,14 @@ export function chatSettings(store: Store, isModelId: (v: string) => boolean, lo
 	return specs.map(spec => ({
 		key: spec.key,
 		label: spec.label,
-		description: `${spec.description}; applies to new chats`,
+		description: `${spec.description}; ${spec.scope ?? 'applies to new chats'}`,
 		options: spec.options,
 		get: async () => spec.show(await store.read()),
 		set: async value => {
 			const stored = spec.parse(value);
 			await store.update({[spec.key]: stored});
 			log.info('chat setting set', {key: spec.key, value: value === '' ? 'default' : value});
+			spec.onSet?.(value);
 		},
 	}));
 }

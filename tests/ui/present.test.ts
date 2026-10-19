@@ -42,7 +42,7 @@ test('every field type is scrubbed and only constants add SGR', () => {
 		formatOut({kind: 'api-error', code: dirty}, scrub),
 		...liveTail(dirty, scrub, 10, 80),
 		statusBarText(
-			{credentialLabel: dirty, model: dirty, sessionId: dirty, phase: 'idle', costUsd: 0.0123},
+			{credentialLabel: dirty, model: dirty, sessionId: dirty, phase: 'idle'},
 			scrub,
 		),
 	];
@@ -71,8 +71,7 @@ test('tool block collapses to three result lines with a footer', () => {
 
 test('status bar shows cost only when positive and truncates the session id', () => {
 	const base = {credentialLabel: 'API key', model: 'm', sessionId: '0123456789abc', phase: 'running' as const};
-	assert.equal(statusBarText({...base, costUsd: 0.0123}, scrub), 'API key · m · 01234567 · running · est. $0.0123');
-	assert.equal(statusBarText({...base, costUsd: 0}, scrub), 'API key · m · 01234567 · running');
+	assert.equal(statusBarText(base, scrub), 'API key · m · 01234567 · running');
 });
 
 test('status line texts', () => {
@@ -117,7 +116,7 @@ test('tool results: Edit and Write summarise, refusals show denied, Bash keeps t
 });
 
 test('status bar shows the mode and awaiting approval', () => {
-	const base = {credentialLabel: 'API key', model: undefined, sessionId: undefined, costUsd: undefined};
+	const base = {credentialLabel: 'API key', model: undefined, sessionId: undefined};
 	assert.equal(statusBarText({...base, phase: 'running', mode: 'acceptEdits', pending: 0}, scrub), 'API key · running · mode: accept edits');
 	assert.equal(statusBarText({...base, phase: 'running', mode: 'default', pending: 2}, scrub), 'API key · awaiting approval · mode: default');
 });

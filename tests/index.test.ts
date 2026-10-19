@@ -29,14 +29,17 @@ test('ping prints pong', async () => {
 
 test('no subcommand throws the usage error', async () => {
 	const {command, ctx} = await setup();
-	await assert.rejects(async () => command.run([], ctx), {message: 'Usage: claude <ping|ask|chat|new|session|auth>'});
+	await assert.rejects(async () => command.run([], ctx), {
+		message: 'Usage: claude <ping|ask|chat|new|resume|session|auth|<Claude Code command>>',
+	});
 });
 
-test('unknown subcommand throws', async () => {
+test('an unknown subcommand is a Claude Code command and needs an open chat', async () => {
 	const {command, ctx} = await setup();
 	await assert.rejects(async () => command.run(['nope'], ctx), {
-		message: 'Unknown subcommand "nope". Usage: claude <ping|ask|chat|new|session|auth>',
+		message: 'No chat is open. Claude Code commands run in the open chat; start one with "chat".',
 	});
+	await assert.rejects(async () => command.run(['bad\u001bname'], ctx), /Unknown subcommand/);
 });
 
 test('a host without log falls back to a noop logger', async () => {

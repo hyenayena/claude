@@ -1,8 +1,11 @@
 import {constants} from 'node:fs';
 import {lstat, open, realpath, stat} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
-import type {Command, CommandContext, Logger} from '../../../src/api.js';
+import type {Command, CommandContext, Logger, Subcommand} from '../../../src/api.js';
 import {chatSettings, tuningFromState} from './chat-prefs.js';
+import {isCommandName, type ChatSession, type SlashCommandInfo} from './chat/chat-session.js';
+import {diskCommands} from './disk-commands.js';
+import {listSessions} from './chat/history.js';
 import {buildEnv, buildOptions, resolvePaths, runtimeInfo} from './config.js';
 import {
 	describeCredential,
@@ -34,7 +37,9 @@ export type ClaudeDeps = {
 	registerAbort?: (c: AbortController) => () => void;
 };
 
-const USAGE = 'Usage: claude <ping|ask|chat|new|session|auth>';
+const USAGE = 'Usage: claude <ping|ask|chat|new|resume|session|auth|<Claude Code command>>';
+const RESUME_USAGE = 'Usage: claude resume [session]';
+const NO_CHAT = 'No chat is open. Claude Code commands run in the open chat; start one with "chat".';
 const ASK_USAGE = 'Usage: claude ask [--new] <text>';
 const AUTH_USAGE = 'Usage: claude auth <status|key|logout|login>';
 const KEY_USAGE = 'Usage: claude auth key --from-file <path>';
@@ -219,6 +224,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		kindLabel,
 		isMissingModule,
 		onMount,
+		onSession: s => {
+			openSession = s;
+		},
 		acquire: () => {
 			if (busy === 'ask') throw new Error('An ask is already running');
 			if (busy === 'chat') throw new Error('A chat is already open');
@@ -230,6 +238,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	});
 
 	let openHandle: {close: () => void; done: Promise<void>} | undefined;
+	let openSession: ChatSession | undefined;
 
 	// Opening a chat replaces the one that is open.
 	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>): Promise<void> => {
@@ -276,9 +285,48 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await replaceChat(d => openChat({fresh: true, ...(model && {model}), tuning: tuningFromState(state)}, ctx, d));
 	};
 
-	const newSession = async (ctx: CommandContext): Promise<void> => {
-		await store.update({lastSessionId: undefined});
-		ctx.print('Next ask starts a new session');
+	// Continues an earlier chat of this project: by id prefix, or picked from a list in the console.
+	const resumeChat = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length > 1) throw new Error(RESUME_USAGE);
+		const paths = resolvePaths(dataDir, deps.moduleDir);
+		const sessions = await listSessions(paths.configDir, paths.projectDir);
+		const start = async (sessionId: string) => {
+			const state = await store.read();
+			log.info('chat resume requested', {session8: sessionId.slice(0, 8)});
+			await replaceChat(d =>
+				openChat(
+					{fresh: false, resume: sessionId, ...(state.chatModel && {model: state.chatModel}), tuning: tuningFromState(state)},
+					ctx,
+					d,
+				),
+			);
+		};
+		const wanted = args[0];
+		if (wanted !== undefined) {
+			const matches = sessions.filter(s => s.sessionId.startsWith(wanted.toLowerCase()));
+			if (matches.length === 0) throw new Error(`No earlier chat matches "${makeScrub(s => s)(wanted).slice(0, 40)}". ${RESUME_USAGE}`);
+			if (matches.length > 1) throw new Error(`"${wanted}" matches ${matches.length} chats; type more of the id.`);
+			return start(matches[0]!.sessionId);
+		}
+		if (!ctx.mount) throw new Error('"claude resume" needs an interface that can show views');
+		const ui = await (deps.loadUi ?? unavailable)();
+		if (!ui.createPickerElement) throw new Error('The chat interface cannot show the session list');
+		const scrub = makeScrub(s => s);
+		let picked: string | undefined;
+		await ctx.mount(
+			control =>
+				ui.createPickerElement!({
+					sessions,
+					scrub,
+					onPick: id => {
+						picked = id;
+					},
+					close: control.close,
+					...(control.host && {host: control.host}),
+				}),
+			{target: 'panel'},
+		);
+		if (picked) await start(picked);
 	};
 
 	const session = async (ctx: CommandContext): Promise<void> => {
@@ -384,22 +432,57 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 
+	const OWN_SUBCOMMANDS: Subcommand[] = [
+		{name: 'ping', usage: 'claude ping', description: 'Check that the claude module is loaded'},
+		{name: 'ask', usage: 'claude ask [--new] <text>', description: 'Ask Claude a question (continues the last session)'},
+		{name: 'chat', usage: 'claude chat [--new]', description: 'Open an interactive chat (continues the last session)'},
+		{name: 'new', usage: 'claude new [model]', description: 'Start a new chat'},
+		{name: 'resume', usage: 'claude resume [session]', description: 'Continue an earlier chat (pick from a list, or give an id prefix)'},
+		{name: 'session', usage: 'claude session', description: 'Show the current session, model and runtime'},
+		{
+			name: 'auth',
+			usage: 'claude auth <status|key|logout|login>',
+			description: 'Manage credentials (key takes --from-file <path>)',
+		},
+	];
+	const ownNames = new Set(OWN_SUBCOMMANDS.map(s => s.name));
+
+	const claudeCodeSubcommands = (): Subcommand[] => {
+		const known: SlashCommandInfo[] =
+			openSession && openSession.state !== 'closed' && openSession.commands.length > 0
+				? [...openSession.commands]
+				: diskCommands(resolvePaths(dataDir, deps.moduleDir).configDir);
+		return known
+			.filter(c => !ownNames.has(c.name))
+			.map(c => ({
+				name: c.name,
+				usage: `claude ${c.name}${c.argumentHint ? ` ${c.argumentHint}` : ''}`,
+				description: c.description ? `Claude Code: ${c.description}` : 'Claude Code command (runs in the open chat)',
+			}));
+	};
+
+	// Runs a Claude Code command in the open chat, as if typed there with a leading slash.
+	const runClaudeCodeCommand = async (name: string, args: string[], ctx: CommandContext): Promise<void> => {
+		if (!isCommandName(name)) throw new Error(`Unknown subcommand "${makeScrub(s => s)(name).slice(0, 64)}". ${USAGE}`);
+		const session = openSession;
+		if (!session || session.state === 'closed') throw new Error(NO_CHAT);
+		const known = session.commands;
+		if (known.length > 0 && !known.some(c => c.name === name)) {
+			throw new Error(`Unknown Claude Code command "${name}". Type "claude " in the console to see the list.`);
+		}
+		if (session.state === 'running') throw new Error('Claude is still answering; wait or press Esc in the chat.');
+		session.send(`/${name}${args.length > 0 ? ` ${args.join(' ')}` : ''}`, {command: true});
+		log.info('claude code command sent', {command: name, args: args.length});
+		ctx.print(`Sent /${name} to the chat`);
+	};
+
 	const claude: Command = {
 		name: 'claude',
 		description: 'Claude Code integration',
-		usage: 'claude <ping|ask|chat|new|session|auth>',
-		subcommands: [
-			{name: 'ping', usage: 'claude ping', description: 'Check that the claude module is loaded'},
-			{name: 'ask', usage: 'claude ask [--new] <text>', description: 'Ask Claude a question (continues the last session)'},
-			{name: 'chat', usage: 'claude chat [--new]', description: 'Open an interactive chat (continues the last session)'},
-			{name: 'new', usage: 'claude new', description: 'Start a new session on the next ask'},
-			{name: 'session', usage: 'claude session', description: 'Show the current session, model and runtime'},
-			{
-				name: 'auth',
-				usage: 'claude auth <status|key|logout|login>',
-				description: 'Manage credentials (key takes --from-file <path>)',
-			},
-		],
+		usage: 'claude <ping|ask|chat|new|resume|session|auth|command> [args…]',
+		get subcommands() {
+			return [...OWN_SUBCOMMANDS, ...claudeCodeSubcommands()];
+		},
 		run: async ([sub, ...args], ctx) => {
 			switch (sub) {
 				case undefined:
@@ -412,13 +495,15 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				case 'chat':
 					return chat(args, ctx);
 				case 'new':
-					return newSession(ctx);
+					return newChat(args, ctx);
+				case 'resume':
+					return resumeChat(args, ctx);
 				case 'session':
 					return session(ctx);
 				case 'auth':
 					return auth(args, ctx);
 				default:
-					throw new Error(`Unknown subcommand "${sub}". ${USAGE}`);
+					return runClaudeCodeCommand(sub, args, ctx);
 			}
 		},
 	};
@@ -428,7 +513,14 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		description: 'Start a new chat with the assistant',
 		usage: 'chat [model]',
 		autostart: true,
-		settings: {title: 'Claude', settings: chatSettings(store, isModelId, log)},
+		settings: {
+			title: 'Claude',
+			settings: chatSettings(store, isModelId, log, {
+				applyMode: mode => {
+					if (openSession && openSession.state !== 'closed') openSession.setMode(mode);
+				},
+			}),
+		},
 		run: newChat,
 	};
 

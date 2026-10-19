@@ -169,13 +169,17 @@ export function formatAudit(entry: AuditEntry, scrub: Scrub, reveal: Scrub = scr
 	return paint(SGR.dim, line);
 }
 
-export const MODE_LABEL: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept edits'};
+export const MODE_LABEL: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept edits', auto: 'auto'};
 
-export function formatModeLine(mode: ChatMode): string {
-	return paint(
-		SGR.dim,
-		mode === 'acceptEdits' ? 'Mode: auto-accept edits (this chat only)' : 'Mode: default (edits ask for approval)',
-	);
+const MODE_LINE: Record<ChatMode, string> = {
+	default: 'Mode: default (edits ask for approval)',
+	acceptEdits: 'Mode: auto-accept edits (this chat only)',
+	auto: 'Mode: auto (a classifier approves or denies tool calls, asks when unsure; this chat only)',
+};
+
+export function formatModeLine(mode: ChatMode, error?: string, scrub: Scrub = s => s): string {
+	const line = error === undefined ? MODE_LINE[mode] : `Auto mode is unavailable: ${scrub(error)}. ${MODE_LINE[mode]}`;
+	return paint(SGR.dim, line);
 }
 
 export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub): string {
@@ -183,7 +187,7 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub): string
 		case 'audit':
 			return formatAudit(out.entry, scrub, reveal);
 		case 'mode':
-			return formatModeLine(out.mode);
+			return formatModeLine(out.mode, out.error, scrub);
 		case 'assistant':
 			return formatAssistantBlock(out.text, scrub, out.interrupted);
 		case 'tool':
@@ -242,7 +246,6 @@ export function statusBarText(
 		model: string | undefined;
 		sessionId: string | undefined;
 		phase: Phase;
-		costUsd: number | undefined;
 		mode?: ChatMode;
 		pending?: number;
 	},
@@ -253,6 +256,5 @@ export function statusBarText(
 	if (s.sessionId) parts.push(scrub(s.sessionId).slice(0, 8));
 	parts.push(s.pending !== undefined && s.pending > 0 ? 'awaiting approval' : s.phase);
 	if (s.mode !== undefined) parts.push(`mode: ${MODE_LABEL[s.mode]}`);
-	if (typeof s.costUsd === 'number' && s.costUsd > 0) parts.push(`est. $${s.costUsd.toFixed(4)}`);
 	return parts.join(' · ');
 }

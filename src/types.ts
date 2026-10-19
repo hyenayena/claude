@@ -32,10 +32,15 @@ export type ClaudeState = {
 	chatThinking?: 'disabled';
 	chatFastMode?: boolean;
 	chatOutputStyle?: 'Explanatory' | 'Learning';
+	chatPermissionMode?: 'acceptEdits' | 'auto';
 	subscriptionNoticeShown?: boolean;
 };
 
 export type ChatQueryFn = (p: {
 	prompt: AsyncIterable<SDKUserMessage>;
 	options?: Options;
-}) => AsyncIterable<SDKMessage> & {interrupt?: () => Promise<unknown>; close?: () => void};
+}) => AsyncIterable<SDKMessage> & {
+	interrupt?: () => Promise<unknown>;
+	close?: () => void;
+	setPermissionMode?: (mode: 'default' | 'auto') => Promise<void>;
+};

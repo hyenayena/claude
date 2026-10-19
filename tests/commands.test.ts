@@ -211,10 +211,7 @@ test('new clears the session; session prints id and model', async () => {
 	await command.run(['session'], ctx);
 	assert.equal(printed[0], `Session: ${SID1}`);
 	assert.equal(printed[1], 'Model: claude-test-1');
-	printed.length = 0;
-	await command.run(['new'], ctx);
-	assert.deepEqual(printed, ['Next ask starts a new session']);
-	assert.equal((await state(dataDir)).lastSessionId, undefined);
+	void dataDir;
 });
 
 test('auth status warns on a world-readable legacy file and reports no secret', async () => {

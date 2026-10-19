@@ -76,6 +76,7 @@ export function fakeController(): FakeController {
 		},
 		sessionId: undefined,
 		model: undefined,
+		title: undefined as string | undefined,
 		needsNewSession: false,
 		get mode() {
 			return mode;
@@ -105,6 +106,7 @@ export function fakeController(): FakeController {
 		},
 		send(text) {
 			calls.sent.push(text);
+			fake.emit({type: 'sent', text});
 		},
 		async interrupt() {
 			calls.interrupts++;
