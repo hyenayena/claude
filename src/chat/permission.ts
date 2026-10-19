@@ -31,7 +31,7 @@ export type ToolRequest = {
 	kind: 'tool';
 	id: string;
 	seq: number;
-	toolName: 'Bash' | 'Edit' | 'Write';
+	toolName: 'Bash' | 'Edit' | 'Write' | 'WebFetch';
 	input: Record<string, unknown>;
 	cwd: string;
 	path?: string;

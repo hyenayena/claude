@@ -101,7 +101,10 @@ const fromAssistant = (msg: Loose): UiEvent[] => {
 	const messageId = str(inner['id']) ?? str(msg['uuid']) ?? '';
 	const out: UiEvent[] = [];
 	for (const b of blocks(msg)) {
-		if (b['type'] === 'text') {
+		if (b['type'] === 'thinking') {
+			const thought = str(b['thinking']);
+			if (thought && thought.trim()) out.push({kind: 'thinking-text', text: thought});
+		} else if (b['type'] === 'text') {
 			const text = str(b['text']);
 			if (text) out.push({kind: 'text', messageId, text, ...(msg['aborted'] === true && {aborted: true})});
 		} else if (b['type'] === 'tool_use') {

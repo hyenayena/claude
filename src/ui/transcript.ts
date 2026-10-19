@@ -6,6 +6,7 @@ export const LIVE = {
 	tailChars: 16_000,
 	maxTools: 4,
 	maxInputRows: 5,
+	maxTodoRows: 8,
 	minTailRows: 3,
 	maxTailRows: 30,
 	collapsedResultLines: 3,
@@ -28,7 +29,27 @@ export type StatusLine =
 	| {kind: 'retry'; attempt: number; maxRetries: number; delayMs: number}
 	| null;
 
+export type Todo = {content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string};
+
+const MAX_TODOS = 50;
+
+/** The checklist from a TodoWrite call; malformed items are dropped. */
+export function parseTodos(input: unknown): Todo[] {
+	const list = (input as {todos?: unknown} | null)?.todos;
+	if (!Array.isArray(list)) return [];
+	const out: Todo[] = [];
+	for (const raw of list.slice(0, MAX_TODOS)) {
+		const t = raw as {content?: unknown; status?: unknown; activeForm?: unknown} | null;
+		if (!t || typeof t.content !== 'string' || t.content.trim() === '') continue;
+		const status = t.status === 'in_progress' || t.status === 'completed' ? t.status : 'pending';
+		out.push({content: t.content, status, ...(typeof t.activeForm === 'string' && t.activeForm && {activeForm: t.activeForm})});
+	}
+	return out;
+}
+
 export interface TranscriptState {
+	// Claude's checklist (TodoWrite), shown while something on it is open.
+	todos: Todo[];
 	phase: Phase;
 	liveRaw: string;
 	tools: Map<string, RunningTool>;
@@ -52,6 +73,7 @@ export type Out =
 	| {kind: 'outcome'; outcome: Exclude<TurnOutcome, 'ok'>; error?: string}
 	| {kind: 'audit'; entry: AuditEntry}
 	| {kind: 'mode'; mode: ChatMode; error?: string}
+	| {kind: 'thinking'; text: string}
 	| {kind: 'blank'};
 
 export interface Step {
@@ -63,6 +85,7 @@ export function initialTranscript(
 	init: {model?: string; sessionId?: string; mode?: ChatMode; pending?: number} = {},
 ): TranscriptState {
 	return {
+		todos: [],
 		phase: 'idle',
 		liveRaw: '',
 		tools: new Map(),
@@ -117,10 +140,13 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 			};
 		case 'thinking':
 			return {state: {...state, status: {kind: 'thinking'}}, out: []};
+		case 'thinking-text':
+			return {state, out: [{kind: 'thinking', text: e.text}]};
 		case 'tool-use': {
 			const tools = new Map(state.tools);
 			tools.set(e.toolUseId, {id: e.toolUseId, name: e.name, input: e.input, elapsedSeconds: 0});
-			return {state: {...state, tools, status: null}, out: []};
+			const todos = e.name === 'TodoWrite' ? parseTodos(e.input) : state.todos;
+			return {state: {...state, tools, todos, status: null}, out: []};
 		}
 		case 'agent-activity': {
 			const tool = state.tools.get(e.toolUseId);

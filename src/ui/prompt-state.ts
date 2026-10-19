@@ -484,6 +484,11 @@ export function toolBodyRows(req: ToolRequest, reveal: Reveal, width: number): B
 		const command = raw.length > BASH_REVIEW_MAX ? raw.slice(0, BASH_REVIEW_MAX) : raw;
 		pushWrapped(rows, reveal(command), 'plain', width);
 		if (command.length < raw.length) rows.push({text: `… [${raw.length - command.length} more characters not shown]`, tone: 'dim'});
+	} else if (req.toolName === 'WebFetch') {
+		pushWrapped(rows, `URL: ${reveal(String(req.input['url'] ?? ''))}`, 'plain', width);
+		const ask = typeof req.input['prompt'] === 'string' ? req.input['prompt'] : '';
+		if (ask) pushWrapped(rows, `Looking for: ${reveal(ask)}`, 'dim', width);
+		rows.push({text: 'The URL and anything in it leave the container.', tone: 'warn'});
 	} else if (req.preview) {
 		rows.push({
 			text: req.preview.approximate ? 'Preview of the proposed change (approximate):' : 'Preview of the proposed change:',

@@ -317,6 +317,34 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		return denyFor(d, b.id);
 	};
 
+	// A fetch sends a URL out of the container, so it always asks (in auto mode only when the classifier is unsure).
+	const handleWebFetch = async (input: Record<string, unknown>, opts: Opts): Promise<PermissionResult> => {
+		const b = base(opts);
+		const {url} = input;
+		if (typeof url !== 'string' || !/^https?:\/\//i.test(url) || url.length > 4096 || url.includes('\0')) {
+			return policyDeny('WebFetch', POLICY_DENY.invalidInput, 'invalid input', b.id);
+		}
+		const d = await ask(
+			{
+				kind: 'tool',
+				id: randomUUID(),
+				seq: ++seq,
+				toolName: 'WebFetch',
+				input,
+				cwd: projectDir,
+				...(b.description !== undefined && {description: b.description}),
+				...(b.cliNote && {cliNote: b.cliNote}),
+				highlights: [],
+				defaultToNo: b.defaultToNo,
+				always: false,
+				oversize: false,
+			},
+			opts.signal,
+		);
+		if (d.kind === 'allow') return {behavior: 'allow', updatedInput: input, toolUseID: b.id};
+		return denyFor(d, b.id);
+	};
+
 	const dispatch = async (toolName: string, input: Record<string, unknown>, opts: Opts): Promise<PermissionResult> => {
 		switch (toolName) {
 			case 'Read':
@@ -327,6 +355,13 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 				prompter.audit({outcome: 'denied-by-policy', toolName, summary: 'outside scope'});
 				return r ?? deny(POLICY_DENY.outside, opts.toolUseID);
 			}
+			// Loading a skill, keeping the checklist and searching run without asking.
+			case 'Skill':
+			case 'TodoWrite':
+			case 'WebSearch':
+				return {behavior: 'allow', updatedInput: input, toolUseID: opts.toolUseID};
+			case 'WebFetch':
+				return handleWebFetch(input, opts);
 			case 'Agent':
 			case 'Task':
 			case 'SendMessage': {

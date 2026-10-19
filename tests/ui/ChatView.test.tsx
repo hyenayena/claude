@@ -5,7 +5,7 @@ void React;
 import {makeScrub} from '../../src/chat/scrub.js';
 import type {PermissionRequest} from '../../src/chat/permission.js';
 import {makeReveal} from '../../src/chat/reveal.js';
-import {BUSY_HINT, ChatView, type ChatViewProps} from '../../src/ui/ChatView.js';
+import {BUSY_HINT, ChatView, clearSentHistory, MAX_QUEUED, type ChatViewProps} from '../../src/ui/ChatView.js';
 import {createChatElement} from '../../src/ui/mount.js';
 import {fakeController, mountHarness, questionReq, toolReq, type FakeController} from './testkit.js';
 
@@ -63,19 +63,6 @@ test('typing builds the buffer and Enter sends and echoes', async () => {
 	assert.equal(t.printed.length, 1);
 	assert.match(t.printed[0] as string, /hello/);
 	assert.doesNotMatch(t.lastFrame(), /hello/);
-});
-
-test('Enter while running is refused with a hint', async () => {
-	const t = setup();
-	t.controller.setState('running');
-	await t.settle();
-	t.press('more');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle();
-	assert.deepEqual(t.controller.calls.sent, []);
-	assert.ok(t.lastFrame().includes(BUSY_HINT));
-	assert.match(t.lastFrame(), /more/);
 });
 
 test('Esc while running interrupts; Esc while interrupting hard-stops', async () => {
@@ -143,19 +130,6 @@ test('the chat has no slash commands: text starting with / is sent as a message'
 	assert.equal(t.controller.calls.resets, 0);
 	assert.equal(t.closed.count, 0);
 	assert.deepEqual(t.controller.calls.modes, []);
-});
-
-test('a slash line while running shows the busy hint and keeps the draft', async () => {
-	const t = setup();
-	t.controller.setState('running');
-	await t.settle();
-	t.press('/new');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle();
-	assert.match(t.lastFrame(), new RegExp(BUSY_HINT));
-	assert.match(t.lastFrame(), /> \/new/);
-	assert.deepEqual(t.controller.calls.sent, []);
 });
 
 test('a paste beyond the input limit is truncated with a notice', async () => {
@@ -302,21 +276,6 @@ test('a secret straddling the args cut is fully redacted in the tool line', asyn
 	t.controller.ui({kind: 'tool-use', toolUseId: 's', name: 'Bash', input: {command: `${'a'.repeat(90)} ${SECRET}`}});
 	await t.settle();
 	assert.doesNotMatch(t.lastFrame(), /sk-ant/);
-});
-
-test('the busy hint clears when the turn ends', async () => {
-	const t = setup();
-	t.controller.setState('running');
-	await t.settle();
-	t.press('x');
-	await t.settle();
-	t.press(ENTER);
-	await t.settle();
-	assert.ok(t.lastFrame().includes(BUSY_HINT));
-	t.controller.emit({type: 'turn-end', outcome: 'ok'});
-	t.controller.setState('idle');
-	await t.settle();
-	assert.ok(!t.lastFrame().includes(BUSY_HINT));
 });
 
 const reveal = makeReveal(s => s.split(SECRET).join('[redacted]'));
@@ -814,4 +773,105 @@ test(':q in the chat quits through the host, or leaves the chat without one; it 
 	await plain.settle();
 	assert.equal(plain.closed.count, 1);
 	assert.deepEqual(plain.controller.calls.sent, []);
+});
+
+test('the open checklist shows above the input and goes when everything is done', async () => {
+	const t = setup();
+	await t.settle();
+	t.controller.ui({
+		kind: 'tool-use',
+		toolUseId: 't1',
+		name: 'TodoWrite',
+		input: {todos: [{content: 'Plan', status: 'completed'}, {content: 'Code', status: 'in_progress', activeForm: 'Coding'}]},
+	});
+	await t.settle();
+	assert.match(t.lastFrame(), /☑ Plan/);
+	assert.match(t.lastFrame(), /◐ Coding/);
+	t.controller.ui({kind: 'tool-use', toolUseId: 't2', name: 'TodoWrite', input: {todos: [{content: 'Plan', status: 'completed'}, {content: 'Code', status: 'completed'}]}});
+	await t.settle();
+	assert.doesNotMatch(t.lastFrame(), /☑ Plan/);
+});
+
+test('Enter while Claude answers queues the message and sends the queue when the turn ends', async () => {
+	const t = setup();
+	t.controller.setState('running');
+	await t.settle();
+	for (const text of ['first', 'second']) {
+		t.press(text);
+		await t.settle();
+		t.press(ENTER);
+		await t.settle();
+	}
+	assert.deepEqual(t.controller.calls.sent, []);
+	assert.match(t.lastFrame(), /↳ queued: first/);
+	assert.match(t.lastFrame(), /↳ queued: second/);
+	assert.doesNotMatch(t.lastFrame(), /> second/);
+	t.controller.setState('idle');
+	t.controller.emit({type: 'turn-end', outcome: 'ok'});
+	await t.settle();
+	assert.deepEqual(t.controller.calls.sent, ['first\n\nsecond']);
+	assert.doesNotMatch(t.lastFrame(), /queued/);
+});
+
+test('an interrupt puts the queued messages back into the draft', async () => {
+	const t = setup();
+	t.controller.setState('running');
+	await t.settle();
+	t.press('later');
+	await t.settle();
+	t.press(ENTER);
+	await t.settle();
+	t.controller.setState('idle');
+	t.controller.emit({type: 'turn-end', outcome: 'interrupted'});
+	await t.settle();
+	assert.deepEqual(t.controller.calls.sent, []);
+	assert.match(t.lastFrame(), /> later/);
+});
+
+test('the queue is capped with the busy hint', async () => {
+	const t = setup();
+	t.controller.setState('running');
+	await t.settle();
+	for (let i = 0; i <= MAX_QUEUED; i++) {
+		t.press(`m${i}`);
+		await t.settle(5);
+		t.press(ENTER);
+		await t.settle(5);
+	}
+	await t.settle();
+	assert.ok(t.lastFrame().includes(BUSY_HINT));
+	assert.match(t.lastFrame(), new RegExp(`> m${MAX_QUEUED}`));
+});
+
+test('↑ and ↓ walk through sent messages and bring the draft back', async () => {
+	clearSentHistory();
+	const t = setup();
+	await t.settle();
+	for (const text of ['one', 'two']) {
+		t.press(text);
+		await t.settle();
+		t.press(ENTER);
+		await t.settle();
+		t.controller.setState('idle');
+		await t.settle();
+	}
+	t.press('dra');
+	await t.settle();
+	t.press(`${ESC}[A`);
+	await t.settle();
+	assert.match(t.lastFrame(), /> two/);
+	t.press(`${ESC}[A`);
+	await t.settle();
+	assert.match(t.lastFrame(), /> one/);
+	t.press(`${ESC}[A`);
+	await t.settle();
+	assert.match(t.lastFrame(), /> one/);
+	t.press(`${ESC}[B`);
+	await t.settle();
+	t.press(`${ESC}[B`);
+	await t.settle();
+	assert.match(t.lastFrame(), /> dra/);
+	t.press(`${ESC}[1;2A`);
+	await t.settle();
+	assert.match(t.lastFrame(), /> dra/, 'Shift+↑ scrolls the transcript instead');
 });

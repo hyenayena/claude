@@ -26,6 +26,7 @@ export function toolHeader(req: ToolRequest, reveal: Reveal): string {
 	if (req.toolName === 'Bash') {
 		return `Bash: run this command as root in ${reveal(req.cwd)} (network access, can modify the project)?`;
 	}
+	if (req.toolName === 'WebFetch') return `WebFetch: fetch ${reveal(String(req.input['url'] ?? ''))}?`;
 	return `${req.toolName}: ${reveal(req.path ?? String(req.input['file_path'] ?? ''))}`;
 }
 

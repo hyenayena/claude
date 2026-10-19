@@ -43,4 +43,7 @@ export type ChatQueryFn = (p: {
 	interrupt?: () => Promise<unknown>;
 	close?: () => void;
 	setPermissionMode?: (mode: 'default' | 'auto') => Promise<void>;
+	setModel?: (model?: string) => Promise<void>;
+	setMaxThinkingTokens?: (tokens: number | null) => Promise<void>;
+	applyFlagSettings?: (settings: Record<string, unknown>) => Promise<void>;
 };

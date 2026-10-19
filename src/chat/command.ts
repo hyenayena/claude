@@ -1,5 +1,5 @@
 import type {CommandContext, Logger, UiElement} from '../../../../src/api.js';
-import {tuningFromState, type ChatTuning} from '../chat-prefs.js';
+import {tuningFromState, withPatch, type ChatTuning, type LivePatch} from '../chat-prefs.js';
 import {buildChatOptions, buildEnv, resolvePaths} from '../config.js';
 import {makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
 import {clip, noopLog} from '../log.js';
@@ -44,6 +44,8 @@ export type ChatRunDeps = {
 	onMount?: (close: () => void) => void;
 	// Receives the running session, e.g. to apply a permission mode chosen in the settings.
 	onSession?: (session: ChatSession | undefined) => void;
+	// Receives the function that applies a settings change to this chat (undefined once it closes).
+	onLive?: (apply: ((patch: LivePatch) => void) | undefined) => void;
 };
 
 // `resume` names a session to continue; otherwise `fresh` picks a new one or the last one.
@@ -126,6 +128,13 @@ const runLocked = async (
 		model: model ?? 'default',
 	});
 	const startedAt = Date.now();
+	// Settings changed while the chat is open: applied to the running query and kept for a respawn.
+	let live = {...(model !== undefined && {model}), tuning: {...tuning}};
+	const applyLive = (patch: LivePatch): void => {
+		live = withPatch(live, patch);
+		session.applyLive(patch);
+	};
+
 	const session = new ChatSession({
 		query,
 		redact,
@@ -138,8 +147,8 @@ const runLocked = async (
 				cred,
 				abortController,
 				resume: id,
-				...(model !== undefined && {model}),
-				...(tuning && {tuning}),
+				...(live.model !== undefined && {model: live.model}),
+				tuning: live.tuning,
 				env: buildEnv(env, paths, cred),
 				canUseTool: createChatCanUseTool({
 					scope,
@@ -204,6 +213,7 @@ const runLocked = async (
 	});
 
 	deps.onSession?.(session);
+	deps.onLive?.(applyLive);
 	try {
 		let printHistory: ((text: string) => void) | undefined;
 		const mounted = mount(control => {
@@ -236,6 +246,7 @@ const runLocked = async (
 		const sessionId = session.sessionId;
 		const model = session.model;
 		deps.onSession?.(undefined);
+		deps.onLive?.(undefined);
 		for (const timer of titleTimers) clearTimeout(timer);
 		titleTimers.clear();
 		session.close();

@@ -189,8 +189,10 @@ describe('ask policy snapshot', () => {
 
 describe('chat static policy', () => {
 	it('lists the chat tools and disables the rest', () => {
-		assert.deepEqual(CHAT_TOOLS, ['Read', 'Glob', 'Grep', 'Bash', 'Edit', 'Write', 'AskUserQuestion', 'Agent', 'SendMessage']);
-		for (const t of ['NotebookEdit', 'WebFetch', 'Skill', 'TodoWrite', 'ExitPlanMode', 'EnterPlanMode', 'mcp__*']) {
+		assert.deepEqual(CHAT_TOOLS, [
+			'Read', 'Glob', 'Grep', 'Bash', 'Edit', 'Write', 'AskUserQuestion', 'Agent', 'SendMessage', 'Skill', 'TodoWrite', 'WebFetch', 'WebSearch',
+		]);
+		for (const t of ['NotebookEdit', 'BashOutput', 'KillShell', 'ExitPlanMode', 'EnterPlanMode', 'mcp__*']) {
 			assert.ok(CHAT_DISALLOWED_TOOLS.includes(t), t);
 		}
 		for (const t of CHAT_TOOLS) assert.ok(!CHAT_DISALLOWED_TOOLS.includes(t), t);

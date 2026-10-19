@@ -754,3 +754,59 @@ test('claude new starts a fresh chat', async () => {
 	assert.equal(s.q.calls[0]!.options.resume, undefined);
 	assert.equal(s.props.at(-1)!.initialSessionId, undefined);
 });
+
+test('model, effort, thinking, fast mode and output style apply to the open chat at once and to its next query', async () => {
+	const applied: Array<[string, unknown]> = [];
+	let release!: () => void;
+	const gate = new Promise<void>(r => (release = r));
+	const s = await setupChat({
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hi');
+			await done;
+			await gate;
+		},
+	});
+	const base = s.q.query;
+	const wrapped = ((arg: never) =>
+		Object.assign(base(arg), {
+			setModel: async (m?: string) => void applied.push(['model', m]),
+			setMaxThinkingTokens: async (n: number | null) => void applied.push(['thinking', n]),
+			applyFlagSettings: async (f: Record<string, unknown>) => void applied.push(['flags', f]),
+		})) as unknown as ChatQueryFn;
+	const [, chat] = createClaudeCommands({
+		dataDir: s.dataDir,
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+		loadChatQuery: async () => wrapped,
+		loadUi: async () => ({
+			createChatElement: p => {
+				s.props.push(p);
+				return {};
+			},
+		}),
+	});
+	const running = chat!.run([], s.ctx);
+	await new Promise(r => setTimeout(r, 40));
+	const set = (k: string, v: string) => chat!.settings!.settings.find(x => x.key === k)!.set(v);
+	await set('chatModel', 'haiku');
+	await set('chatEffort', 'high');
+	await set('chatThinking', 'disabled');
+	await set('chatFastMode', 'on');
+	await set('chatOutputStyle', 'Learning');
+	await set('chatEffort', '');
+	assert.deepEqual(applied, [
+		['model', 'haiku'],
+		['flags', {effortLevel: 'high'}],
+		['thinking', 0],
+		['flags', {fastMode: true}],
+		['flags', {outputStyle: 'Learning'}],
+		['flags', {effortLevel: null}],
+	]);
+	release();
+	await running;
+	await set('chatEffort', 'low');
+	assert.equal(applied.length, 6, 'nothing is applied once the chat is closed');
+});

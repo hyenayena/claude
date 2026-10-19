@@ -2,7 +2,7 @@ import {constants} from 'node:fs';
 import {lstat, open, realpath, stat} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import type {Command, CommandContext, Logger, Subcommand} from '../../../src/api.js';
-import {chatSettings, tuningFromState} from './chat-prefs.js';
+import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
 import {isCommandName, type ChatSession, type SlashCommandInfo} from './chat/chat-session.js';
 import {diskCommands} from './disk-commands.js';
 import {listSessions} from './chat/history.js';
@@ -227,6 +227,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		onSession: s => {
 			openSession = s;
 		},
+		onLive: apply => {
+			applyOpenChat = apply;
+		},
 		acquire: () => {
 			if (busy === 'ask') throw new Error('An ask is already running');
 			if (busy === 'chat') throw new Error('A chat is already open');
@@ -239,6 +242,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	let openHandle: {close: () => void; done: Promise<void>} | undefined;
 	let openSession: ChatSession | undefined;
+	let applyOpenChat: ((patch: LivePatch) => void) | undefined;
 
 	// Opening a chat replaces the one that is open.
 	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>): Promise<void> => {
@@ -519,6 +523,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				applyMode: mode => {
 					if (openSession && openSession.state !== 'closed') openSession.setMode(mode);
 				},
+				applyLive: patch => applyOpenChat?.(patch),
 			}),
 		},
 		run: newChat,

@@ -7,7 +7,8 @@ import {
 } from '../chat/truncate.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
 import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
-import {LIVE, type Out, type Phase, type RunningTool, type StatusLine} from './transcript.js';
+import {renderMarkdown} from './markdown.js';
+import {LIVE, parseTodos, type Out, type Phase, type RunningTool, type StatusLine, type Todo} from './transcript.js';
 
 export type Scrub = (s: string) => string;
 
@@ -19,6 +20,15 @@ export const SGR = {
 	green: '\u001b[32m',
 	cyan: '\u001b[36m',
 	bold: '\u001b[1m',
+	italic: '\u001b[3m',
+	underline: '\u001b[4m',
+	yellow: '\u001b[33m',
+	magenta: '\u001b[35m',
+	blue: '\u001b[34m',
+	boldOff: '\u001b[22m',
+	italicOff: '\u001b[23m',
+	underlineOff: '\u001b[24m',
+	fgOff: '\u001b[39m',
 } as const;
 
 const paint = (style: string, text: string): string =>
@@ -35,8 +45,20 @@ export function formatUserLine(text: string, scrub: Scrub): string {
 	return paint(SGR.dim, `> ${scrub(text)}`);
 }
 
+const THINKING_LINES = 6;
+
+/** A finished thinking block: dim and italic, cut to its first lines. */
+export function formatThinking(text: string, scrub: Scrub): string {
+	const lines = scrub(clampChars(text, BLOCK_DISPLAY_CAP)).trim().split('\n');
+	const shown = lines.slice(0, THINKING_LINES);
+	const more = lines.length - shown.length;
+	const body = [`✻ Thinking`, ...shown.map(l => `  ${l}`), ...(more > 0 ? [`  … ${more} more line${more === 1 ? '' : 's'}`] : [])];
+	return paint(SGR.dim + SGR.italic, body.join('\n'));
+}
+
 export function formatAssistantBlock(text: string, scrub: Scrub, interrupted = false): string {
-	const body = scrub(clampChars(text, BLOCK_DISPLAY_CAP));
+	// Markdown styling is applied to the scrubbed text, so it only adds the constant SGR codes.
+	const body = renderMarkdown(scrub(clampChars(text, BLOCK_DISPLAY_CAP)));
 	return interrupted ? `${body}\n${paint(SGR.dim, '(interrupted)')}` : body;
 }
 
@@ -74,6 +96,10 @@ const ARGS_REGISTRY: Record<string, ArgsSummary> = {
 	NotebookEdit: field('notebook_path'),
 	WebFetch: field('url'),
 	WebSearch: field('query'),
+	TodoWrite: input => {
+		const n = parseTodos(input).length;
+		return `${n} item${n === 1 ? '' : 's'}`;
+	},
 	Agent: agentArgs,
 	Task: agentArgs,
 	SendMessage: field('to'),
@@ -117,7 +143,37 @@ const RESULT_REGISTRY: Record<string, ResultSummary> = {
 	Edit: (t, scrub) => (t.isError ? undefined : fileResult('updated')(t, scrub)),
 	Write: (t, scrub) => (t.isError ? undefined : fileResult('created')(t, scrub)),
 	AskUserQuestion: t => (t.isError ? undefined : 'answered'),
+	TodoWrite: t => {
+		if (t.isError) return undefined;
+		const todos = parseTodos(t.input);
+		return `checklist: ${todos.filter(x => x.status === 'completed').length}/${todos.length} done`;
+	},
 };
+
+/** Messages waiting for the current answer, one line each; the last line counts any extra ones. */
+export function queuedLines(queue: string[], scrub: Scrub, max: number): string[] {
+	if (max <= 0 || queue.length === 0) return [];
+	const one = (q: string) => `↳ queued: ${scrub(q.replace(/\s+/g, ' '))}`;
+	if (queue.length <= max) return queue.map(one);
+	return [...queue.slice(0, max - 1).map(one), `↳ +${queue.length - max + 1} more queued`];
+}
+
+const TODO_MARK: Record<Todo['status'], string> = {completed: '☑', in_progress: '◐', pending: '☐'};
+
+/** The open checklist as display lines, at most `max` (an item in progress is never left out). */
+export function todoLines(todos: Todo[], scrub: Scrub, max: number): string[] {
+	if (max <= 0 || !todos.some(t => t.status !== 'completed')) return [];
+	const line = (t: Todo) => {
+		const text = `${TODO_MARK[t.status]} ${scrub(t.status === 'in_progress' ? (t.activeForm ?? t.content) : t.content)}`;
+		if (t.status === 'completed') return paint(SGR.dim, text);
+		return t.status === 'in_progress' ? paint(SGR.bold, text) : text;
+	};
+	if (todos.length <= max) return todos.map(line);
+	const current = Math.max(0, todos.findIndex(t => t.status !== 'completed'));
+	const start = Math.min(current, todos.length - (max - 1));
+	const shown = todos.slice(start, start + max - 1).map(line);
+	return [...shown, paint(SGR.dim, `… ${todos.length - shown.length} more`)];
+}
 
 export function summarizeToolResult(t: ToolResult, scrub: Scrub): string {
 	const custom = refusalSummary(t) ?? RESULT_REGISTRY[t.name]?.(t, scrub);
@@ -199,6 +255,8 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub): string
 			return formatAudit(out.entry, scrub, reveal);
 		case 'mode':
 			return formatModeLine(out.mode, out.error, scrub);
+		case 'thinking':
+			return formatThinking(out.text, scrub);
 		case 'assistant':
 			return formatAssistantBlock(out.text, scrub, out.interrupted);
 		case 'tool':

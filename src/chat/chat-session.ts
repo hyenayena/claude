@@ -3,6 +3,7 @@ import type {Options, SDKUserMessage} from '@anthropic-ai/claude-agent-sdk';
 import type {Logger} from '../../../../src/api.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {AUTH_MESSAGE, mapFailure, RESUME_MESSAGE} from '../session.js';
+import type {LivePatch} from '../chat-prefs.js';
 import type {ChatQueryFn} from '../types.js';
 import type {ChatController, ChatEvent, ChatState, TurnOutcome, UiEvent} from './events.js';
 import {InputQueue} from './input-queue.js';
@@ -143,6 +144,21 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	get mode(): ChatMode {
 		return this._mode;
 	}
+	/** Applies model, effort, thinking, fast mode or output style to the running query; a new query gets them from its options. */
+	applyLive(patch: LivePatch): void {
+		const q = this.handle?.q;
+		if (!q || this._state === 'closed') return;
+		const fail = (what: string) => (error: unknown) => this.log.warn('live setting rejected', {what, err: error});
+		if (patch.model !== undefined) q.setModel?.(patch.model ?? undefined).catch(fail('model'));
+		if (patch.thinking !== undefined) q.setMaxThinkingTokens?.(patch.thinking === 'disabled' ? 0 : null).catch(fail('thinking'));
+		const flags: Record<string, unknown> = {};
+		if (patch.effort !== undefined) flags['effortLevel'] = patch.effort;
+		if (patch.fastMode !== undefined) flags['fastMode'] = patch.fastMode ? true : null;
+		if (patch.outputStyle !== undefined) flags['outputStyle'] = patch.outputStyle;
+		if (Object.keys(flags).length > 0) q.applyFlagSettings?.(flags).catch(fail('flags'));
+		this.log.info('live settings applied', {keys: Object.keys(patch)});
+	}
+
 	/** The chat's name: Claude Code's session title, or a stand-in until it exists. */
 	get title(): string | undefined {
 		return this._title;

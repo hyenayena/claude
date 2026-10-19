@@ -16,6 +16,57 @@ export type ChatTuning = {
 	outputStyle?: OutputStyle;
 };
 
+/** A change to the running chat; null returns a field to its default. */
+export type LivePatch = {
+	model?: string | null;
+	effort?: Effort | null;
+	thinking?: 'disabled' | null;
+	fastMode?: boolean;
+	outputStyle?: OutputStyle | null;
+};
+
+/** The live change a settings value stands for. */
+export function livePatch(key: string, value: string): LivePatch | undefined {
+	switch (key) {
+		case 'chatModel':
+			return {model: value === '' ? null : value};
+		case 'chatEffort':
+			return {effort: isEffort(value) ? value : null};
+		case 'chatThinking':
+			return {thinking: value === 'disabled' ? 'disabled' : null};
+		case 'chatFastMode':
+			return {fastMode: value === 'on'};
+		case 'chatOutputStyle':
+			return {outputStyle: isOutputStyle(value) ? value : null};
+		default:
+			return undefined;
+	}
+}
+
+/** Model and tuning after a live change, for the next query the chat spawns. */
+export function withPatch(cur: {model?: string; tuning: ChatTuning}, patch: LivePatch): {model?: string; tuning: ChatTuning} {
+	const tuning: ChatTuning = {...cur.tuning};
+	let model = cur.model;
+	if (patch.model !== undefined) model = patch.model ?? undefined;
+	if (patch.effort !== undefined) {
+		if (patch.effort) tuning.effort = patch.effort;
+		else delete tuning.effort;
+	}
+	if (patch.thinking !== undefined) {
+		if (patch.thinking) tuning.thinking = patch.thinking;
+		else delete tuning.thinking;
+	}
+	if (patch.fastMode !== undefined) {
+		if (patch.fastMode) tuning.fastMode = true;
+		else delete tuning.fastMode;
+	}
+	if (patch.outputStyle !== undefined) {
+		if (patch.outputStyle) tuning.outputStyle = patch.outputStyle;
+		else delete tuning.outputStyle;
+	}
+	return {...(model !== undefined && {model}), tuning};
+}
+
 export const isEffort = (v: unknown): v is Effort => EFFORTS.includes(v as Effort);
 export const isOutputStyle = (v: unknown): v is OutputStyle => OUTPUT_STYLES.includes(v as OutputStyle);
 
@@ -64,8 +115,6 @@ type PrefSpec = {
 	// Converts a chosen option value into the stored value; throws on anything not offered.
 	parse: (value: string) => ClaudeState[PrefKey];
 	show: (state: ClaudeState) => string;
-	// Default text: applies to new chats.
-	scope?: string;
 	onSet?: (value: string) => void;
 };
 
@@ -100,6 +149,8 @@ const STYLE_OPTIONS: SettingOption[] = [
 export type ChatSettingsHooks = {
 	// Applies a newly chosen permission mode to the open chat, if any.
 	applyMode?: (mode: 'default' | 'acceptEdits' | 'auto') => void;
+	// Applies model, effort, thinking, fast mode or output style to the open chat, if any.
+	applyLive?: (patch: LivePatch) => void;
 };
 
 export function chatSettings(
@@ -113,7 +164,6 @@ export function chatSettings(
 			key: 'chatPermissionMode',
 			label: 'Permission mode',
 			description: 'How tool calls are approved',
-			scope: 'applies now and to new chats',
 			options: MODE_OPTIONS,
 			parse: v => fromOptions<'acceptEdits' | 'auto'>(MODE_OPTIONS, v),
 			show: s => s.chatPermissionMode ?? '',
@@ -166,7 +216,7 @@ export function chatSettings(
 	return specs.map(spec => ({
 		key: spec.key,
 		label: spec.label,
-		description: `${spec.description}; ${spec.scope ?? 'applies to new chats'}`,
+		description: `${spec.description}; applies now and to new chats`,
 		options: spec.options,
 		get: async () => spec.show(await store.read()),
 		set: async value => {
@@ -174,6 +224,8 @@ export function chatSettings(
 			await store.update({[spec.key]: stored});
 			log.info('chat setting set', {key: spec.key, value: value === '' ? 'default' : value});
 			spec.onSet?.(value);
+			const patch = livePatch(spec.key, value);
+			if (patch) hooks.applyLive?.(patch);
 		},
 	}));
 }

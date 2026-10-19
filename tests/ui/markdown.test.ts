@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import {makeScrub} from '../../src/chat/scrub.js';
+import {renderMarkdown} from '../../src/ui/markdown.js';
+import {formatAssistantBlock, formatThinking, SGR} from '../../src/ui/present.js';
+
+const ESC = String.fromCharCode(27);
+const plain = (s: string) => s.replace(new RegExp(ESC + '\\[[0-9;]*m', 'g'), '');
+const scrub = makeScrub(s => s);
+
+test('headings, emphasis, code spans, links, lists and quotes are styled and keep their text', () => {
+	const md = ['# Title', 'Some **bold**, *italic* and `code`.', '- item', '- [x] done', '1. first', '> quoted', 'See [docs](https://x.dev).', '---'].join('\n');
+	const out = renderMarkdown(md);
+	assert.deepEqual(plain(out).split('\n'), ['Title', 'Some bold, italic and code.', '• item', '☑ done', '1. first', '│ quoted', 'See docs (https://x.dev).', '─'.repeat(40)]);
+	assert.ok(out.includes(`${SGR.bold}bold${SGR.boldOff}`));
+	assert.ok(out.includes(`${SGR.cyan}code${SGR.fgOff}`));
+	assert.ok(out.includes(`${SGR.italic}italic${SGR.italicOff}`));
+});
+
+test('fenced code is framed and highlighted; markup inside it is left alone', () => {
+	const out = renderMarkdown(['```ts', 'const x = "**hi**"; // note', '```', 'after'].join('\n'));
+	assert.deepEqual(plain(out).split('\n'), ['╭─ ts', '│ const x = "**hi**"; // note', '╰─', 'after']);
+	assert.ok(out.includes(`${SGR.magenta}const${SGR.fgOff}`));
+	assert.ok(out.includes(`${SGR.green}"**hi**"${SGR.fgOff}`));
+	assert.ok(!out.includes(`${SGR.bold}hi`));
+	assert.equal(plain(renderMarkdown('```\nopen')), '╭─\n│ open\n╰─');
+});
+
+test('assistant blocks are rendered after scrubbing, so only constant codes appear', () => {
+	const dirty = `**x${ESC}]0;evil\u0007** \`${ESC}[31mred\``;
+	const out = formatAssistantBlock(dirty, scrub);
+	let rest = out;
+	for (const code of Object.values(SGR)) rest = rest.split(code).join('');
+	assert.ok(!rest.includes(ESC));
+	assert.ok(!rest.includes('\u0007'));
+});
+
+test('a thinking block is dim, labelled and cut to six lines', () => {
+	const text = Array.from({length: 9}, (_v, i) => `step ${i}`).join('\n');
+	const lines = plain(formatThinking(text, scrub)).split('\n');
+	assert.equal(lines[0], '✻ Thinking');
+	assert.equal(lines.length, 8);
+	assert.equal(lines.at(-1), '  … 3 more lines');
+});

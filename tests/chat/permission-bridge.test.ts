@@ -181,8 +181,8 @@ test('invalid inputs are denied without prompting', async () => {
 
 test('unknown tools are denied', async () => {
 	const {call, prompter} = setup();
-	const r = await call('WebFetch', {url: 'x'});
-	assert.deepEqual(r, {behavior: 'deny', message: toolUnavailableMessage('WebFetch'), toolUseID: 'tu1'});
+	const r = await call('NotebookEdit', {notebook_path: 'x'});
+	assert.deepEqual(r, {behavior: 'deny', message: toolUnavailableMessage('NotebookEdit'), toolUseID: 'tu1'});
 	assert.equal(prompter.requests.length, 0);
 });
 
@@ -468,4 +468,32 @@ test('Agent and SendMessage are allowed without a prompt; background and isolate
 	const iso = await call('Agent', {...input, isolation: 'worktree'});
 	assert.equal(iso?.behavior === 'deny' && iso.message, POLICY_DENY.isolation);
 	assert.equal(prompter.requests.length, 0);
+});
+
+test('Skill, TodoWrite and WebSearch run without asking', async () => {
+	const {call, prompter} = setup();
+	for (const [name, input] of [
+		['Skill', {skill: 'pipeline'}],
+		['TodoWrite', {todos: []}],
+		['WebSearch', {query: 'ink 8 release'}],
+	] as const) {
+		assert.equal((await call(name, input))?.behavior, 'allow', name);
+	}
+	assert.equal(prompter.requests.length, 0);
+});
+
+test('WebFetch always asks, showing the URL; bad URLs are denied without asking', async () => {
+	const {call, prompter} = setup();
+	prompter.next = {kind: 'allow'};
+	const input = {url: 'https://example.com/docs', prompt: 'find the version'};
+	const r = await call('WebFetch', input);
+	assert.equal(r?.behavior, 'allow');
+	const req = prompter.requests[0] as unknown as {toolName: string; input: {url: string}};
+	assert.equal(req.toolName, 'WebFetch');
+	assert.equal(req.input.url, 'https://example.com/docs');
+	for (const url of ['file:///etc/passwd', 'ftp://x', 7, 'https://a\0b']) {
+		const bad = await call('WebFetch', {url});
+		assert.equal(bad?.behavior === 'deny' && bad.message, POLICY_DENY.invalidInput);
+	}
+	assert.equal(prompter.requests.length, 1);
 });

@@ -5,6 +5,8 @@ export type UiEvent =
 	| {kind: 'text-delta'; text: string}
 	| {kind: 'text'; messageId: string; text: string; aborted?: boolean}
 	| {kind: 'thinking'}
+	// The text of a finished thinking block (empty when the API omits it).
+	| {kind: 'thinking-text'; text: string}
 	| {kind: 'tool-use'; toolUseId: string; name: string; input: unknown}
 	| {kind: 'tool-result'; toolUseId: string; isError: boolean; text: string}
 	| {kind: 'tool-progress'; toolUseId: string; name: string; elapsedSeconds: number}

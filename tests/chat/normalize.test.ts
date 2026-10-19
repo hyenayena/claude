@@ -44,7 +44,8 @@ test('assistant text, tool_use, thinking and aborted', () => {
 	assert.deepEqual(n(msg([{type: 'tool_use', id: 't1', name: 'Read', input: {file_path: '/a'}}])), [
 		{kind: 'tool-use', toolUseId: 't1', name: 'Read', input: {file_path: '/a'}},
 	]);
-	assert.deepEqual(n(msg([{type: 'thinking', thinking: 'secret'}])), []);
+	assert.deepEqual(n(msg([{type: 'thinking', thinking: 'a thought'}])), [{kind: 'thinking-text', text: 'a thought'}]);
+	assert.deepEqual(n(msg([{type: 'thinking', thinking: '  '}])), []);
 });
 
 test('assistant error emits api-error and drops the text', () => {

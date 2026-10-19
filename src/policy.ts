@@ -23,17 +23,27 @@ export const DISALLOWED_TOOLS = [
 	'mcp__*',
 ];
 
-export const CHAT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'Edit', 'Write', 'AskUserQuestion', 'Agent', 'SendMessage'];
+export const CHAT_TOOLS = [
+	'Read',
+	'Glob',
+	'Grep',
+	'Bash',
+	'Edit',
+	'Write',
+	'AskUserQuestion',
+	'Agent',
+	'SendMessage',
+	'Skill',
+	'TodoWrite',
+	'WebFetch',
+	'WebSearch',
+];
 
 export const CHAT_DISALLOWED_TOOLS = [
 	'BashOutput',
 	'KillShell',
 	'NotebookEdit',
-	'WebFetch',
-	'WebSearch',
-	'Skill',
 	'SlashCommand',
-	'TodoWrite',
 	'EnterPlanMode',
 	'ExitPlanMode',
 	'Monitor',

@@ -16,6 +16,8 @@ import {
 	liveTail,
 	statusBarText,
 	statusLineText,
+	todoLines,
+	queuedLines,
 	type Scrub,
 } from './present.js';
 import {
@@ -72,6 +74,19 @@ const promptSig = (p: PromptEntry, tier: string): string =>
 export const BUSY_HINT = 'Wait for the answer or press Esc to interrupt';
 export const DOUBLE_ESC_MS = 500;
 export const NEW_CHAT_TITLE = 'New chat';
+export const MAX_QUEUED = 20;
+const MAX_HISTORY = 200;
+
+// Messages sent in this run of yena, for ↑/↓ in any chat.
+const sentHistory: string[] = [];
+export const rememberSent = (text: string): void => {
+	if (sentHistory.at(-1) === text) return;
+	sentHistory.push(text);
+	if (sentHistory.length > MAX_HISTORY) sentHistory.shift();
+};
+export const clearSentHistory = (): void => {
+	sentHistory.length = 0;
+};
 const MODE_NAME: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept-edits', auto: 'auto'};
 
 export function ChatView(props: ChatViewProps) {
@@ -97,6 +112,10 @@ export function ChatView(props: ChatViewProps) {
 	const pendingModeRef = useRef<{mode: ChatMode; armedAt: number} | undefined>(undefined);
 	const edRef = useRef<EditorState>(emptyEditor);
 	const closedRef = useRef(false);
+	// Messages typed while Claude answers; sent together when the turn ends.
+	const queueRef = useRef<string[]>([]);
+	// Position while browsing the history with ↑/↓ (-1: not browsing) and the draft it replaced.
+	const historyRef = useRef<{index: number; draft: EditorState}>({index: -1, draft: emptyEditor});
 	const [, setTick] = useState(0);
 	const render = useCallback(() => setTick(n => n + 1), []);
 
@@ -109,6 +128,7 @@ export function ChatView(props: ChatViewProps) {
 	);
 	const edit = useCallback(
 		(action: EditorAction) => {
+			historyRef.current = {index: -1, draft: emptyEditor};
 			edRef.current = editorReduce(edRef.current, action);
 			render();
 		},
@@ -128,9 +148,35 @@ export function ChatView(props: ChatViewProps) {
 			const step = reduceTranscript(tRef.current, event);
 			setT(event.type === 'turn-end' ? {...step.state, notice: undefined} : step.state);
 			for (const out of step.out) print(formatOut(out, scrub, reveal));
+			if (event.type === 'turn-end' && queueRef.current.length > 0) {
+				// After an interrupt the queued text comes back to the draft instead of being sent.
+				if (event.outcome === 'interrupted') {
+					const back = queueRef.current.join('\n\n');
+					queueRef.current = [];
+					const draft = edRef.current.text;
+					edRef.current = editorReduce(emptyEditor, {type: 'insert', text: draft ? `${back}\n${draft}` : back});
+					render();
+				} else {
+					setTimeout(flushQueue, 0);
+				}
+			}
 		},
-		[print, scrub, reveal, setT],
+		[print, scrub, reveal, setT, render],
 	);
+
+	const flushQueue = useCallback(() => {
+		if (closedRef.current || queueRef.current.length === 0 || controller.state !== 'idle') return;
+		const text = queueRef.current.join('\n\n');
+		queueRef.current = [];
+		render();
+		try {
+			controller.send(text);
+		} catch (error) {
+			print(formatError(error instanceof Error ? error.message : String(error), scrub));
+			return;
+		}
+		if ((controller.state as string) === 'running') feed({type: 'state', state: 'running'});
+	}, [controller, print, render, scrub]);
 
 	const cancelPending = useCallback(() => {
 		for (const req of [...controller.pendingPermissions]) {
@@ -211,8 +257,16 @@ export function ChatView(props: ChatViewProps) {
 			return;
 		}
 		const t = tRef.current;
+		historyRef.current = {index: -1, draft: emptyEditor};
+		rememberSent(text);
 		if (t.phase !== 'idle') {
-			setT(setNotice(t, BUSY_HINT));
+			if (queueRef.current.length >= MAX_QUEUED) {
+				setT(setNotice(t, BUSY_HINT));
+				return;
+			}
+			queueRef.current = [...queueRef.current, text];
+			edRef.current = emptyEditor;
+			setT(setNotice(t, undefined));
 			return;
 		}
 		edRef.current = emptyEditor;
@@ -225,6 +279,25 @@ export function ChatView(props: ChatViewProps) {
 		}
 		if (controller.state === 'running') feed({type: 'state', state: 'running'});
 	}, [controller, feed, host, leave, print, requestMode, scrub, setT]);
+
+	const browseHistory = useCallback(
+		(step: -1 | 1) => {
+			const h = historyRef.current;
+			if (sentHistory.length === 0 || (step === 1 && h.index === -1)) return;
+			let index = h.index === -1 ? sentHistory.length - 1 : h.index + step;
+			const draft = h.index === -1 ? edRef.current : h.draft;
+			if (index < 0) index = 0;
+			if (index >= sentHistory.length) {
+				historyRef.current = {index: -1, draft: emptyEditor};
+				edRef.current = draft;
+			} else {
+				historyRef.current = {index, draft};
+				edRef.current = editorReduce(emptyEditor, {type: 'insert', text: sentHistory[index]!});
+			}
+			render();
+		},
+		[render],
+	);
 
 	// Time of an Esc on an idle, empty chat; a second one soon after opens the console.
 	const lastEmptyEscRef = useRef(0);
@@ -359,6 +432,7 @@ export function ChatView(props: ChatViewProps) {
 			if (input === 'u') return edit({type: 'killLine'});
 			return;
 		}
+		if ((key.upArrow || key.downArrow) && !key.shift && !key.meta) return browseHistory(key.upArrow ? -1 : 1);
 		if (key.meta || key.tab || key.upArrow || key.downArrow || key.pageUp || key.pageDown) return;
 		if (input) insertPasted(input);
 	}, {isActive: focused});
@@ -455,6 +529,10 @@ export function ChatView(props: ChatViewProps) {
 	rem -= noticeRows;
 	const statusRows = statusText && rem > 0 ? 1 : 0;
 	rem -= statusRows;
+	const queued = queuedLines(queueRef.current, scrub, Math.min(3, Math.max(0, rem - 1)));
+	rem -= queued.length;
+	const todos = todoLines(t.todos, scrub, Math.min(LIVE.maxTodoRows, Math.floor(rem / 2)));
+	rem -= todos.length;
 	const toolRows = toolLayout(tools.length, t.liveRaw ? Math.floor(rem / 2) : rem).rows;
 	rem -= toolRows;
 	const tail = liveTail(t.liveRaw, scrub, Math.min(LIVE.maxTailRows, Math.max(0, rem)), columns);
@@ -466,7 +544,17 @@ export function ChatView(props: ChatViewProps) {
 					{line === '' ? ' ' : line}
 				</Text>
 			))}
+			{todos.map((line, i) => (
+				<Text key={`todo-${i}`} wrap="truncate">
+					{line}
+				</Text>
+			))}
 			<LiveTools tools={tools} scrub={scrub} maxRows={toolRows} />
+			{queued.map((line, i) => (
+				<Text key={`queued-${i}`} dimColor wrap="truncate">
+					{line}
+				</Text>
+			))}
 			{statusRows > 0 && <Text dimColor wrap="truncate">{statusText}</Text>}
 			{noticeRows > 0 && (
 				<Text dimColor wrap={noticeRows >= noticeNeeded ? 'wrap' : 'truncate'}>
