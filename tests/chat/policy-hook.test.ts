@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {after, test} from 'node:test';
@@ -21,7 +21,7 @@ const paths = {
 };
 for (const d of [projectDir, paths.mdDir, paths.configDir]) mkdirSync(d, {recursive: true});
 writeFileSync(path.join(projectDir, 'a.txt'), 'a');
-const hook = createPolicyHook(buildScope(paths, path.join(tmp, 'home')));
+const hook = createPolicyHook(buildScope(paths, path.join(tmp, 'home')), paths.configDir);
 const opts = {signal: new AbortController().signal};
 
 const run = (tool_name: string, tool_input: Record<string, unknown>) =>
@@ -51,8 +51,9 @@ test('the hook denies paths outside the policy in any mode', async () => {
 	assert.equal(await decision('Write', {file_path: path.join(projectDir, '.env'), content: ''}), `deny:${POLICY_DENY.secret}`);
 	assert.equal(await decision('Read', {file_path: paths.tokenFile}), `deny:${POLICY_DENY.outside}`);
 	assert.equal(await decision('Edit', {}), `deny:${POLICY_DENY.invalidInput}`);
-	assert.equal(await decision('Bash', {command: 'sleep 9', run_in_background: true}), `deny:${POLICY_DENY.background}`);
-	assert.equal(await decision('Agent', {prompt: 'x', run_in_background: true}), `deny:${POLICY_DENY.background}`);
+	assert.equal(await decision('Bash', {command: 'sleep 9', run_in_background: true}), 'pass');
+	assert.equal(await decision('Bash', {command: 'ls', dangerouslyDisableSandbox: true}), `deny:${POLICY_DENY.background}`);
+	assert.equal(await decision('Agent', {prompt: 'x', run_in_background: true}), 'pass');
 	assert.equal(await decision('Agent', {prompt: 'x', isolation: 'remote'}), `deny:${POLICY_DENY.isolation}`);
 });
 
@@ -60,4 +61,13 @@ test('policyHooks registers the hook for PreToolUse only', () => {
 	const hooks = policyHooks(buildScope(paths));
 	assert.deepEqual(Object.keys(hooks), ['PreToolUse']);
 	assert.equal(hooks.PreToolUse[0]!.hooks.length, 1);
+});
+
+test('the hook keeps the Claude config read-only except the plan files of plan mode', async () => {
+	assert.equal(await decision('Write', {file_path: path.join(paths.configDir, 'plans', 'p.md'), content: ''}), 'pass');
+	for (const f of ['settings.json', 'agents/a.md', 'new-unknown-file', 'plansx/a.md']) {
+		assert.equal(await decision('Write', {file_path: path.join(paths.configDir, f), content: ''}), `deny:${POLICY_DENY.guard}`, f);
+	}
+	symlinkSync(paths.configDir, path.join(projectDir, 'cfg-link'));
+	assert.equal(await decision('Edit', {file_path: path.join(projectDir, 'cfg-link', 'settings.json')}), `deny:${POLICY_DENY.guard}`);
 });

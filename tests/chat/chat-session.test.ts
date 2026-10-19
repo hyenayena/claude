@@ -534,28 +534,28 @@ test('recycle cancels the dropped handle prompts with cause replaced', async () 
 	assert.equal(session.state, 'idle');
 });
 
-test('the always memory survives a respawn and is cleared by reset and close', async () => {
-	const {session, queries} = setup();
+test('"always" approvals are saved: they survive a respawn and a reset, and forget drops them', async () => {
+	const saved: string[] = [];
+	const log = makeFakeLog();
+	const session = new ChatSession({
+		query: (p => new FakeQuery(p.prompt, p.options) as never) as ChatQueryFn,
+		buildOptions: () => ({}) as Options,
+		redact,
+		log,
+		savedApprovals: ['npm test'],
+		onRemember: key => void saved.push(key),
+	});
 	const p = session as unknown as PermissionPrompter;
+	assert.equal(p.hasApproved('npm test'), true);
 	p.remember('ls');
-	assert.equal(p.hasApproved('ls'), true);
-	session.send('x');
-	queries[0]?.fail(new Error('boom'));
-	await tick();
-	assert.equal(p.hasApproved('ls'), true);
+	p.remember('ls');
+	p.remember('npm test');
+	assert.deepEqual(saved, ['ls']);
 	session.reset();
+	assert.equal(p.hasApproved('ls'), true);
+	session.forget('ls');
 	assert.equal(p.hasApproved('ls'), false);
-	p.remember('ls');
 	session.close();
-	assert.equal(p.hasApproved('ls'), false);
-});
-
-test('the always memory is capped', () => {
-	const {session} = setup();
-	for (let i = 0; i < 150; i++) session.remember(`cmd ${i}`);
-	assert.equal(session.hasApproved('cmd 0'), false);
-	assert.equal(session.hasApproved('cmd 149'), true);
-	assert.equal(session.hasApproved('cmd 50'), true);
 });
 
 test('queue overflow is cancelled immediately', async () => {
@@ -600,7 +600,10 @@ test('setMode emits an event, rejects unknown modes and reset restores default',
 	session.setMode('acceptEdits');
 	assert.equal(session.mode, 'acceptEdits');
 	assert.deepEqual(events.filter(e => e.type === 'mode'), [{type: 'mode', mode: 'acceptEdits'}]);
-	assert.throws(() => session.setMode('plan' as never), /Unknown permission mode/);
+	session.setMode('plan');
+	assert.equal(session.mode, 'plan');
+	session.setMode('acceptEdits');
+	assert.throws(() => session.setMode('dontAsk' as never), /Unknown permission mode/);
 	assert.throws(() => session.setMode('bypassPermissions' as never), /Unknown permission mode/);
 	assert.equal(session.mode, 'acceptEdits');
 	session.reset();
@@ -727,5 +730,30 @@ test('the turn timeout counts silence: any SDK message, subagents included, rest
 	assert.equal(ends().length, 0, 'still running after 160 ms of steady activity');
 	await new Promise(r => setTimeout(r, 120));
 	assert.equal(ends().at(-1)?.type === 'turn-end' && ends().at(-1)!.outcome, 'timeout');
+	session.close();
+});
+
+test('tasks are tracked from task messages; a settled background task keeps its flag and can be stopped', async () => {
+	const {session, queries, events} = setup();
+	session.send('x');
+	await tick();
+	const q = queries[0]! as FakeQuery & {stopTask?: (id: string) => Promise<void>; stopped?: string[]};
+	q.stopped = [];
+	q.stopTask = async id => void q.stopped!.push(id);
+	q.emit({type: 'system', subtype: 'task_started', task_id: 't1', description: 'npm run watch', is_backgrounded: true});
+	q.emit({type: 'system', subtype: 'task_started', task_id: 't2', description: 'coder agent'});
+	q.emit({type: 'system', subtype: 'task_notification', task_id: 't1', status: 'completed', summary: 'done', output_file: 'x'});
+	await tick();
+	assert.deepEqual(
+		session.tasks.map(t => [t.id, t.status, t.background]),
+		[
+			['t2', 'running', false],
+			['t1', 'completed', true],
+		],
+	);
+	const settled = events.find(e => e.type === 'ui' && e.event.kind === 'task' && e.event.status === 'completed') as {event: {background?: boolean}} | undefined;
+	assert.equal(settled?.event.background, true);
+	await session.stopTask('t2');
+	assert.deepEqual(q.stopped, ['t2']);
 	session.close();
 });

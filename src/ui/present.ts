@@ -47,6 +47,18 @@ export function formatUserLine(text: string, scrub: Scrub): string {
 
 const THINKING_LINES = 6;
 
+/** Plain lines cut to a width (no styling inside), for the transcript viewer. */
+export function wrapPlain(lines: readonly string[], width: number): string[] {
+	const w = Math.max(1, width);
+	const out: string[] = [];
+	for (const line of lines) {
+		const chars = [...line];
+		if (chars.length === 0) out.push('');
+		for (let i = 0; i < chars.length; i += w) out.push(chars.slice(i, i + w).join(''));
+	}
+	return out;
+}
+
 /** A finished thinking block: dim and italic, cut to its first lines. */
 export function formatThinking(text: string, scrub: Scrub): string {
 	const lines = scrub(clampChars(text, BLOCK_DISPLAY_CAP)).trim().split('\n');
@@ -236,11 +248,12 @@ export function formatAudit(entry: AuditEntry, scrub: Scrub, reveal: Scrub = scr
 	return paint(SGR.dim, line);
 }
 
-export const MODE_LABEL: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept edits', auto: 'auto'};
+export const MODE_LABEL: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept edits', plan: 'plan', auto: 'auto'};
 
 const MODE_LINE: Record<ChatMode, string> = {
 	default: 'Mode: default (edits ask for approval)',
 	acceptEdits: 'Mode: auto-accept edits (this chat only)',
+	plan: 'Mode: plan (Claude researches and proposes a plan; nothing is changed until you approve it)',
 	auto: 'Mode: auto (a classifier approves or denies tool calls, asks when unsure; this chat only)',
 };
 
@@ -257,6 +270,8 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub): string
 			return formatModeLine(out.mode, out.error, scrub);
 		case 'thinking':
 			return formatThinking(out.text, scrub);
+		case 'task':
+			return paint(SGR.dim, `⚙ Background task ${out.status}: ${scrub(out.description)}${out.summary ? ` — ${scrub(out.summary)}` : ''}`);
 		case 'assistant':
 			return formatAssistantBlock(out.text, scrub, out.interrupted);
 		case 'tool':

@@ -8,8 +8,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type SessionSummary = {sessionId: string; title: string; modified: number; prompts: number};
 export type HistoryMessage = {role: 'user' | 'assistant'; text: string};
+export type PromptEntry = {uuid: string; parentUuid: string | null; text: string};
 
 type Entry = {
+	uuid?: unknown;
+	parentUuid?: unknown;
 	type?: unknown;
 	isMeta?: unknown;
 	isSidechain?: unknown;
@@ -98,13 +101,27 @@ export async function listSessions(configDir: string, projectDir: string, limit 
 	return out;
 }
 
-/** The last `limit` prompts and answers of a session, for showing a resumed chat. */
-export async function readHistory(file: string, limit = 40): Promise<HistoryMessage[]> {
+/** The prompts typed in a session, oldest first, with the entry each one follows (for rewinding). */
+export async function listPrompts(file: string): Promise<PromptEntry[]> {
+	const text = await readTail(file);
+	if (text === undefined) return [];
+	const out: PromptEntry[] = [];
+	for (const e of entries(text)) {
+		const prompt = promptOf(e);
+		if (prompt === undefined || prompt.trim() === '' || typeof e.uuid !== 'string') continue;
+		out.push({uuid: e.uuid, parentUuid: typeof e.parentUuid === 'string' ? e.parentUuid : null, text: prompt});
+	}
+	return out;
+}
+
+/** The last `limit` prompts and answers of a session, for showing a resumed chat; `until` stops before that prompt. */
+export async function readHistory(file: string, limit = 40, until?: string): Promise<HistoryMessage[]> {
 	const text = await readTail(file);
 	if (text === undefined) return [];
 	const out: HistoryMessage[] = [];
 	let lastAssistantId: unknown;
 	for (const e of entries(text)) {
+		if (until !== undefined && e.uuid === until) break;
 		const prompt = promptOf(e);
 		if (prompt !== undefined) {
 			if (prompt.trim() !== '') out.push({role: 'user', text: prompt});
@@ -125,4 +142,63 @@ export async function readHistory(file: string, limit = 40): Promise<HistoryMess
 		lastAssistantId = e.message.id;
 	}
 	return out.slice(-limit);
+}
+
+const DETAIL_RESULT_LINES = 400;
+const DETAIL_MAX_LINES = 20_000;
+
+const blockText = (content: unknown): string => {
+	if (typeof content === 'string') return content;
+	if (!Array.isArray(content)) return '';
+	return content
+		.map(b => (b && typeof b === 'object' && (b as {type?: unknown}).type === 'text' ? String((b as {text?: unknown}).text ?? '') : b && typeof b === 'object' && (b as {type?: unknown}).type === 'image' ? '[image]' : ''))
+		.filter(Boolean)
+		.join('\n');
+};
+
+const capLines = (text: string, max: number): string[] => {
+	const lines = text.split('\n');
+	return lines.length > max ? [...lines.slice(0, max), `… ${lines.length - max} more lines`] : lines;
+};
+
+/**
+ * The whole conversation with every tool call and result, as plain lines for the transcript viewer
+ * (Ctrl+O). Lines are raw text: the caller scrubs them before display.
+ */
+export async function readTranscriptDetail(file: string): Promise<string[]> {
+	const text = await readTail(file);
+	if (text === undefined) return [];
+	const out: string[] = [];
+	const push = (...lines: string[]) => {
+		for (const l of lines) if (out.length < DETAIL_MAX_LINES) out.push(l);
+	};
+	for (const e of entries(text)) {
+		if (e.isSidechain === true) continue;
+		const content = e.message?.content;
+		if (e.type === 'user') {
+			if (e.isMeta === true) continue;
+			if (typeof content === 'string') {
+				push('', ...content.split('\n').map((l, i) => (i === 0 ? `> ${l}` : `  ${l}`)));
+				continue;
+			}
+			if (!Array.isArray(content)) continue;
+			for (const b of content as Array<Record<string, unknown>>) {
+				if (b?.['type'] !== 'tool_result') continue;
+				const lines = capLines(blockText(b['content']), DETAIL_RESULT_LINES);
+				push(...lines.map((l, i) => `${i === 0 ? '  ⎿ ' : '    '}${l}`), ...(b['is_error'] === true ? ['    (error)'] : []));
+			}
+			continue;
+		}
+		if (e.type !== 'assistant' || !Array.isArray(content)) continue;
+		for (const b of content as Array<Record<string, unknown>>) {
+			if (b?.['type'] === 'text' && typeof b['text'] === 'string') push('', ...(b['text'] as string).split('\n'));
+			else if (b?.['type'] === 'thinking' && typeof b['thinking'] === 'string' && (b['thinking'] as string).trim()) {
+				push('', '✻ Thinking', ...(b['thinking'] as string).split('\n').map(l => `  ${l}`));
+			} else if (b?.['type'] === 'tool_use') {
+				const input = JSON.stringify(b['input'] ?? {}, null, 2) ?? '';
+				push('', `● ${String(b['name'] ?? 'tool')}`, ...capLines(input, DETAIL_RESULT_LINES).map(l => `  ${l}`));
+			}
+		}
+	}
+	return out;
 }

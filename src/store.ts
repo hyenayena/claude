@@ -8,6 +8,8 @@ import type {ClaudeState} from './types.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRINTABLE = /^[\x20-\x7e]+$/;
+const MAX_RULES = 200;
+const MAX_RULE = 2000;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,99}$/;
 
 export const isModelId = (value: string): boolean => MODEL_ID.test(value);
@@ -25,7 +27,18 @@ const sanitize = (raw: unknown): ClaudeState => {
 	if (r.chatThinking === 'disabled') state.chatThinking = 'disabled';
 	if (r.chatFastMode === true) state.chatFastMode = true;
 	if (isOutputStyle(r.chatOutputStyle)) state.chatOutputStyle = r.chatOutputStyle;
-	if (r.chatPermissionMode === 'acceptEdits' || r.chatPermissionMode === 'auto') state.chatPermissionMode = r.chatPermissionMode;
+	if (r.chatPermissionMode === 'acceptEdits' || r.chatPermissionMode === 'plan' || r.chatPermissionMode === 'auto') {
+		state.chatPermissionMode = r.chatPermissionMode;
+	}
+	if (r.chatInputMode === 'vim') state.chatInputMode = 'vim';
+	if (r.chatMcp === 'off') state.chatMcp = 'off';
+	if (r.chatHooks === 'on') state.chatHooks = 'on';
+	if (Array.isArray(r.allowedCommands)) {
+		const list = r.allowedCommands.filter(
+			(c): c is string => typeof c === 'string' && c.trim() !== '' && c.length <= MAX_RULE && !/[\n\0]/.test(c),
+		);
+		if (list.length > 0) state.allowedCommands = [...new Set(list)].slice(-MAX_RULES);
+	}
 	if (typeof r.subscriptionNoticeShown === 'boolean') state.subscriptionNoticeShown = r.subscriptionNoticeShown;
 	return state;
 };

@@ -220,16 +220,15 @@ export function buildChatOptions(p: {
 	return applyTuning(
 		{
 			...base,
-			env: {
-				...scrubChatEnv(full, keep),
-				CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
-			},
+			env: scrubChatEnv(full, keep),
 			systemPrompt: {type: 'preset', preset: 'claude_code', append: buildChatHint(p.paths)},
 			settings: buildChatSettings(p.paths),
 			tools: [...CHAT_TOOLS],
 			disallowedTools: [...CHAT_DISALLOWED_TOOLS],
 			permissionMode: 'default',
 			canUseTool,
+			// Lets "claude rewind" restore files to their state at an earlier prompt.
+			enableFileCheckpointing: true,
 		},
 		tuning,
 	);

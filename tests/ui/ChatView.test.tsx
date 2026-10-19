@@ -513,17 +513,21 @@ test('Shift+Tab asks for confirmation before accept-edits; Enter applies it', as
 	assert.match(t.lastFrame(), /mode: accept edits/);
 	assert.ok(t.printed.some(p => p.includes('auto-accept edits (this chat only)')));
 	t.press(SHIFT_TAB);
+	await t.settle();
+	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'plan'], 'plan needs no confirmation');
+	assert.match(t.lastFrame(), /mode: plan/);
+	t.press(SHIFT_TAB);
 	await t.settle(ARM + 50);
 	assert.match(t.lastFrame().replace(/\s+/g, ' '), /Let a model classifier approve or deny tool calls/);
-	assert.deepEqual(t.controller.calls.modes, ['acceptEdits']);
+	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'plan']);
 	t.press(ENTER);
 	await t.settle();
-	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'auto']);
+	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'plan', 'auto']);
 	assert.match(t.lastFrame(), /mode: auto/);
 	assert.ok(t.printed.some(p => p.includes('Mode: auto (a classifier approves')));
 	t.press(SHIFT_TAB);
 	await t.settle();
-	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'auto', 'default']);
+	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'plan', 'auto', 'default']);
 	assert.match(t.lastFrame(), /mode: default/);
 });
 
@@ -874,4 +878,116 @@ test('↑ and ↓ walk through sent messages and bring the draft back', async ()
 	t.press(`${ESC}[1;2A`);
 	await t.settle();
 	assert.match(t.lastFrame(), /> dra/, 'Shift+↑ scrolls the transcript instead');
+});
+
+test('editing keys: Ctrl+W, Ctrl+Y, Ctrl+K and undo with Ctrl+_', async () => {
+	const t = setup();
+	await t.settle();
+	t.press('hello big world');
+	await t.settle();
+	t.press('\u0017');
+	await t.settle();
+	assert.match(t.lastFrame(), /> hello big\s*$/m);
+	t.press('\u0019');
+	await t.settle();
+	assert.match(t.lastFrame(), /> hello big world/);
+	t.press('\u001f');
+	await t.settle();
+	assert.match(t.lastFrame(), /> hello big\s*$/m);
+});
+
+test('Ctrl+R finds an earlier message; Enter puts it in the input without sending', async () => {
+	clearSentHistory();
+	const t = setup();
+	await t.settle();
+	for (const text of ['deploy staging', 'run tests']) {
+		t.press(text);
+		await t.settle();
+		t.press(ENTER);
+		await t.settle();
+		t.controller.setState('idle');
+		await t.settle();
+	}
+	t.press('\u0012');
+	await t.settle();
+	t.press('dep');
+	await t.settle();
+	assert.match(t.lastFrame(), /reverse-i-search\) 'dep': deploy staging/);
+	t.press(ENTER);
+	await t.settle();
+	assert.match(t.lastFrame(), /> deploy staging/);
+	assert.equal(t.controller.calls.sent.length, 2);
+});
+
+test('@ shows matching project files; Tab completes the mention', async () => {
+	const t = setup(undefined, 'API key', {files: () => ['src/app.tsx', 'src/api.ts', 'README.md']});
+	await t.settle();
+	t.press('look at @ap');
+	await t.settle();
+	assert.match(t.lastFrame(), /@src\/app\.tsx/);
+	assert.match(t.lastFrame(), /@src\/api\.ts/);
+	t.press(`${ESC}[B`);
+	await t.settle();
+	t.press('\t');
+	await t.settle();
+	assert.match(t.lastFrame(), /> look at @src\/app\.tsx/, 'the shorter path is listed first, Down picks the second');
+	assert.doesNotMatch(t.lastFrame(), /^\s+@src\/api/m);
+});
+
+test('Ctrl+G edits the draft in an external editor', async () => {
+	const seen: string[] = [];
+	const t = setup(undefined, 'API key', {openEditor: async text => (seen.push(text), `${text} (edited)`)});
+	await t.settle();
+	t.press('draft');
+	await t.settle();
+	t.press('\u0007');
+	await t.settle(60);
+	assert.deepEqual(seen, ['draft']);
+	assert.match(t.lastFrame(), /> draft \(edited\)/);
+});
+
+test('vim mode: Esc to NORMAL, dw deletes a word, i types again, Enter sends', async () => {
+	const t = setup(undefined, 'API key', {inputMode: () => 'vim'});
+	await t.settle();
+	t.press('one two');
+	await t.settle();
+	t.press(ESC);
+	await t.settle(60);
+	assert.match(t.lastFrame(), /-- NORMAL --/);
+	t.press('0');
+	await t.settle();
+	t.press('d');
+	await t.settle();
+	t.press('w');
+	await t.settle();
+	assert.match(t.lastFrame(), /> two/);
+	t.press('i');
+	await t.settle();
+	t.press('x');
+	await t.settle();
+	assert.doesNotMatch(t.lastFrame(), /-- NORMAL --/);
+	t.press(ENTER);
+	await t.settle();
+	assert.deepEqual(t.controller.calls.sent, ['xtwo']);
+});
+
+test('Ctrl+O shows the full transcript with scrolling; Esc closes it', async () => {
+	const lines = Array.from({length: 60}, (_v, i) => `row ${i}`);
+	const t = setup({columns: 80, rows: 24}, 'API key', {loadTranscript: async () => lines});
+	await t.settle();
+	t.press('\u000f');
+	await t.settle(60);
+	assert.match(t.lastFrame(), /row 59/);
+	assert.match(t.lastFrame(), /Transcript 60\/60/);
+	t.press('g');
+	await t.settle();
+	assert.match(t.lastFrame(), /row 0\b/);
+	assert.doesNotMatch(t.lastFrame(), /row 59/);
+	t.press('j');
+	await t.settle();
+	assert.doesNotMatch(t.lastFrame(), /row 0\b/);
+	t.press(ESC);
+	await t.settle(60);
+	assert.doesNotMatch(t.lastFrame(), /Transcript/);
+	assert.match(t.lastFrame(), /API key/);
 });

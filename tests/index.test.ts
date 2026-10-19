@@ -8,17 +8,17 @@ const setup = async () => {
 	const commands = await plugin({dataDir: '/tmp/claude-test', events: {emit: () => {}, on: () => () => {}}, log: makeFakeLog()});
 	const printed: string[] = [];
 	const ctx: CommandContext = {print: t => printed.push(t), clear: () => {}, exit: () => {}};
-	return {command: commands[0]!, commands, printed, ctx};
+	return {command: commands.find(c => c.name === 'claude')!, commands, printed, ctx};
 };
 
 test('plugin returns the claude command and the autostarted chat command', async () => {
 	const {commands} = await setup();
 	assert.deepEqual(
 		commands.map(c => c.name),
-		['claude', 'chat'],
+		['chat', 'claude'],
 	);
-	assert.equal(commands[1]!.autostart, true);
-	assert.equal(commands[1]!.settings?.title, 'Claude');
+	assert.equal(commands[0]!.autostart, true);
+	assert.equal(commands[0]!.settings?.title, 'Claude');
 });
 
 test('ping prints pong', async () => {
@@ -30,7 +30,7 @@ test('ping prints pong', async () => {
 test('no subcommand throws the usage error', async () => {
 	const {command, ctx} = await setup();
 	await assert.rejects(async () => command.run([], ctx), {
-		message: 'Usage: claude <ping|ask|chat|new|resume|session|auth|<Claude Code command>>',
+		message: 'Usage: claude <ping|ask|chat|new|resume|rewind|fork|rename|export|copy|memory|tasks|mcp|session|auth|<Claude Code command>>',
 	});
 });
 
@@ -46,7 +46,7 @@ test('a host without log falls back to a noop logger', async () => {
 	const host = {dataDir: '/tmp/claude-test', events: {emit: () => {}, on: () => () => {}}} as unknown as Parameters<typeof plugin>[0];
 	const commands = await plugin(host);
 	const printed: string[] = [];
-	await commands[0]!.run(['ping'], {print: t => printed.push(t), clear: () => {}, exit: () => {}});
+	await commands.find(c => c.name === 'claude')!.run(['ping'], {print: t => printed.push(t), clear: () => {}, exit: () => {}});
 	assert.deepEqual(printed, ['pong']);
 });
 

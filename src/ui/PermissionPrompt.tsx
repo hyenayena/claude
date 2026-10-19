@@ -27,6 +27,8 @@ export function toolHeader(req: ToolRequest, reveal: Reveal): string {
 		return `Bash: run this command as root in ${reveal(req.cwd)} (network access, can modify the project)?`;
 	}
 	if (req.toolName === 'WebFetch') return `WebFetch: fetch ${reveal(String(req.input['url'] ?? ''))}?`;
+	if (req.toolName === 'ExitPlanMode') return 'The plan is ready. Start working on it?';
+	if (req.toolName === 'Mcp') return `MCP: run ${reveal(String(req.input['__mcpTool'] ?? ''))}?`;
 	return `${req.toolName}: ${reveal(req.path ?? String(req.input['file_path'] ?? ''))}`;
 }
 

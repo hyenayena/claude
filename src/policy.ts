@@ -37,19 +37,21 @@ export const CHAT_TOOLS = [
 	'TodoWrite',
 	'WebFetch',
 	'WebSearch',
+	'ExitPlanMode',
+	'TaskStop',
+	'TaskGet',
+	'TaskList',
+	'TaskOutput',
+	'BashOutput',
+	'KillShell',
 ];
 
 export const CHAT_DISALLOWED_TOOLS = [
-	'BashOutput',
-	'KillShell',
 	'NotebookEdit',
 	'SlashCommand',
 	'EnterPlanMode',
-	'ExitPlanMode',
 	'Monitor',
-	'TaskStop',
 	'ToolSearch',
-	'mcp__*',
 ];
 
 export const MAX_TURNS = 20;
@@ -117,6 +119,33 @@ export function buildAskSettings(paths: PolicyPaths): {
 }
 
 // Edit rules also cover Write.
+// Everything in the Claude config dir except plans/ (where plan mode writes its plan file): settings
+// rules cannot express "all but", so the parts are listed; the policy hook still refuses any other
+// write into the config dir.
+export const CONFIG_EDIT_DENY = [
+	'*.json',
+	'*.jsonl',
+	'*.md',
+	'agents/**',
+	'commands/**',
+	'skills/**',
+	'plugins/**',
+	'hooks/**',
+	'output-styles/**',
+	'projects/**',
+	'file-history/**',
+	'sessions/**',
+	'session-env/**',
+	'shell-snapshots/**',
+	'backups/**',
+	'cache/**',
+	'todos/**',
+	'statsig/**',
+	'ide/**',
+];
+
+export const PLANS_DIR = 'plans';
+
 export function buildChatSettings(paths: PolicyPaths): {
 	permissions: {deny: string[]};
 	disableAllHooks: true;
@@ -125,7 +154,7 @@ export function buildChatSettings(paths: PolicyPaths): {
 		`Edit(${absRule(paths.tokenFile)})`,
 		`Edit(${absRule(paths.credentialsFile)})`,
 		`Edit(${absRule(paths.stateFile)})`,
-		`Edit(${absRule(paths.configDir)}/**)`,
+		...CONFIG_EDIT_DENY.map(p => `Edit(${absRule(paths.configDir)}/${p})`),
 		'Edit(//proc/**)',
 		'Edit(~/.ssh/**)',
 		'Edit(**/.env*)',
@@ -141,7 +170,7 @@ export function buildChatSettings(paths: PolicyPaths): {
 
 // Resolves symlinks of the nearest existing ancestor, so nonexistent targets
 // still land where they would be created.
-async function resolveReal(p: string): Promise<string> {
+export async function resolveReal(p: string): Promise<string> {
 	const tail: string[] = [];
 	let cur = path.resolve(p);
 	for (;;) {

@@ -63,3 +63,20 @@ test('readHistory keeps prompts and answer text, joining blocks and skipping too
 	assert.deepEqual(await readHistory(join(dir, `${A}.jsonl`), 1), [{role: 'user', text: 'thanks'}]);
 	assert.deepEqual(await readHistory(join(dir, 'missing.jsonl')), []);
 });
+
+test('readTranscriptDetail shows prompts, answers, tool calls with input and their results', async () => {
+	const {readTranscriptDetail} = await import('../../src/chat/history.js');
+	const {dir} = await setup();
+	const file = join(dir, `${A}.jsonl`);
+	await writeFile(
+		file,
+		jsonl([
+			user('read it'),
+			{type: 'assistant', message: {id: 'm1', content: [{type: 'tool_use', name: 'Read', input: {file_path: '/app/x.ts'}}]}},
+			user([{type: 'tool_result', content: 'line 1\nline 2'}]),
+			assistant('m2', 'Done.'),
+		]),
+	);
+	const lines = await readTranscriptDetail(file);
+	assert.deepEqual(lines.filter(l => l !== ''), ['> read it', '● Read', '  {', '    "file_path": "/app/x.ts"', '  }', '  ⎿ line 1', '    line 2', 'Done.']);
+});

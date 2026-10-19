@@ -447,7 +447,7 @@ test('the shipped bridge gets the real preview and highlight builders', async ()
 
 const setupChat = async (opts: Parameters<typeof setup>[0] = {}) => {
 	const s = await setup(opts);
-	const [, chat] = createClaudeCommands({
+	const [chat] = createClaudeCommands({
 		dataDir: s.dataDir,
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
@@ -536,7 +536,7 @@ test('the Claude tab offers permission mode, model, effort, thinking, fast mode 
 	const s = await setupChat();
 	assert.deepEqual(
 		s.chat.settings!.settings.map(x => x.key),
-		['chatPermissionMode', 'chatModel', 'chatEffort', 'chatThinking', 'chatFastMode', 'chatOutputStyle'],
+		['chatPermissionMode', 'chatModel', 'chatEffort', 'chatThinking', 'chatFastMode', 'chatOutputStyle', 'chatMcp', 'chatHooks', 'chatInputMode'],
 	);
 });
 
@@ -609,7 +609,7 @@ test('claude <command> runs a Claude Code command in the open chat', async () =>
 	let release!: () => void;
 	const gate = new Promise<void>(r => (release = r));
 	const s = await setupChat({run: () => gate});
-	const [claude, chat] = createClaudeCommands({
+	const [chat, claude] = createClaudeCommands({
 		dataDir: s.dataDir,
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
@@ -646,7 +646,7 @@ test('claude hints list Claude Code commands from the session, or from the confi
 	await writeFile(join(s.dataDir, 'config', 'commands', 'pipeline.md'), '---\ndescription: Run the pipeline\nargument-hint: <request>\n---\nbody');
 	await mkdir(join(s.dataDir, 'config', 'skills', 'deploy'), {recursive: true});
 	await writeFile(join(s.dataDir, 'config', 'skills', 'deploy', 'SKILL.md'), '---\nname: deploy\ndescription: Deploy it\n---\n');
-	const [claude] = createClaudeCommands({
+	const [, claude] = createClaudeCommands({
 		dataDir: s.dataDir,
 		env: {},
 		loadQuery: async () => (() => {
@@ -686,7 +686,7 @@ const writeTranscript = async (dataDir: string, sessionId: string, rows: unknown
 	await writeFile(join(dir, `${sessionId}.jsonl`), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
 };
 
-const claudeWithPicker = (s: Awaited<ReturnType<typeof setupChat>>, pick?: (p: {sessions: {sessionId: string}[]; onPick: (id: string) => void; close: () => void}) => void) =>
+const claudeWithPicker = (s: Awaited<ReturnType<typeof setupChat>>, pick?: (p: {items: {id: string; label: string}[]; onPick: (id: string) => void; close: () => void}) => void) =>
 	createClaudeCommands({
 		dataDir: s.dataDir,
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
@@ -704,7 +704,7 @@ const claudeWithPicker = (s: Awaited<ReturnType<typeof setupChat>>, pick?: (p: {
 				return {};
 			},
 		}),
-	})[0]!;
+	})[1]!;
 
 test('claude resume <id> continues that session and shows its earlier messages', async () => {
 	const printed: string[] = [];
@@ -737,7 +737,7 @@ test('claude resume without an id opens the picker in the console and resumes th
 		build({close: () => {}});
 	};
 	const claude = claudeWithPicker(s, p => {
-		assert.deepEqual(p.sessions.map(x => x.sessionId), [SID1]);
+		assert.deepEqual(p.items.map(x => x.id), [SID1]);
 		p.onPick(SID1);
 		p.close();
 	});
@@ -774,7 +774,7 @@ test('model, effort, thinking, fast mode and output style apply to the open chat
 			setMaxThinkingTokens: async (n: number | null) => void applied.push(['thinking', n]),
 			applyFlagSettings: async (f: Record<string, unknown>) => void applied.push(['flags', f]),
 		})) as unknown as ChatQueryFn;
-	const [, chat] = createClaudeCommands({
+	const [chat] = createClaudeCommands({
 		dataDir: s.dataDir,
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
@@ -809,4 +809,198 @@ test('model, effort, thinking, fast mode and output style apply to the open chat
 	await running;
 	await set('chatEffort', 'low');
 	assert.equal(applied.length, 6, 'nothing is applied once the chat is closed');
+});
+
+test('a chat started in plan mode tells the SDK; saved "always" rules reach the next chat and can be removed', async () => {
+	const s = await setupChat({run: sendOnce});
+	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({chatPermissionMode: 'plan'}));
+	await s.chat.run([], s.ctx);
+	assert.equal(s.q.calls[0]!.options.permissionMode, 'plan');
+	const [, claude] = createClaudeCommands({
+		dataDir: s.dataDir,
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+	});
+	assert.equal(claude!.settings, undefined, 'no Permissions tab without rules');
+	let release!: () => void;
+	const gate = new Promise<void>(r => (release = r));
+	const s2 = await setupChat({run: () => gate});
+	const running = s2.chat.run([], s2.ctx);
+	await new Promise(r => setTimeout(r, 20));
+	const session = s2.props.at(-1)!.controller as unknown as {remember: (k: string) => void; hasApproved: (k: string) => boolean};
+	session.remember('npm test');
+	await new Promise(r => setTimeout(r, 30));
+	assert.deepEqual((await readState(s2.dataDir)).allowedCommands, ['npm test']);
+	release();
+	await running;
+	const [, claude2] = createClaudeCommands({
+		dataDir: s2.dataDir,
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+	});
+	await new Promise(r => setTimeout(r, 20));
+	const tab = claude2!.settings!;
+	assert.equal(tab.title, 'Permissions');
+	assert.equal(tab.settings[0]!.label, 'npm test');
+	assert.equal(await tab.settings[0]!.get(), 'keep');
+	await tab.settings[0]!.set('remove');
+	assert.equal('allowedCommands' in (await readState(s2.dataDir)), false);
+	assert.equal(claude2!.settings, undefined);
+});
+
+const transcriptRows = [
+	{type: 'user', uuid: 'u1', parentUuid: null, message: {content: 'first question'}},
+	{type: 'assistant', uuid: 'a1', parentUuid: 'u1', message: {id: 'm1', content: [{type: 'text', text: 'first answer'}]}},
+	{type: 'user', uuid: 'u2', parentUuid: 'a1', message: {content: 'second question'}},
+	{type: 'assistant', uuid: 'a2', parentUuid: 'u2', message: {id: 'm2', content: [{type: 'text', text: 'second answer'}]}},
+];
+
+test('claude rename, export and copy work on the last chat', async () => {
+	const s = await setupChat();
+	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({lastSessionId: SID1}));
+	await writeTranscript(s.dataDir, SID1, transcriptRows);
+	const claude = claudeWithPicker(s);
+	await claude.run(['rename', 'My', 'chat'], s.ctx);
+	assert.ok(s.printed.includes('Renamed the chat to "My chat"'));
+	await assert.rejects(async () => claude.run(['rename'], s.ctx), /Usage: claude rename/);
+	await claude.run(['export'], s.ctx);
+	const exported = s.printed.at(-1)!.replace(/^Exported 4 messages to /, '');
+	const md = await readFile(exported, 'utf8');
+	assert.match(md, /^# My chat/);
+	assert.match(md, /## You\n\nfirst question/);
+	assert.match(md, /## Claude\n\nsecond answer/);
+	await assert.rejects(async () => claude.run(['export', '/etc/x.md'], s.ctx), /inside the project or the claude data directory/);
+	const copied: string[] = [];
+	s.ctx.copyToClipboard = t => (copied.push(t), true);
+	await claude.run(['copy'], s.ctx);
+	await claude.run(['copy', '2'], s.ctx);
+	assert.deepEqual(copied, ['second answer', 'first answer']);
+	await assert.rejects(async () => claude.run(['copy', '3'], s.ctx), /only 2 answers/);
+});
+
+test('claude fork opens a branch of the current chat with its history', async () => {
+	const s = await setupChat({run: sendOnce});
+	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({lastSessionId: SID1}));
+	await writeTranscript(s.dataDir, SID1, transcriptRows);
+	const claude = claudeWithPicker(s);
+	await claude.run(['fork'], s.ctx);
+	const o = s.q.calls[0]!.options;
+	assert.equal(o.resume, SID1);
+	assert.equal(o.forkSession, true);
+	assert.equal(o.enableFileCheckpointing, true);
+});
+
+test('claude rewind restores files and reopens the chat before the picked message, with it in the input', async () => {
+	const s = await setupChat();
+	const rewound: string[] = [];
+	const base = s.q.query;
+	const query = ((arg: never) =>
+		Object.assign(base(arg), {rewindFiles: async (id: string) => (rewound.push(id), {canRewind: true, filesChanged: ['a.ts']})})) as unknown as ChatQueryFn;
+	const printed: string[] = [];
+	const [chat, claude] = createClaudeCommands({
+		dataDir: s.dataDir,
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+		loadChatQuery: async () => query,
+		loadUi: async () => ({
+			createChatElement: p => {
+				s.props.push(p);
+				return {};
+			},
+			createPickerElement: p => {
+				assert.deepEqual(p.items.map(i => i.id), ['u2', 'u1']);
+				p.onPick('u2');
+				p.close();
+				return {};
+			},
+		}),
+	}) as [typeof s.chat, typeof s.chat];
+	s.ctx.print = t => printed.push(t);
+	let mounts = 0;
+	s.ctx.mount = async (build, options) => {
+		if (options?.target === 'panel') {
+			build({close: () => {}});
+			return;
+		}
+		mounts++;
+		let close!: () => void;
+		const closed = new Promise<void>(r => (close = r));
+		build({close});
+		const p = s.props.at(-1)!;
+		const done = turnDone(p);
+		p.controller.send(mounts === 1 ? 'hi' : 'again');
+		await done;
+		if (mounts === 1) await closed;
+	};
+	const running = chat.run([], s.ctx);
+	await new Promise(r => setTimeout(r, 40));
+	await writeTranscript(s.dataDir, SID2, transcriptRows);
+	await claude.run(['rewind'], s.ctx);
+	await running;
+	assert.deepEqual(rewound, ['u2']);
+	assert.ok(printed.some(p => p.startsWith('Rewound: files restored (1 changed)')));
+	assert.equal(s.props.at(-1)!.initialDraft, 'second question');
+	const o = s.q.calls.at(-1)!.options;
+	assert.equal(o.resume, SID2);
+	assert.equal(o.forkSession, true);
+	assert.equal(o.resumeSessionAt, 'a1');
+});
+
+test('claude tasks lists the chat tasks and stops the picked running one; claude mcp shows server status', async () => {
+	let release!: () => void;
+	const gate = new Promise<void>(r => (release = r));
+	const s = await setupChat({run: async p => {
+		const done = turnDone(p);
+		p.controller.send('hi');
+		await done;
+		await gate;
+	}});
+	const stopped: string[] = [];
+	const base = s.q.query;
+	const query = ((arg: never) =>
+		Object.assign(base(arg), {
+			stopTask: async (id: string) => void stopped.push(id),
+			mcpServerStatus: async () => [{name: 'github', status: 'connected'}, {name: 'db', status: 'failed', error: 'no socket'}],
+		})) as unknown as ChatQueryFn;
+	const [chat, claude] = createClaudeCommands({
+		dataDir: s.dataDir,
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+		loadChatQuery: async () => query,
+		loadUi: async () => ({
+			createChatElement: p => {
+				s.props.push(p);
+				return {};
+			},
+			createPickerElement: p => {
+				assert.deepEqual(p.items.map(i => i.id), ['t1']);
+				p.onPick('t1');
+				p.close();
+				return {};
+			},
+		}),
+	}) as [typeof s.chat, typeof s.chat];
+	await assert.rejects(async () => claude.run(['tasks'], s.ctx), /No chat is open/);
+	const running = chat.run([], s.ctx);
+	await new Promise(r => setTimeout(r, 40));
+	const session = s.props.at(-1)!.controller as unknown as {_tasks: Map<string, unknown>};
+	session._tasks.set('t1', {id: 't1', status: 'running', description: 'watch', background: true, startedAt: Date.now()});
+	const chatMount = s.ctx.mount;
+	s.ctx.mount = async build => void build({close: () => {}});
+	await claude.run(['tasks'], s.ctx);
+	s.ctx.mount = chatMount;
+	assert.deepEqual(stopped, ['t1']);
+	await claude.run(['mcp'], s.ctx);
+	assert.ok(s.printed.includes('github: connected'));
+	assert.ok(s.printed.includes('db: failed (no socket)'));
+	release();
+	await running;
 });

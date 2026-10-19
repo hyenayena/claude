@@ -190,9 +190,10 @@ describe('ask policy snapshot', () => {
 describe('chat static policy', () => {
 	it('lists the chat tools and disables the rest', () => {
 		assert.deepEqual(CHAT_TOOLS, [
-			'Read', 'Glob', 'Grep', 'Bash', 'Edit', 'Write', 'AskUserQuestion', 'Agent', 'SendMessage', 'Skill', 'TodoWrite', 'WebFetch', 'WebSearch',
+			'Read', 'Glob', 'Grep', 'Bash', 'Edit', 'Write', 'AskUserQuestion', 'Agent', 'SendMessage', 'Skill', 'TodoWrite', 'WebFetch', 'WebSearch', 'ExitPlanMode',
+			'TaskStop', 'TaskGet', 'TaskList', 'TaskOutput', 'BashOutput', 'KillShell',
 		]);
-		for (const t of ['NotebookEdit', 'BashOutput', 'KillShell', 'ExitPlanMode', 'EnterPlanMode', 'mcp__*']) {
+		for (const t of ['NotebookEdit', 'EnterPlanMode', 'Monitor', 'ToolSearch']) {
 			assert.ok(CHAT_DISALLOWED_TOOLS.includes(t), t);
 		}
 		for (const t of CHAT_TOOLS) assert.ok(!CHAT_DISALLOWED_TOOLS.includes(t), t);
@@ -208,7 +209,9 @@ describe('chat static policy', () => {
 			`Edit(/${paths.tokenFile})`,
 			`Edit(/${paths.credentialsFile})`,
 			`Edit(/${paths.stateFile})`,
-			`Edit(/${paths.configDir}/**)`,
+			`Edit(/${paths.configDir}/settings.json)`.replace('settings.json', '*.json'),
+			`Edit(/${paths.configDir}/agents/**)`,
+			`Edit(/${paths.configDir}/projects/**)`,
 			'Edit(//proc/**)',
 			'Edit(~/.ssh/**)',
 			'Edit(**/.env*)',

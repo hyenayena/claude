@@ -47,6 +47,26 @@ const fromSystem = (msg: Loose): UiEvent[] => {
 				},
 			];
 		}
+		case 'task_started':
+		case 'task_progress':
+		case 'task_notification': {
+			const id = str(msg['task_id']);
+			if (!id) return [];
+			const status = msg['subtype'] === 'task_notification' ? str(msg['status']) : 'running';
+			if (status !== 'running' && status !== 'completed' && status !== 'failed' && status !== 'stopped') return [];
+			const description = str(msg['description']);
+			const summary = str(msg['summary']);
+			return [
+				{
+					kind: 'task',
+					id,
+					status,
+					...(description !== undefined && {description}),
+					...(msg['is_backgrounded'] === true && {background: true}),
+					...(summary !== undefined && {summary}),
+				},
+			];
+		}
 		case 'local_command_output':
 		case 'informational': {
 			// Output of a Claude Code command run from the console; info-level banners stay hidden as in Claude Code.

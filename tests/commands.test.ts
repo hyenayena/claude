@@ -6,6 +6,7 @@ import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
 import type {CommandContext} from '../../../src/api.js';
+import {storeOauthToken} from '../src/credentials.js';
 import {createClaudeCommand, type ClaudeDeps} from '../src/commands.js';
 import type {QueryFn} from '../src/types.js';
 import {makeFakeLog, serialized} from './helpers/fake-log.js';
@@ -330,11 +331,22 @@ test('auth logout removes only the stored credential', async () => {
 	assert.equal(await readFile(join(dataDir, '.token'), 'utf8'), OAUTH);
 });
 
-test('auth login prints the deferred message', async () => {
-	const {command, ctx, printed, dataDir} = await setup();
-	await command.run(['auth', 'login'], ctx);
-	assert.match(printed[0]!, /^"claude auth login" is not available yet; it needs terminal handoff \(planned\)\./);
-	assert.ok(printed[0]!.includes(join(dataDir, '.token')));
+test('auth login needs a terminal handoff; the token goes to .token only when it looks right', async () => {
+	const {command, ctx, dataDir} = await setup();
+	await assert.rejects(async () => command.run(['auth', 'login'], ctx), /needs an interface that can hand over the terminal/);
+	await assert.rejects(storeOauthToken(dataDir, 'sk-ant-api03-notatoken'), /not a subscription token/);
+	await storeOauthToken(dataDir, `  ${OAUTH}\n`);
+	assert.equal(await readFile(join(dataDir, '.token'), 'utf8'), `${OAUTH}\n`);
+	assert.equal((await stat(join(dataDir, '.token'))).mode & 0o777, 0o600);
+});
+
+test('claude memory opens an md file through the terminal handoff', async () => {
+	const {command, ctx} = await setup();
+	await assert.rejects(async () => command.run(['memory'], ctx), /hand over the terminal/);
+	const opened: string[] = [];
+	const handoff = {...ctx, suspend: async <T,>(fn: () => T | Promise<T>) => (opened.push('suspend'), fn())};
+	await assert.rejects(async () => command.run(['memory', '../x.md'], handoff), /md directory/);
+	assert.deepEqual(opened, []);
 });
 
 test('auth without or with unknown subcommand fails with usage', async () => {

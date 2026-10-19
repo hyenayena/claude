@@ -58,6 +58,11 @@ class FakePrompter implements PermissionPrompter {
 	audit(e: AuditEntry) {
 		this.audits.push(e);
 	}
+	modes: ChatMode[] = [];
+	setMode(m: ChatMode) {
+		this.modes.push(m);
+		this.mode = m;
+	}
 }
 
 const setup = (extra: Partial<Parameters<typeof createChatCanUseTool>[0]> = {}) => {
@@ -147,15 +152,15 @@ test('a throwing prompter gives a deny, never null', async () => {
 	});
 });
 
-test('background execution and sandbox override are denied before prompting', async () => {
+test('a sandbox override is denied before prompting; background commands are asked like any other', async () => {
 	const {call, prompter} = setup();
-	for (const extra of [{run_in_background: true}, {dangerouslyDisableSandbox: true}, {run_in_background: 'yes'}]) {
-		const r = await call('Bash', {command: 'ls', ...extra});
-		assert.equal(r?.behavior === 'deny' && r.message, POLICY_DENY.background);
-	}
+	const r = await call('Bash', {command: 'ls', dangerouslyDisableSandbox: true});
+	assert.equal(r?.behavior === 'deny' && r.message, POLICY_DENY.background);
 	assert.equal(prompter.requests.length, 0);
-	assert.equal(prompter.audits.length, 3);
-	assert.ok(prompter.audits.every(a => a.outcome === 'denied-by-policy'));
+	assert.equal(prompter.audits.at(-1)?.outcome, 'denied-by-policy');
+	prompter.next = {kind: 'allow'};
+	assert.equal((await call('Bash', {command: 'npm run watch', run_in_background: true}))?.behavior, 'allow');
+	assert.equal(prompter.requests.length, 1);
 });
 
 test('invalid inputs are denied without prompting', async () => {
@@ -458,13 +463,13 @@ test('revealed delimiters in prompts do not reach the highlight input', async ()
 	assert.deepEqual(seen, ['echo \u001b']);
 });
 
-test('Agent and SendMessage are allowed without a prompt; background and isolated agents are denied', async () => {
+test('Agent and SendMessage are allowed without a prompt; isolated agents are denied', async () => {
 	const {call, prompter} = setup();
 	const input = {subagent_type: 'coder', description: 'x', prompt: 'do it'};
 	const r = await call('Agent', input);
 	assert.deepEqual(r, {behavior: 'allow', updatedInput: input, toolUseID: 'tu1'});
 	assert.equal((await call('SendMessage', {to: 'a1', message: 'go'}))?.behavior, 'allow');
-	assert.equal((await call('Agent', {...input, run_in_background: true}))?.behavior, 'deny');
+	assert.equal((await call('Agent', {...input, run_in_background: true}))?.behavior, 'allow');
 	const iso = await call('Agent', {...input, isolation: 'worktree'});
 	assert.equal(iso?.behavior === 'deny' && iso.message, POLICY_DENY.isolation);
 	assert.equal(prompter.requests.length, 0);
@@ -496,4 +501,43 @@ test('WebFetch always asks, showing the URL; bad URLs are denied without asking'
 		assert.equal(bad?.behavior === 'deny' && bad.message, POLICY_DENY.invalidInput);
 	}
 	assert.equal(prompter.requests.length, 1);
+});
+
+test('ExitPlanMode asks to start; yes leaves plan mode, "always" goes to accept-edits, no keeps planning', async () => {
+	const {call, prompter} = setup();
+	prompter.mode = 'plan';
+	const input = {plan: '1. Read\n2. Fix'};
+	prompter.next = {kind: 'allow'};
+	assert.equal((await call('ExitPlanMode', input))?.behavior, 'allow');
+	const req = prompter.requests[0] as unknown as {toolName: string; always: {label: string}};
+	assert.equal(req.toolName, 'ExitPlanMode');
+	assert.equal(req.always.label, 'Yes, and accept edits');
+	prompter.next = {kind: 'allow', always: true};
+	await call('ExitPlanMode', input);
+	prompter.next = {kind: 'deny', reason: 'add tests'};
+	const no = await call('ExitPlanMode', input);
+	assert.equal(no?.behavior, 'deny');
+	assert.deepEqual(prompter.modes, ['default', 'acceptEdits']);
+});
+
+test('MCP tools ask, show the tool and its arguments, and "always" covers that tool', async () => {
+	const {call, prompter} = setup();
+	prompter.next = {kind: 'allow', always: true};
+	const r = await call('mcp__github__create_issue', {title: 'Bug'});
+	assert.deepEqual(r, {behavior: 'allow', updatedInput: {title: 'Bug'}, toolUseID: 'tu1'});
+	const req = prompter.requests[0] as unknown as {toolName: string; input: Record<string, unknown>; always: {label: string}};
+	assert.equal(req.toolName, 'Mcp');
+	assert.equal(req.input['__mcpTool'], 'mcp__github__create_issue');
+	assert.equal(req.always.label, 'Yes, always for this tool');
+	assert.ok(prompter.approved.has('mcp:mcp__github__create_issue'));
+	assert.equal((await call('mcp__github__create_issue', {title: 'Again'}))?.behavior, 'allow');
+	assert.equal(prompter.requests.length, 1);
+});
+
+test('reading and stopping own background tasks runs without asking', async () => {
+	const {call, prompter} = setup();
+	for (const name of ['TaskStop', 'TaskGet', 'TaskList', 'TaskOutput', 'BashOutput', 'KillShell']) {
+		assert.equal((await call(name, {task_id: 't1'}))?.behavior, 'allow', name);
+	}
+	assert.equal(prompter.requests.length, 0);
 });

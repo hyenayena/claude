@@ -38,6 +38,9 @@ type Opts = Parameters<CanUseTool>[2];
 type Extras = {decisionReasonType?: unknown; requiresUserInteraction?: unknown};
 
 const PREVIEW_TIMEOUT_MS = 1500;
+export const PLAN_ACCEPT_EDITS_LABEL = 'Yes, and accept edits';
+// The MCP tool name travels inside the request input under this key, for the prompt to show.
+export const MCP_TOOL_FIELD = '__mcpTool';
 const ALWAYS_COMMAND_MAX = 2000;
 const ALWAYS_LABEL = 'Always allow this exact command in this chat';
 
@@ -203,8 +206,8 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		) {
 			return policyDeny('Bash', POLICY_DENY.invalidInput, 'invalid input', b.id);
 		}
-		if (input.run_in_background || input.dangerouslyDisableSandbox) {
-			return policyDeny('Bash', POLICY_DENY.background, 'background or sandbox override', b.id);
+		if (input.dangerouslyDisableSandbox) {
+			return policyDeny('Bash', POLICY_DENY.background, 'sandbox override', b.id);
 		}
 		const highlights = deps.highlights ? deps.highlights(command) : [];
 		const warn = highlights.some(h => h.level === 'warn');
@@ -345,6 +348,60 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		return denyFor(d, b.id);
 	};
 
+	// MCP tools ask (in auto mode only when the classifier is unsure); "always" covers that tool from then on.
+	const handleMcp = async (toolName: string, input: Record<string, unknown>, opts: Opts): Promise<PermissionResult> => {
+		const b = base(opts);
+		const key = `mcp:${toolName}`;
+		if (!b.defaultToNo && prompter.hasApproved(key)) {
+			prompter.audit({outcome: 'always-allowed', toolName, summary: toolName});
+			return {behavior: 'allow', updatedInput: input, toolUseID: b.id};
+		}
+		const d = await ask(
+			{
+				kind: 'tool',
+				id: randomUUID(),
+				seq: ++seq,
+				toolName: 'Mcp',
+				input: {...input, [MCP_TOOL_FIELD]: toolName},
+				cwd: projectDir,
+				...(b.description !== undefined && {description: b.description}),
+				highlights: [],
+				defaultToNo: b.defaultToNo,
+				always: b.defaultToNo ? false : {label: 'Yes, always for this tool'},
+				oversize: JSON.stringify(input).length > PAYLOAD_REVIEW_MAX,
+			},
+			opts.signal,
+		);
+		if (d.kind === 'allow') {
+			if (d.always === true) prompter.remember(key);
+			return {behavior: 'allow', updatedInput: input, toolUseID: b.id};
+		}
+		return denyFor(d, b.id);
+	};
+
+	// The plan is ready: approving it leaves plan mode (with "always", into accept-edits).
+	const handlePlanExit = async (input: Record<string, unknown>, opts: Opts): Promise<PermissionResult> => {
+		const b = base(opts);
+		const d = await ask(
+			{
+				kind: 'tool',
+				id: randomUUID(),
+				seq: ++seq,
+				toolName: 'ExitPlanMode',
+				input,
+				cwd: projectDir,
+				highlights: [],
+				defaultToNo: false,
+				always: {label: PLAN_ACCEPT_EDITS_LABEL},
+				oversize: false,
+			},
+			opts.signal,
+		);
+		if (d.kind !== 'allow') return denyFor(d, b.id);
+		prompter.setMode?.(d.always === true ? 'acceptEdits' : 'default');
+		return {behavior: 'allow', updatedInput: input, toolUseID: b.id};
+	};
+
 	const dispatch = async (toolName: string, input: Record<string, unknown>, opts: Opts): Promise<PermissionResult> => {
 		switch (toolName) {
 			case 'Read':
@@ -355,13 +412,21 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 				prompter.audit({outcome: 'denied-by-policy', toolName, summary: 'outside scope'});
 				return r ?? deny(POLICY_DENY.outside, opts.toolUseID);
 			}
-			// Loading a skill, keeping the checklist and searching run without asking.
+			// Loading a skill, keeping the checklist, searching and reading or stopping own tasks run without asking.
+			case 'TaskStop':
+			case 'TaskGet':
+			case 'TaskList':
+			case 'TaskOutput':
+			case 'BashOutput':
+			case 'KillShell':
 			case 'Skill':
 			case 'TodoWrite':
 			case 'WebSearch':
 				return {behavior: 'allow', updatedInput: input, toolUseID: opts.toolUseID};
 			case 'WebFetch':
 				return handleWebFetch(input, opts);
+			case 'ExitPlanMode':
+				return handlePlanExit(input, opts);
 			case 'Agent':
 			case 'Task':
 			case 'SendMessage': {
@@ -377,6 +442,7 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 			case 'Write':
 				return handleEdit(toolName, input, opts);
 			default:
+				if (toolName.startsWith('mcp__')) return handleMcp(toolName, input, opts);
 				return policyDeny(toolName, toolUnavailableMessage(toolName), 'unknown tool', opts.toolUseID);
 		}
 	};

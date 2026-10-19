@@ -74,6 +74,7 @@ export type Out =
 	| {kind: 'audit'; entry: AuditEntry}
 	| {kind: 'mode'; mode: ChatMode; error?: string}
 	| {kind: 'thinking'; text: string}
+	| {kind: 'task'; status: string; description: string; summary?: string}
 	| {kind: 'blank'};
 
 export interface Step {
@@ -140,6 +141,10 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 			};
 		case 'thinking':
 			return {state: {...state, status: {kind: 'thinking'}}, out: []};
+		case 'task':
+			// A background task reports once, when it settles; foreground ones show as their tool call.
+			if (e.status === 'running' || !e.background) return {state, out: []};
+			return {state, out: [{kind: 'task', status: e.status, description: e.description ?? 'task', ...(e.summary !== undefined && {summary: e.summary})}]};
 		case 'thinking-text':
 			return {state, out: [{kind: 'thinking', text: e.text}]};
 		case 'tool-use': {

@@ -4,7 +4,7 @@ import type {Logger} from '../../../../src/api.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {AUTH_MESSAGE, mapFailure, RESUME_MESSAGE} from '../session.js';
 import type {LivePatch} from '../chat-prefs.js';
-import type {ChatQueryFn} from '../types.js';
+import type {ChatQueryFn, RewindResult} from '../types.js';
 import type {ChatController, ChatEvent, ChatState, TurnOutcome, UiEvent} from './events.js';
 import {InputQueue} from './input-queue.js';
 import {normalize} from './normalize.js';
@@ -31,10 +31,22 @@ export type ChatSessionOptions = {
 	graceMs?: number;
 	initialResume?: string;
 	initialMode?: ChatMode;
+	// Commands allowed with "always" in earlier chats, and where new ones are saved.
+	savedApprovals?: readonly string[];
+	onRemember?: (key: string) => void;
 	log?: Logger;
 };
 
 export type SlashCommandInfo = {name: string; description?: string; argumentHint?: string};
+export type TaskInfo = {
+	id: string;
+	status: 'running' | 'completed' | 'failed' | 'stopped';
+	description: string;
+	background: boolean;
+	startedAt: number;
+	summary?: string;
+};
+const MAX_TASKS = 100;
 
 const MAX_COMMANDS = 300;
 export const isCommandName = (name: string): boolean => /^[A-Za-z0-9][A-Za-z0-9:._-]{0,63}$/.test(name);
@@ -112,8 +124,10 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private _mode: ChatMode = 'default';
 	private _commands: SlashCommandInfo[] = [];
 	private _title: string | undefined;
+	private readonly _tasks = new Map<string, TaskInfo>();
 	private readonly queue: Entry[] = [];
 	private readonly approved = new Set<string>();
+	private readonly saved = new Set<string>();
 
 	constructor(opts: ChatSessionOptions) {
 		this.opts = opts;
@@ -122,6 +136,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.log = opts.log ?? noopLog;
 		this._sessionId = opts.initialResume;
 		if (opts.initialMode && MODE_CYCLE.includes(opts.initialMode)) this._mode = opts.initialMode;
+		for (const key of opts.savedApprovals ?? []) this.saved.add(key);
 	}
 
 	get state(): ChatState {
@@ -157,6 +172,42 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		if (patch.outputStyle !== undefined) flags['outputStyle'] = patch.outputStyle;
 		if (Object.keys(flags).length > 0) q.applyFlagSettings?.(flags).catch(fail('flags'));
 		this.log.info('live settings applied', {keys: Object.keys(patch)});
+	}
+
+	/** Tasks of this chat (background Bash and subagents), newest first. */
+	get tasks(): readonly TaskInfo[] {
+		return [...this._tasks.values()].reverse();
+	}
+
+	async stopTask(id: string): Promise<void> {
+		const q = this.handle?.q;
+		if (!q?.stopTask) throw new Error('Tasks cannot be stopped in this run of the chat');
+		await q.stopTask(id);
+	}
+
+	/** Moves the running Bash commands and subagents to the background (Ctrl+B); false when there were none. */
+	async backgroundTasks(): Promise<boolean> {
+		const q = this.handle?.q;
+		if (!q?.backgroundTasks || this._state !== 'running') return false;
+		return q.backgroundTasks();
+	}
+
+	async mcpStatus(): Promise<Array<{name: string; status: string; error?: string}> | undefined> {
+		const q = this.handle?.q;
+		return q?.mcpServerStatus ? q.mcpServerStatus() : undefined;
+	}
+
+	async reconnectMcp(name: string): Promise<void> {
+		const q = this.handle?.q;
+		if (!q?.reconnectMcpServer) throw new Error('Start the chat (send a message) before reconnecting MCP servers');
+		await q.reconnectMcpServer(name);
+	}
+
+	/** Restores the files Claude changed after the given prompt (file checkpoints of this run). */
+	async rewindFiles(userMessageId: string): Promise<RewindResult> {
+		const q = this.handle?.q;
+		if (!q?.rewindFiles) return {canRewind: false, error: 'no file checkpoints in this run of the chat'};
+		return q.rewindFiles(userMessageId);
 	}
 
 	/** The chat's name: Claude Code's session title, or a stand-in until it exists. */
@@ -247,10 +298,20 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	}
 
 	hasApproved(key: string): boolean {
-		return this.approved.has(key);
+		return this.approved.has(key) || this.saved.has(key);
+	}
+
+	/** Drops an "always" approval, saved or not (from the Permissions settings). */
+	forget(key: string): void {
+		this.approved.delete(key);
+		this.saved.delete(key);
 	}
 
 	remember(key: string): void {
+		if (!this.saved.has(key)) {
+			this.saved.add(key);
+			this.opts.onRemember?.(key);
+		}
 		this.approved.delete(key);
 		if (this.approved.size >= MAX_APPROVED) {
 			const oldest = this.approved.values().next().value;
@@ -397,7 +458,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.failTurn(this.authFailed ? AUTH_MESSAGE : 'Claude request failed: the session ended unexpectedly');
 	}
 
-	private onUi(ev: UiEvent, handle: Handle): void {
+	private onUi(event: UiEvent, handle: Handle): void {
+		let ev = event;
 		if (ev.kind === 'session') {
 			this._sessionId = ev.sessionId;
 			this._model = ev.model ?? this._model;
@@ -405,6 +467,21 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		} else if (ev.kind === 'api-error' && ev.code === 'authentication_failed') {
 			if (!this.authFailed) this.log.warn('authentication failed');
 			this.authFailed = true;
+		}
+		if (ev.kind === 'task') {
+			const known = this._tasks.get(ev.id);
+			this._tasks.set(ev.id, {
+				id: ev.id,
+				status: ev.status,
+				description: ev.description ?? known?.description ?? 'task',
+				background: ev.background ?? known?.background ?? false,
+				startedAt: known?.startedAt ?? Date.now(),
+				...((ev.summary ?? known?.summary) !== undefined && {summary: ev.summary ?? known?.summary}),
+			});
+			if (this._tasks.size > MAX_TASKS) this._tasks.delete(this._tasks.keys().next().value!);
+			const t = this._tasks.get(ev.id)!;
+			// task_notification does not repeat whether the task ran in the background.
+			ev = {...ev, background: t.background, description: t.description};
 		}
 		if (ev.kind === 'result' && ev.sessionId) this._sessionId = ev.sessionId;
 		if (ev.kind === 'result' && ev.costUsd !== undefined) this._costUsd = ev.costUsd;

@@ -270,9 +270,19 @@ describe('buildChatOptions', () => {
 	it('reuses the ask options for the rest', () => {
 		const a = buildOptions({...base, canUseTool: undefined} as never);
 		const o = buildChatOptions(base);
-		for (const k of ['cwd', 'additionalDirectories', 'settingSources', 'strictMcpConfig', 'mcpServers', 'maxTurns', 'pathToClaudeCodeExecutable'] as const) {
+		for (const k of ['cwd', 'additionalDirectories', 'settingSources', 'maxTurns', 'pathToClaudeCodeExecutable'] as const) {
 			assert.deepEqual(o[k], a[k], k);
 		}
+		// The chat loads MCP servers from the Claude Code config; ask never does.
+		assert.equal(a.strictMcpConfig, true);
+		assert.equal(o.strictMcpConfig, false);
+		assert.equal('mcpServers' in o, false);
+		const off = buildChatOptions({...base, tuning: {noMcp: true}});
+		assert.equal(off.strictMcpConfig, true);
+		assert.deepEqual(off.mcpServers, {});
+		const hooks = buildChatOptions({...base, tuning: {hooks: true}}).settings as {disableAllHooks: boolean};
+		assert.equal(hooks.disableAllHooks, false);
+		assert.equal((o.settings as {disableAllHooks: boolean}).disableAllHooks, true);
 	});
 
 	it('omits subprocess env scrub because it requires bubblewrap which the container lacks', () => {
@@ -292,7 +302,7 @@ describe('buildChatOptions', () => {
 		}
 		assert.equal(e.PATH, '/bin');
 		assert.equal(e.HOME, '/root');
-		assert.equal(e.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, '1');
+		assert.equal('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS' in e, false, 'background tasks are allowed in the chat');
 		assert.ok(!('CLAUDE_CODE_SUBPROCESS_ENV_SCRUB' in e));
 	});
 

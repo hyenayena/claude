@@ -9,10 +9,10 @@ import {initialTranscript, reduceTranscript} from '../../src/ui/transcript.js';
 
 const id = (s: string) => s;
 
-test('agents run in the foreground and in place; other tools are not judged here', () => {
+test('agents run in place (foreground or background); other tools are not judged here', () => {
 	assert.equal(agentDenial('Agent', {subagent_type: 'coder', prompt: 'x'}), undefined);
 	assert.equal(agentDenial('SendMessage', {to: 'a1', message: 'go on'}), undefined);
-	assert.equal(agentDenial('Agent', {prompt: 'x', run_in_background: true}), POLICY_DENY.background);
+	assert.equal(agentDenial('Agent', {prompt: 'x', run_in_background: true}), undefined, 'background agents are allowed');
 	assert.equal(agentDenial('Task', {prompt: 'x', isolation: 'worktree'}), POLICY_DENY.isolation);
 	assert.equal(agentDenial('Agent', {prompt: 'x', isolation: 'remote'}), POLICY_DENY.isolation);
 	assert.equal(agentDenial('Bash', {run_in_background: true}), undefined);

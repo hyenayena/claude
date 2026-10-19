@@ -14,6 +14,10 @@ export type ChatTuning = {
 	thinking?: 'disabled';
 	fastMode?: true;
 	outputStyle?: OutputStyle;
+	// MCP servers from the Claude Code config are on unless this is set.
+	noMcp?: true;
+	// Hooks from settings files run only when this is set.
+	hooks?: true;
 };
 
 /** A change to the running chat; null returns a field to its default. */
@@ -76,12 +80,23 @@ export function tuningFromState(state: ClaudeState): ChatTuning {
 		...(state.chatThinking && {thinking: state.chatThinking}),
 		...(state.chatFastMode && {fastMode: true as const}),
 		...(state.chatOutputStyle && {outputStyle: state.chatOutputStyle}),
+		...(state.chatMcp === 'off' && {noMcp: true as const}),
+		...(state.chatHooks === 'on' && {hooks: true as const}),
 	};
 }
 
 export function applyTuning(options: Options, tuning: ChatTuning | undefined): Options {
-	if (!tuning) return options;
 	const next: Options = {...options};
+	// MCP servers configured for Claude Code (user and project) load unless turned off.
+	if (!tuning?.noMcp) {
+		next.strictMcpConfig = false;
+		delete next.mcpServers;
+	}
+	if (tuning?.hooks) {
+		const base = typeof next.settings === 'object' && next.settings !== null ? next.settings : {};
+		next.settings = {...base, disableAllHooks: false};
+	}
+	if (!tuning) return next;
 	if (tuning.effort) next.effort = tuning.effort;
 	if (tuning.thinking === 'disabled') next.thinking = {type: 'disabled'};
 	if (tuning.fastMode || tuning.outputStyle) {
@@ -103,7 +118,16 @@ export const MODEL_OPTIONS: SettingOption[] = [
 	{value: 'haiku', label: 'Haiku', description: 'latest Haiku'},
 ];
 
-type PrefKey = 'chatModel' | 'chatEffort' | 'chatThinking' | 'chatFastMode' | 'chatOutputStyle' | 'chatPermissionMode';
+type PrefKey =
+	| 'chatModel'
+	| 'chatEffort'
+	| 'chatThinking'
+	| 'chatFastMode'
+	| 'chatOutputStyle'
+	| 'chatPermissionMode'
+	| 'chatInputMode'
+	| 'chatMcp'
+	| 'chatHooks';
 
 type Store = {read: () => Promise<ClaudeState>; update: (patch: Partial<ClaudeState>) => Promise<unknown>};
 
@@ -116,6 +140,8 @@ type PrefSpec = {
 	parse: (value: string) => ClaudeState[PrefKey];
 	show: (state: ClaudeState) => string;
 	onSet?: (value: string) => void;
+	// Takes effect only in chats opened after the change.
+	newChatsOnly?: true;
 };
 
 const fromOptions = <T extends string>(options: SettingOption[], value: string): T | undefined => {
@@ -138,7 +164,20 @@ const FAST_OPTIONS: SettingOption[] = [
 const MODE_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Default', description: 'edits and commands ask first'},
 	{value: 'acceptEdits', label: 'Accept edits', description: 'project edits go through without asking'},
+	{value: 'plan', label: 'Plan', description: 'Claude researches and proposes a plan first, no edits'},
 	{value: 'auto', label: 'Auto', description: 'a classifier approves or denies, asks when unsure'},
+];
+const INPUT_OPTIONS: SettingOption[] = [
+	{value: '', label: 'Normal'},
+	{value: 'vim', label: 'Vim', description: 'Esc for NORMAL mode, i/a/o to type'},
+];
+const MCP_OPTIONS: SettingOption[] = [
+	{value: '', label: 'On', description: 'servers from the Claude Code config; each call asks'},
+	{value: 'off', label: 'Off'},
+];
+const HOOK_OPTIONS: SettingOption[] = [
+	{value: '', label: 'Off'},
+	{value: 'on', label: 'On', description: 'hooks from settings files run (yena\'s path policy stays)'},
 ];
 const STYLE_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Default'},
@@ -148,7 +187,9 @@ const STYLE_OPTIONS: SettingOption[] = [
 
 export type ChatSettingsHooks = {
 	// Applies a newly chosen permission mode to the open chat, if any.
-	applyMode?: (mode: 'default' | 'acceptEdits' | 'auto') => void;
+	applyMode?: (mode: 'default' | 'acceptEdits' | 'plan' | 'auto') => void;
+	// Switches the chat input between normal and vim editing.
+	applyInputMode?: (mode: 'normal' | 'vim') => void;
 	// Applies model, effort, thinking, fast mode or output style to the open chat, if any.
 	applyLive?: (patch: LivePatch) => void;
 };
@@ -165,9 +206,9 @@ export function chatSettings(
 			label: 'Permission mode',
 			description: 'How tool calls are approved',
 			options: MODE_OPTIONS,
-			parse: v => fromOptions<'acceptEdits' | 'auto'>(MODE_OPTIONS, v),
+			parse: v => fromOptions<'acceptEdits' | 'plan' | 'auto'>(MODE_OPTIONS, v),
 			show: s => s.chatPermissionMode ?? '',
-			onSet: v => hooks.applyMode?.(v === '' ? 'default' : (v as 'acceptEdits' | 'auto')),
+			onSet: v => hooks.applyMode?.(v === '' ? 'default' : (v as 'acceptEdits' | 'plan' | 'auto')),
 		},
 		{
 			key: 'chatModel',
@@ -212,11 +253,38 @@ export function chatSettings(
 			parse: v => fromOptions<OutputStyle>(STYLE_OPTIONS, v),
 			show: s => s.chatOutputStyle ?? '',
 		},
+		{
+			key: 'chatMcp',
+			label: 'MCP servers',
+			description: 'Tools from MCP servers configured for Claude Code',
+			newChatsOnly: true,
+			options: MCP_OPTIONS,
+			parse: v => fromOptions<'off'>(MCP_OPTIONS, v),
+			show: s => s.chatMcp ?? '',
+		},
+		{
+			key: 'chatHooks',
+			label: 'Settings hooks',
+			description: 'Hooks from Claude Code settings files',
+			newChatsOnly: true,
+			options: HOOK_OPTIONS,
+			parse: v => fromOptions<'on'>(HOOK_OPTIONS, v),
+			show: s => s.chatHooks ?? '',
+		},
+		{
+			key: 'chatInputMode',
+			label: 'Input mode',
+			description: 'How the chat input edits text',
+			options: INPUT_OPTIONS,
+			parse: v => fromOptions<'vim'>(INPUT_OPTIONS, v),
+			show: s => s.chatInputMode ?? '',
+			onSet: v => hooks.applyInputMode?.(v === 'vim' ? 'vim' : 'normal'),
+		},
 	];
 	return specs.map(spec => ({
 		key: spec.key,
 		label: spec.label,
-		description: `${spec.description}; applies now and to new chats`,
+		description: `${spec.description}; ${spec.newChatsOnly ? 'applies to new chats' : 'applies now and to new chats'}`,
 		options: spec.options,
 		get: async () => spec.show(await store.read()),
 		set: async value => {

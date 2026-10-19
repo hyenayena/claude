@@ -484,6 +484,16 @@ export function toolBodyRows(req: ToolRequest, reveal: Reveal, width: number): B
 		const command = raw.length > BASH_REVIEW_MAX ? raw.slice(0, BASH_REVIEW_MAX) : raw;
 		pushWrapped(rows, reveal(command), 'plain', width);
 		if (command.length < raw.length) rows.push({text: `… [${raw.length - command.length} more characters not shown]`, tone: 'dim'});
+	} else if (req.toolName === 'Mcp') {
+		const {__mcpTool: _tool, ...args} = req.input;
+		const json = JSON.stringify(args, null, 2) ?? '';
+		for (const line of reveal(json.length > 8000 ? `${json.slice(0, 8000)}…` : json).split('\n')) pushWrapped(rows, line, 'plain', width);
+		rows.push({text: 'Arguments go to the MCP server, which may reach outside the container.', tone: 'warn'});
+	} else if (req.toolName === 'ExitPlanMode') {
+		const plan = typeof req.input['plan'] === 'string' ? req.input['plan'] : '';
+		if (plan) for (const line of reveal(plan).split('\n')) pushWrapped(rows, line, 'plain', width);
+		else rows.push({text: 'The plan is in the answer above.', tone: 'dim'});
+		rows.push({text: 'No: Claude keeps planning (say why in the reason).', tone: 'dim'});
 	} else if (req.toolName === 'WebFetch') {
 		pushWrapped(rows, `URL: ${reveal(String(req.input['url'] ?? ''))}`, 'plain', width);
 		const ask = typeof req.input['prompt'] === 'string' ? req.input['prompt'] : '';

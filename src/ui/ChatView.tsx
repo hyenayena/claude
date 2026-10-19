@@ -18,6 +18,7 @@ import {
 	statusLineText,
 	todoLines,
 	queuedLines,
+	wrapPlain,
 	type Scrub,
 } from './present.js';
 import {
@@ -38,6 +39,8 @@ import {
 import {QuestionPrompt} from './QuestionPrompt.js';
 import {StatusBar} from './StatusBar.js';
 import {useViewHost} from './view-host.js';
+import {vimKey, vimStart, type VimEffect, type VimState} from './vim.js';
+import {matchFiles, mentionAt} from '../chat/files.js';
 import {
 	initialTranscript,
 	LIVE,
@@ -55,6 +58,16 @@ export interface ChatViewProps {
 	credentialLabel: string;
 	initialModel?: string;
 	initialSessionId?: string;
+	// Text the input starts with (e.g. the prompt a rewind went back to).
+	initialDraft?: string;
+	// Project files for @ mentions (read lazily, may be empty until loaded).
+	files?: () => readonly string[];
+	// Opens the draft in an external editor (Ctrl+G); resolves with the new text, or undefined.
+	openEditor?: (text: string) => Promise<string | undefined>;
+	// The whole conversation with full tool input and output, for Ctrl+O (raw lines, scrubbed here).
+	loadTranscript?: () => Promise<string[]>;
+	// 'vim' turns on NORMAL/INSERT editing; read on every key so a settings change applies at once.
+	inputMode?: () => 'normal' | 'vim';
 	reveal?: (s: string) => string;
 	projectDir?: string;
 	armMs?: number;
@@ -75,6 +88,8 @@ export const BUSY_HINT = 'Wait for the answer or press Esc to interrupt';
 export const DOUBLE_ESC_MS = 500;
 export const NEW_CHAT_TITLE = 'New chat';
 export const MAX_QUEUED = 20;
+const MAX_UNDO = 100;
+const MENTION_ROWS = 6;
 const MAX_HISTORY = 200;
 
 // Messages sent in this run of yena, for ↑/↓ in any chat.
@@ -87,7 +102,7 @@ export const rememberSent = (text: string): void => {
 export const clearSentHistory = (): void => {
 	sentHistory.length = 0;
 };
-const MODE_NAME: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept-edits', auto: 'auto'};
+const MODE_NAME: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept-edits', plan: 'plan', auto: 'auto'};
 
 export function ChatView(props: ChatViewProps) {
 	const {controller, print, close, scrub, credentialLabel} = props;
@@ -110,12 +125,21 @@ export function ChatView(props: ChatViewProps) {
 	const promptRef = useRef<PromptEntry | null>(null);
 	const batchRef = useRef(0);
 	const pendingModeRef = useRef<{mode: ChatMode; armedAt: number} | undefined>(undefined);
-	const edRef = useRef<EditorState>(emptyEditor);
+	const edRef = useRef<EditorState>(
+		props.initialDraft ? editorReduce(emptyEditor, {type: 'insert', text: props.initialDraft}) : emptyEditor,
+	);
 	const closedRef = useRef(false);
 	// Messages typed while Claude answers; sent together when the turn ends.
 	const queueRef = useRef<string[]>([]);
 	// Position while browsing the history with ↑/↓ (-1: not browsing) and the draft it replaced.
 	const historyRef = useRef<{index: number; draft: EditorState}>({index: -1, draft: emptyEditor});
+	// Ctrl+R: the query, the history index it matched, and the draft to restore on Esc.
+	const searchRef = useRef<{query: string; index: number; draft: EditorState} | undefined>(undefined);
+	// @ mentions: the highlighted suggestion; dismissed after Esc until the text changes.
+	const mentionRef = useRef<{selected: number; dismissed: boolean}>({selected: 0, dismissed: false});
+	const vimRef = useRef<VimState>(vimStart);
+	// Ctrl+O: the full transcript and the first row shown (-1 means the bottom).
+	const viewerRef = useRef<{lines: string[]; top: number} | undefined>(undefined);
 	const [, setTick] = useState(0);
 	const render = useCallback(() => setTick(n => n + 1), []);
 
@@ -126,14 +150,30 @@ export function ChatView(props: ChatViewProps) {
 		},
 		[render],
 	);
+	// Earlier drafts for undo (Ctrl+_ or vim u).
+	const undoRef = useRef<EditorState[]>([]);
 	const edit = useCallback(
-		(action: EditorAction) => {
+		(...actions: EditorAction[]) => {
 			historyRef.current = {index: -1, draft: emptyEditor};
-			edRef.current = editorReduce(edRef.current, action);
+			const before = edRef.current;
+			let next = before;
+			for (const action of actions) next = editorReduce(next, action);
+			if (next.text !== before.text) {
+				undoRef.current.push(before);
+				if (undoRef.current.length > MAX_UNDO) undoRef.current.shift();
+			}
+			edRef.current = next;
+			mentionRef.current = {...mentionRef.current, dismissed: false};
 			render();
 		},
 		[render],
 	);
+	const undo = useCallback(() => {
+		const prev = undoRef.current.pop();
+		if (!prev) return;
+		edRef.current = {...prev, ...(edRef.current.killed !== undefined && {killed: edRef.current.killed})};
+		render();
+	}, [render]);
 
 	const feed = useCallback(
 		(event: ChatEvent) => {
@@ -229,7 +269,8 @@ export function ChatView(props: ChatViewProps) {
 				setT(setNotice(tRef.current, `Already in ${MODE_NAME[mode]} mode.`));
 				return;
 			}
-			if (mode === 'default') {
+			// Default and plan only take permissions away, so they need no confirmation.
+			if (mode === 'default' || mode === 'plan') {
 				pendingModeRef.current = undefined;
 				controller.setMode(mode);
 				setT({...tRef.current, mode: controller.mode, notice: undefined});
@@ -403,6 +444,134 @@ export function ChatView(props: ChatViewProps) {
 		}
 	};
 
+	// The @ mention at the cursor and its suggestions, unless dismissed or nothing matches.
+	const activeMention = (): {start: number; matches: string[]} | undefined => {
+		if (mentionRef.current.dismissed || !props.files) return undefined;
+		const ed = edRef.current;
+		const at = mentionAt(ed.text, ed.cursor);
+		if (!at) return undefined;
+		const matches = matchFiles(props.files(), at.query, MENTION_ROWS);
+		return matches.length > 0 ? {start: at.start, matches} : undefined;
+	};
+
+	const acceptMention = (m: {start: number; matches: string[]}) => {
+		const choice = m.matches[Math.min(mentionRef.current.selected, m.matches.length - 1)];
+		if (choice === undefined) return;
+		const ed = edRef.current;
+		const insert = `@${choice} `;
+		undoRef.current.push(ed);
+		edRef.current = {...ed, text: ed.text.slice(0, m.start) + insert + ed.text.slice(ed.cursor), cursor: m.start + insert.length, truncated: false};
+		mentionRef.current = {selected: 0, dismissed: false};
+		render();
+	};
+
+	const findInHistory = (query: string, from: number): number => {
+		const q = query.toLowerCase();
+		for (let i = Math.min(from, sentHistory.length - 1); i >= 0; i--) {
+			if (sentHistory[i]!.toLowerCase().includes(q)) return i;
+		}
+		return -1;
+	};
+
+	const searchKey = (input: string, key: Key) => {
+		const s = searchRef.current!;
+		if (key.escape || (key.ctrl && input === 'g')) {
+			edRef.current = s.draft;
+			searchRef.current = undefined;
+			return render();
+		}
+		if (key.ctrl && input === 'r') {
+			const older = findInHistory(s.query, s.index - 1);
+			if (older >= 0) searchRef.current = {...s, index: older};
+			return render();
+		}
+		if (key.backspace || key.delete) {
+			const query = s.query.slice(0, -1);
+			searchRef.current = {...s, query, index: query ? findInHistory(query, sentHistory.length - 1) : -1};
+			return render();
+		}
+		if (input && !key.ctrl && !key.meta && !key.return && !key.tab && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
+			const query = s.query + input;
+			searchRef.current = {...s, query, index: findInHistory(query, sentHistory.length - 1)};
+			return render();
+		}
+		// Any other key takes the match into the draft (Enter does not send it yet).
+		searchRef.current = undefined;
+		if (s.index >= 0) edit({type: 'set', text: sentHistory[s.index]!});
+		else render();
+	};
+
+	const viewerRows = () => Math.max(3, (rows >= 12 ? rows - 3 : rows - 1) - 2);
+
+	const openViewer = () => {
+		viewerRef.current = {lines: ['Loading the transcript…'], top: -1};
+		render();
+		props.loadTranscript!().then(
+			lines => {
+				if (!viewerRef.current) return;
+				viewerRef.current = {lines: lines.length > 0 ? lines.map(l => scrub(l)) : ['The transcript is empty so far.'], top: -1};
+				render();
+			},
+			(error: unknown) => {
+				if (!viewerRef.current) return;
+				viewerRef.current = {lines: [`Cannot read the transcript: ${scrub(error instanceof Error ? error.message : String(error))}`], top: -1};
+				render();
+			},
+		);
+	};
+
+	const viewerKey = (input: string, key: Key) => {
+		const v = viewerRef.current!;
+		if (key.escape || input === 'q' || (key.ctrl && input === 'o')) {
+			viewerRef.current = undefined;
+			return render();
+		}
+		const total = wrapPlain(v.lines, Math.max(1, columns - 1)).length;
+		const height = viewerRows();
+		const max = Math.max(0, total - height);
+		const top = v.top < 0 ? max : v.top;
+		let next = top;
+		if (key.upArrow || input === 'k') next = top - 1;
+		else if (key.downArrow || input === 'j') next = top + 1;
+		else if (key.pageUp || input === 'b') next = top - height;
+		else if (key.pageDown || input === ' ' || input === 'f') next = top + height;
+		else if (input === 'g' || key.home) next = 0;
+		else if (input === 'G' || key.end) next = max;
+		viewerRef.current = {...v, top: Math.min(max, Math.max(0, next))};
+		render();
+	};
+
+	const runVimEffect = (effect: VimEffect) => {
+		switch (effect.kind) {
+			case 'edit':
+				return effect.actions.length > 0 ? edit(...effect.actions) : render();
+			case 'submit':
+				return submit();
+			case 'undo':
+				return undo();
+			case 'history':
+				return browseHistory(effect.step);
+			case 'escape':
+				return escape();
+			case 'none':
+				return render();
+		}
+	};
+
+	const externalEdit = () => {
+		if (!props.openEditor) return;
+		const before = edRef.current;
+		props.openEditor(before.text).then(
+			text => {
+				if (text === undefined || closedRef.current) return;
+				undoRef.current.push(before);
+				edRef.current = editorReduce(edRef.current, {type: 'set', text: sanitizeInput(text)});
+				render();
+			},
+			(error: unknown) => print(formatError(error instanceof Error ? error.message : String(error), scrub)),
+		);
+	};
+
 	useInput((input: string, key: Key) => {
 		if (closedRef.current) return;
 		if (host?.isHostKey(input, key)) return;
@@ -410,30 +579,93 @@ export function ChatView(props: ChatViewProps) {
 		if (prompt) return promptKey(prompt, input, key);
 		if (pendingModeRef.current) return modeKey(key);
 		if (key.ctrl && input === 'c') return ctrlC();
-		if (key.escape) return escape();
+		if (viewerRef.current) return viewerKey(input, key);
+		if (key.ctrl && input === 'o' && props.loadTranscript) return openViewer();
+		if (searchRef.current) return searchKey(input, key);
+		const mention = activeMention();
+		if (props.inputMode?.() === 'vim' && !key.ctrl && !key.meta && !key.tab && !mention) {
+			// Esc while Claude answers still interrupts, whatever the vim mode.
+			const busyEscape = key.escape && tRef.current.phase !== 'idle';
+			if (!busyEscape) {
+				const r = vimKey(vimRef.current, {
+					input,
+					escape: key.escape,
+					return: key.return && !key.meta && !key.shift,
+					leftArrow: key.leftArrow,
+					rightArrow: key.rightArrow,
+					upArrow: key.upArrow && !key.shift,
+					downArrow: key.downArrow && !key.shift,
+					backspace: (key.backspace || key.delete) && vimRef.current.mode === 'normal',
+				});
+				if (r.handled) {
+					vimRef.current = r.state;
+					lastEmptyEscRef.current = r.effect.kind === 'escape' ? lastEmptyEscRef.current : 0;
+					return runVimEffect(r.effect);
+				}
+			}
+		}
+		if (key.escape) {
+			if (mention) {
+				mentionRef.current = {selected: 0, dismissed: true};
+				return render();
+			}
+			return escape();
+		}
 		lastEmptyEscRef.current = 0;
 		if (key.tab && key.shift) return cycleMode();
 		if (tRef.current.notice !== undefined) setT(setNotice(tRef.current, undefined));
+		if (mention) {
+			if (key.upArrow || key.downArrow) {
+				const n = mention.matches.length;
+				mentionRef.current = {...mentionRef.current, selected: (mentionRef.current.selected + (key.upArrow ? n - 1 : 1)) % n};
+				return render();
+			}
+			if (key.tab || (key.return && !key.meta && !key.shift)) return acceptMention(mention);
+		}
 		if (key.return) {
 			if (key.meta || key.shift) return edit({type: 'insert', text: '\n'});
 			return submit();
 		}
+		if ((key.backspace || key.delete) && key.meta) return edit({type: 'killWordBack'});
 		if (key.backspace || key.delete) return edit({type: 'backspace'});
-		if (key.leftArrow) return edit({type: 'left'});
+		if (key.leftArrow) return edit({type: key.ctrl || key.meta ? 'wordLeft' : 'left'});
 		if (key.rightArrow) {
+			if (key.ctrl || key.meta) return edit({type: 'wordRight'});
 			if (host && edRef.current.text === '' && host.move('right')) return;
 			return edit({type: 'right'});
 		}
 		if (key.home) return edit({type: 'home'});
 		if (key.end) return edit({type: 'end'});
+		// Ctrl+_ (also Ctrl+/ in many terminals) arrives as 0x1f.
+		if (input === '\u001f' || (key.ctrl && (input === '_' || input === '/'))) return undo();
 		if (key.ctrl) {
 			if (input === 'a') return edit({type: 'home'});
 			if (input === 'e') return edit({type: 'end'});
 			if (input === 'u') return edit({type: 'killLine'});
+			if (input === 'k') return edit({type: 'killEnd'});
+			if (input === 'w') return edit({type: 'killWordBack'});
+			if (input === 'y') return edit({type: 'yank'});
+			if (input === 'g') return externalEdit();
+			if (input === 'b') {
+				void controller.backgroundTasks?.().then(moved => {
+					if (!closedRef.current) setT(setNotice(tRef.current, moved ? 'Moved the running work to the background.' : 'Nothing is running that could go to the background.'));
+				});
+				return;
+			}
+			if (input === 'r' && sentHistory.length > 0) {
+				searchRef.current = {query: '', index: -1, draft: edRef.current};
+				return render();
+			}
 			return;
 		}
-		if ((key.upArrow || key.downArrow) && !key.shift && !key.meta) return browseHistory(key.upArrow ? -1 : 1);
-		if (key.meta || key.tab || key.upArrow || key.downArrow || key.pageUp || key.pageDown) return;
+		if (key.meta) {
+			if (input === 'b') return edit({type: 'wordLeft'});
+			if (input === 'f') return edit({type: 'wordRight'});
+			if (input === 'd') return edit({type: 'killWordForward'});
+			return;
+		}
+		if ((key.upArrow || key.downArrow) && !key.shift) return browseHistory(key.upArrow ? -1 : 1);
+		if (key.tab || key.upArrow || key.downArrow || key.pageUp || key.pageDown) return;
 		if (input) insertPasted(input);
 	}, {isActive: focused});
 
@@ -447,7 +679,7 @@ export function ChatView(props: ChatViewProps) {
 	}, {isActive: focused});
 
 	useEffect(() => {
-		host?.setTitle?.(barTitle, barStatus);
+		host?.setTitle?.(barTitle, barStatusFull);
 	});
 
 	useEffect(() => {
@@ -473,9 +705,11 @@ export function ChatView(props: ChatViewProps) {
 		},
 		scrub,
 	);
+	const runningBackground = controller.tasks?.filter(x => x.background && x.status === 'running').length ?? 0;
+	const barStatusFull = runningBackground > 0 ? `${barStatus} · ${runningBackground} in background` : barStatus;
 	// A host with a title bar shows the chat's name and this status above the chat instead.
 	const barTitle = scrub(controller.title ?? NEW_CHAT_TITLE);
-	const statusBar = host?.setTitle ? null : <StatusBar text={barStatus} />;
+	const statusBar = host?.setTitle ? null : <StatusBar text={barStatusFull} />;
 
 	if (prompt) {
 		const layout = layoutPrompt(rows, columns);
@@ -510,6 +744,26 @@ export function ChatView(props: ChatViewProps) {
 		);
 	}
 
+	if (viewerRef.current) {
+		const v = viewerRef.current;
+		const wrapped = wrapPlain(v.lines, Math.max(1, columns - 1));
+		const height = viewerRows();
+		const max = Math.max(0, wrapped.length - height);
+		const top = v.top < 0 ? max : Math.min(v.top, max);
+		const shown = wrapped.slice(top, top + height);
+		return (
+			<Box flexDirection="column">
+				{shown.map((line, i) => (
+					<Text key={i} wrap="truncate">
+						{line === '' ? ' ' : line}
+					</Text>
+				))}
+				<Text dimColor wrap="truncate">{`Transcript ${Math.min(wrapped.length, top + shown.length)}/${wrapped.length} · ↑↓ j k · space b page · g G ends · Esc or Ctrl+O close`}</Text>
+				{statusBar}
+			</Box>
+		);
+	}
+
 	const tools = [...t.tools.values()];
 	const statusText = statusLineText(t.status);
 	const pendingMode = pendingModeRef.current?.mode;
@@ -529,6 +783,11 @@ export function ChatView(props: ChatViewProps) {
 	rem -= noticeRows;
 	const statusRows = statusText && rem > 0 ? 1 : 0;
 	rem -= statusRows;
+	const mention = activeMention();
+	const mentionRows = mention ? Math.min(mention.matches.length, Math.max(0, rem - 2)) : 0;
+	rem -= mentionRows;
+	const vimNormal = props.inputMode?.() === 'vim' && vimRef.current.mode === 'normal';
+	rem -= vimNormal ? 1 : 0;
 	const queued = queuedLines(queueRef.current, scrub, Math.min(3, Math.max(0, rem - 1)));
 	rem -= queued.length;
 	const todos = todoLines(t.todos, scrub, Math.min(LIVE.maxTodoRows, Math.floor(rem / 2)));
@@ -561,7 +820,21 @@ export function ChatView(props: ChatViewProps) {
 					{noticeText}
 				</Text>
 			)}
-			<InputLine text={ed.text} cursor={ed.cursor} columns={columns} running={t.phase !== 'idle'} maxRows={inputRows} />
+			{mention &&
+				mention.matches.slice(0, mentionRows).map((file, i) => (
+					<Text key={`mention-${file}`} wrap="truncate" inverse={i === Math.min(mentionRef.current.selected, mention.matches.length - 1)}>
+						{`  @${scrub(file)}`}
+					</Text>
+				))}
+			{searchRef.current ? (
+				<Text wrap="truncate">
+					<Text dimColor>{`(reverse-i-search) '${scrub(searchRef.current.query)}': `}</Text>
+					{searchRef.current.index >= 0 ? scrub(sentHistory[searchRef.current.index]!.replace(/\s+/g, ' ')) : ''}
+				</Text>
+			) : (
+				<InputLine text={ed.text} cursor={ed.cursor} columns={columns} running={t.phase !== 'idle'} maxRows={inputRows} />
+			)}
+			{vimNormal && <Text dimColor>-- NORMAL --</Text>}
 			{statusBar}
 		</Box>
 	);

@@ -4,9 +4,11 @@ import {buildChatOptions, buildEnv, resolvePaths} from '../config.js';
 import {makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
 import {clip, noopLog} from '../log.js';
 import type {ClaudeState, ChatQueryFn, Credential, CredentialInfo} from '../types.js';
-import type {ChatViewProps, SessionPickerProps} from '../ui/mount.js';
+import type {ChatViewProps, ListPickerProps} from '../ui/mount.js';
 import {formatAssistantBlock, formatNotice, formatUserLine} from '../ui/present.js';
-import {readHistory} from './history.js';
+import {readHistory, readTranscriptDetail} from './history.js';
+import {listProjectFiles} from './files.js';
+import {editInEditor} from '../terminal.js';
 import {buildScope} from '../policy.js';
 import {ChatSession} from './chat-session.js';
 import {createChatCanUseTool} from './permission-bridge.js';
@@ -24,7 +26,7 @@ export const NEEDS_MOUNT_MESSAGE = '"claude chat" needs an interface that can sh
 
 export type ChatUi = {
 	createChatElement: (props: ChatViewProps) => UiElement;
-	createPickerElement?: (props: SessionPickerProps) => UiElement;
+	createPickerElement?: (props: ListPickerProps) => UiElement;
 };
 
 export type ChatRunDeps = {
@@ -46,10 +48,26 @@ export type ChatRunDeps = {
 	onSession?: (session: ChatSession | undefined) => void;
 	// Receives the function that applies a settings change to this chat (undefined once it closes).
 	onLive?: (apply: ((patch: LivePatch) => void) | undefined) => void;
+	onRulesChanged?: () => void;
+	// 'vim' or 'normal' editing for the chat input, read on every key.
+	inputMode?: () => 'normal' | 'vim';
 };
 
 // `resume` names a session to continue; otherwise `fresh` picks a new one or the last one.
-export type ChatOpen = {fresh: boolean; model?: string; tuning?: ChatTuning; resume?: string};
+export type ChatOpen = {
+	fresh: boolean;
+	model?: string;
+	tuning?: ChatTuning;
+	resume?: string;
+	// Continue `resume` as a new session (a branch) instead of in place.
+	fork?: boolean;
+	// With `resume`: keep the conversation only up to this entry (rewind).
+	resumeAt?: string;
+	// Shown history stops before this prompt (rewind).
+	historyUntil?: string;
+	// Text put into the input when the chat opens.
+	draft?: string;
+};
 
 export const runChat = async (args: string[], ctx: CommandContext, deps: ChatRunDeps): Promise<void> => {
 	let fresh = false;
@@ -75,7 +93,7 @@ export const openChat = async (open: ChatOpen, ctx: CommandContext, deps: ChatRu
 };
 
 const runLocked = async (
-	{fresh, model, tuning, resume: chosen}: ChatOpen,
+	{fresh, model, tuning, resume: chosen, fork, resumeAt, historyUntil, draft}: ChatOpen,
 	ctx: CommandContext,
 	mount: NonNullable<CommandContext['mount']>,
 	deps: ChatRunDeps,
@@ -128,6 +146,31 @@ const runLocked = async (
 		model: model ?? 'default',
 	});
 	const startedAt = Date.now();
+	let saving: Promise<void> = Promise.resolve();
+	// Branching and rewinding apply to the query that opens the chat, not to later respawns.
+	let spawned = false;
+	const firstSpawn = (): boolean => {
+		const first = !spawned;
+		spawned = true;
+		return first;
+	};
+
+	// Project files for @ mentions, read in the background on the first "@" of the chat.
+	let projectFiles: readonly string[] = [];
+	let filesRequested = false;
+	const files = (): readonly string[] => {
+		if (!filesRequested) {
+			filesRequested = true;
+			void listProjectFiles(paths.projectDir).then(
+				list => {
+					projectFiles = list;
+				},
+				() => {},
+			);
+		}
+		return projectFiles;
+	};
+
 	// Settings changed while the chat is open: applied to the running query and kept for a respawn.
 	let live = {...(model !== undefined && {model}), tuning: {...tuning}};
 	const applyLive = (patch: LivePatch): void => {
@@ -140,6 +183,16 @@ const runLocked = async (
 		redact,
 		log,
 		initialResume: resume,
+		...(state.allowedCommands && {savedApprovals: state.allowedCommands}),
+		onRemember: key => {
+			saving = saving
+				.then(async () => {
+					const now = (await store.read()).allowedCommands ?? [];
+					if (!now.includes(key)) await store.update({allowedCommands: [...now, key]});
+					deps.onRulesChanged?.();
+				})
+				.catch(() => ctx.print('Warning: could not save the permission rule'));
+		},
 		...(state.chatPermissionMode && {initialMode: state.chatPermissionMode}),
 		buildOptions: (abortController, id, prompter) => ({
 			...buildChatOptions({
@@ -160,8 +213,9 @@ const runLocked = async (
 				}),
 			}),
 			includePartialMessages: true,
+			...(firstSpawn() && {...(fork && {forkSession: true}), ...(resumeAt && {resumeSessionAt: resumeAt})}),
 			permissionMode: sdkPermissionMode(prompter.mode),
-			hooks: policyHooks(scope),
+			hooks: policyHooks(scope, paths.configDir),
 		}),
 	});
 
@@ -198,7 +252,6 @@ const runLocked = async (
 		if (e.type === 'turn-end' && e.outcome === 'ok') refreshTitleSoon();
 	});
 
-	let saving: Promise<void> = Promise.resolve();
 	session.subscribe(e => {
 		if (e.type !== 'turn-end' || e.outcome !== 'ok') return;
 		const lastSessionId = session.sessionId;
@@ -231,13 +284,23 @@ const runLocked = async (
 				...(model !== undefined
 					? {initialModel: model}
 					: state.lastModel && !fresh && {initialModel: state.lastModel}),
-				...(resume && {initialSessionId: resume}),
+				...(resume && !fork && {initialSessionId: resume}),
+				...(draft && {initialDraft: draft}),
+				files,
+				loadTranscript: async () => {
+					const id = session.sessionId;
+					return id ? readTranscriptDetail(transcriptFile(paths.configDir, paths.projectDir, id)) : [];
+				},
+				...(deps.inputMode && {inputMode: deps.inputMode}),
+				...(ctx.suspend && {
+					openEditor: (text: string) => ctx.suspend!(() => editInEditor(text, process.env)),
+				}),
 			});
 		});
 		// A resumed chat shows its earlier messages; the transcript was cleared for the new view.
 		if (resume && printHistory) {
 			const print = printHistory;
-			const earlier = await readHistory(transcriptFile(paths.configDir, paths.projectDir, resume)).catch(() => []);
+			const earlier = await readHistory(transcriptFile(paths.configDir, paths.projectDir, resume), 40, historyUntil).catch(() => []);
 			for (const m of earlier) print(m.role === 'user' ? formatUserLine(m.text, scrub) : formatAssistantBlock(m.text, scrub));
 			if (earlier.length > 0) print(formatNotice('Resumed — earlier messages above.', scrub));
 		}

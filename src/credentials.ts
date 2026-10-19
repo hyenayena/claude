@@ -85,6 +85,15 @@ export const storeApiKey = async (dataDir: string, value: string): Promise<void>
 	await atomicWriteFile(storedFile(dataDir), JSON.stringify(body, null, '\t') + '\n', 0o600);
 };
 
+const OAUTH_TOKEN = /^sk-ant-oat[0-9A-Za-z_-]{20,}$/;
+
+/** Saves a subscription (OAuth) token, as from "claude setup-token", to the legacy file .token (0600). */
+export const storeOauthToken = async (dataDir: string, value: string): Promise<void> => {
+	const token = value.trim();
+	if (!OAUTH_TOKEN.test(token)) throw new Error('That is not a subscription token (it should start with "sk-ant-oat").');
+	await atomicWriteFile(join(dataDir, '.token'), `${token}\n`, 0o600);
+};
+
 export const removeStored = async (dataDir: string): Promise<boolean> => {
 	const file = storedFile(dataDir);
 	try {

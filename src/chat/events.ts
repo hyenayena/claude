@@ -5,6 +5,8 @@ export type UiEvent =
 	| {kind: 'text-delta'; text: string}
 	| {kind: 'text'; messageId: string; text: string; aborted?: boolean}
 	| {kind: 'thinking'}
+	// A background or subagent task started, progressed or settled.
+	| {kind: 'task'; id: string; status: 'running' | 'completed' | 'failed' | 'stopped'; description?: string; background?: boolean; summary?: string}
 	// The text of a finished thinking block (empty when the API omits it).
 	| {kind: 'thinking-text'; text: string}
 	| {kind: 'tool-use'; toolUseId: string; name: string; input: unknown}
@@ -48,6 +50,9 @@ export interface ChatController {
 	readonly needsNewSession: boolean;
 	readonly mode: ChatMode;
 	readonly title: string | undefined;
+	// Background tasks and subagents of this chat (newest first), when the controller tracks them.
+	readonly tasks?: readonly {status: string; background: boolean}[];
+	backgroundTasks?(): Promise<boolean>;
 	readonly pendingPermissions: readonly PermissionRequest[];
 	setMode(mode: ChatMode): void;
 	answerPermission(id: string, decision: PermissionDecision): boolean;

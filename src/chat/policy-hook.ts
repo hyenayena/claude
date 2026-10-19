@@ -1,5 +1,6 @@
 import type {HookCallback, HookCallbackMatcher, HookJSONOutput} from '@anthropic-ai/claude-agent-sdk';
-import {classifyEditTarget, createCanUseTool, type Scope} from '../policy.js';
+import path from 'node:path';
+import {classifyEditTarget, createCanUseTool, PLANS_DIR, resolveReal, type Scope} from '../policy.js';
 import {agentDenial} from './agent-policy.js';
 import {POLICY_DENY} from './permission.js';
 
@@ -14,7 +15,10 @@ const denyWith = (reason: string): HookJSONOutput => ({
  * approve a call without asking `canUseTool`, so the checks are repeated here; the hook
  * never allows anything itself, it only denies.
  */
-export function createPolicyHook(scope: Scope): HookCallback {
+export function createPolicyHook(scope: Scope, configDir?: string): HookCallback {
+	const config = configDir ? path.resolve(configDir) : undefined;
+	const plans = config ? path.join(config, PLANS_DIR) : undefined;
+	const inside = (p: string, dir: string) => p === dir || p.startsWith(dir + path.sep);
 	const readTool = createCanUseTool(scope);
 	const opts = {signal: new AbortController().signal, toolUseID: 'policy-hook'} as Parameters<typeof readTool>[2];
 	return async input => {
@@ -33,12 +37,19 @@ export function createPolicyHook(scope: Scope): HookCallback {
 				if (typeof args.file_path !== 'string') return denyWith(POLICY_DENY.invalidInput);
 				const cls = await classifyEditTarget(args.file_path, scope);
 				if (cls === 'deny-outside') return denyWith(POLICY_DENY.outside);
+				// The Claude config is not Claude's to change, except the plan files plan mode writes.
+				if (config && plans) {
+					const target = await resolveReal(path.resolve(scope.roots[0] ?? '/', args.file_path)).catch(() => undefined);
+					const realConfig = await resolveReal(config).catch(() => config);
+					if (target === undefined) return denyWith(POLICY_DENY.outside);
+					if (inside(target, realConfig) && !inside(target, path.join(realConfig, PLANS_DIR))) return denyWith(POLICY_DENY.guard);
+				}
 				if (cls === 'deny-guard') return denyWith(POLICY_DENY.guard);
 				if (cls === 'deny-secret') return denyWith(POLICY_DENY.secret);
 				return allow;
 			}
 			case 'Bash':
-				return args.run_in_background || args.dangerouslyDisableSandbox ? denyWith(POLICY_DENY.background) : allow;
+				return args.dangerouslyDisableSandbox ? denyWith(POLICY_DENY.background) : allow;
 			default: {
 				const denial = agentDenial(tool, args);
 				return denial ? denyWith(denial) : allow;
@@ -47,6 +58,6 @@ export function createPolicyHook(scope: Scope): HookCallback {
 	};
 }
 
-export const policyHooks = (scope: Scope): {PreToolUse: HookCallbackMatcher[]} => ({
-	PreToolUse: [{hooks: [createPolicyHook(scope)]}],
+export const policyHooks = (scope: Scope, configDir?: string): {PreToolUse: HookCallbackMatcher[]} => ({
+	PreToolUse: [{hooks: [createPolicyHook(scope, configDir)]}],
 });

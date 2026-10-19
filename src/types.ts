@@ -32,7 +32,12 @@ export type ClaudeState = {
 	chatThinking?: 'disabled';
 	chatFastMode?: boolean;
 	chatOutputStyle?: 'Explanatory' | 'Learning';
-	chatPermissionMode?: 'acceptEdits' | 'auto';
+	chatPermissionMode?: 'acceptEdits' | 'plan' | 'auto';
+	chatInputMode?: 'vim';
+	chatMcp?: 'off';
+	chatHooks?: 'on';
+	// Bash commands allowed with "always"; they stay allowed in later chats.
+	allowedCommands?: string[];
 	subscriptionNoticeShown?: boolean;
 };
 
@@ -42,8 +47,15 @@ export type ChatQueryFn = (p: {
 }) => AsyncIterable<SDKMessage> & {
 	interrupt?: () => Promise<unknown>;
 	close?: () => void;
-	setPermissionMode?: (mode: 'default' | 'auto') => Promise<void>;
+	setPermissionMode?: (mode: 'default' | 'auto' | 'plan') => Promise<void>;
 	setModel?: (model?: string) => Promise<void>;
 	setMaxThinkingTokens?: (tokens: number | null) => Promise<void>;
 	applyFlagSettings?: (settings: Record<string, unknown>) => Promise<void>;
+	rewindFiles?: (userMessageId: string, options?: {dryRun?: boolean}) => Promise<RewindResult>;
+	stopTask?: (taskId: string) => Promise<void>;
+	backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
+	mcpServerStatus?: () => Promise<Array<{name: string; status: string; error?: string}>>;
+	reconnectMcpServer?: (name: string) => Promise<void>;
 };
+
+export type RewindResult = {canRewind: boolean; error?: string; filesChanged?: string[]; insertions?: number; deletions?: number};

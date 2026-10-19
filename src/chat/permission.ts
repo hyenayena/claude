@@ -1,8 +1,9 @@
-export type ChatMode = 'default' | 'acceptEdits' | 'auto';
-export const MODE_CYCLE: readonly ChatMode[] = ['default', 'acceptEdits', 'auto'];
+export type ChatMode = 'default' | 'acceptEdits' | 'plan' | 'auto';
+export const MODE_CYCLE: readonly ChatMode[] = ['default', 'acceptEdits', 'plan', 'auto'];
 
 /** The SDK permission mode behind a chat mode; accept-edits is implemented by the bridge. */
-export const sdkPermissionMode = (mode: ChatMode): 'auto' | 'default' => (mode === 'auto' ? 'auto' : 'default');
+export const sdkPermissionMode = (mode: ChatMode): 'auto' | 'plan' | 'default' =>
+	mode === 'auto' || mode === 'plan' ? mode : 'default';
 
 export type Highlight = {level: 'info' | 'warn'; text: string};
 
@@ -31,7 +32,7 @@ export type ToolRequest = {
 	kind: 'tool';
 	id: string;
 	seq: number;
-	toolName: 'Bash' | 'Edit' | 'Write' | 'WebFetch';
+	toolName: 'Bash' | 'Edit' | 'Write' | 'WebFetch' | 'ExitPlanMode' | 'Mcp';
 	input: Record<string, unknown>;
 	cwd: string;
 	path?: string;
@@ -82,6 +83,8 @@ export interface PermissionPrompter {
 	hasApproved(key: string): boolean;
 	remember(key: string): void;
 	audit(entry: AuditEntry): void;
+	// Leaving plan mode after an approved plan.
+	setMode?(mode: ChatMode): void;
 }
 
 export const PERMISSION_IDLE_MS = 15 * 60 * 1000;
