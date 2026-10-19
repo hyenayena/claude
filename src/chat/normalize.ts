@@ -112,6 +112,13 @@ const fromAssistant = (msg: Loose): UiEvent[] => {
 	return out;
 };
 
+const agentActivity = (parent: string, msg: Loose): UiEvent[] => {
+	const uses = blocks(msg).filter(b => b['type'] === 'tool_use');
+	const last = uses.at(-1);
+	if (!last) return [];
+	return [{kind: 'agent-activity', toolUseId: parent, name: str(last['name']) ?? '', input: last['input']}];
+};
+
 const fromUser = (msg: Loose): UiEvent[] => {
 	const out: UiEvent[] = [];
 	for (const b of blocks(msg)) {
@@ -150,7 +157,9 @@ const fromResult = (msg: Loose): UiEvent[] => {
 export const normalize = (message: SDKMessage): UiEvent[] => {
 	const msg = message as unknown as Loose;
 	if (!isRecord(msg)) return [];
-	if (msg['parent_tool_use_id'] != null) return [];
+	const parent = msg['parent_tool_use_id'];
+	// Subagent messages are not shown; only their latest tool call, next to the Agent call that runs them.
+	if (parent != null) return typeof parent === 'string' && msg['type'] === 'assistant' ? agentActivity(parent, msg) : [];
 	switch (msg['type']) {
 		case 'system':
 			return fromSystem(msg);

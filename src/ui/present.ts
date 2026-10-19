@@ -57,6 +57,14 @@ const questionArgs: ArgsSummary = input => {
 	return qs.length > 1 ? `${text} (+${qs.length - 1} more)` : text;
 };
 
+function agentArgs(input: unknown): string {
+	if (typeof input !== 'object' || input === null) return '';
+	const r = input as Record<string, unknown>;
+	const type = typeof r['subagent_type'] === 'string' ? r['subagent_type'] : undefined;
+	const what = typeof r['description'] === 'string' ? r['description'] : undefined;
+	return type && what ? `${type}: ${what}` : (type ?? what ?? '');
+}
+
 // Per-tool extension point for the one-line argument summary.
 const ARGS_REGISTRY: Record<string, ArgsSummary> = {
 	AskUserQuestion: questionArgs,
@@ -66,6 +74,9 @@ const ARGS_REGISTRY: Record<string, ArgsSummary> = {
 	NotebookEdit: field('notebook_path'),
 	WebFetch: field('url'),
 	WebSearch: field('query'),
+	Agent: agentArgs,
+	Task: agentArgs,
+	SendMessage: field('to'),
 };
 
 export function toolArgs(name: string, input: unknown, scrub: Scrub): string {
@@ -237,7 +248,8 @@ export function statusLineText(status: StatusLine): string {
 
 export function toolRunningText(tool: RunningTool, scrub: Scrub): string {
 	const secs = Math.floor(tool.elapsedSeconds);
-	return `${toolHeader(tool.name, tool.input, scrub)}${secs > 0 ? ` ${secs}s` : ''}`;
+	const activity = tool.activity ? ` → ${toolHeader(tool.activity.name, tool.activity.input, scrub)}` : '';
+	return `${toolHeader(tool.name, tool.input, scrub)}${secs > 0 ? ` ${secs}s` : ''}${activity}`;
 }
 
 export function statusBarText(

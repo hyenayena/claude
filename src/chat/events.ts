@@ -8,6 +8,8 @@ export type UiEvent =
 	| {kind: 'tool-use'; toolUseId: string; name: string; input: unknown}
 	| {kind: 'tool-result'; toolUseId: string; isError: boolean; text: string}
 	| {kind: 'tool-progress'; toolUseId: string; name: string; elapsedSeconds: number}
+	// What a subagent started by tool `toolUseId` is doing now (its latest tool call).
+	| {kind: 'agent-activity'; toolUseId: string; name: string; input: unknown}
 	| {kind: 'status'; status: 'compacting' | 'requesting' | null}
 	| {kind: 'retry'; attempt: number; maxRetries: number; delayMs: number; errorCode?: string}
 	| {kind: 'api-error'; code: string}

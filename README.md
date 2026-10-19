@@ -50,7 +50,8 @@ Display: the answer streams in a live area (tail only; running tools with a spin
 
 Behaviour and limits:
 - One streaming query per chat; a turn ends at the SDK `result`. After an interrupt the same query is reused; if no result arrives within 8 s it is recycled and the next message respawns it with `resume`.
-- 5-minute timeout per turn; at most 20 turns per user message (reaching it ends the turn with an error and the next message resumes).
+- Subagents: the chat tools are Read, Glob, Grep, Bash, Edit, Write, AskUserQuestion, `Agent` and `SendMessage`, so agents from `config/agents` (and `claude pipeline …`) run. They run in the foreground and in place: `run_in_background` and `isolation` (worktree, remote) are denied (`src/chat/agent-policy.ts`, in the bridge and the policy hook). Starting an agent does not ask; each tool call it makes goes through the same prompts, mode and path policy. Subagent messages are not shown; the running `Agent(<type>: <description>)` line shows its latest tool call (`→ Edit(/app/src/x.ts)`). `claude ask` still has no agents.
+- The turn timeout counts silence: 5 minutes without any SDK message (subagent messages included) ends the turn (`Request timed out: no activity for 300 seconds`). At most 20 turns per user message (reaching it ends the turn with an error and the next message resumes).
 - The session id is saved after each successful turn, so `claude chat` and `claude ask` continue the same session.
 - All text shown (model output, tool arguments and results, errors, your own input) is stripped of terminal escapes and bidi/control characters first, then redacted for credentials. `ask` output gets the same treatment.
 - The live area is kept shorter than the terminal (rows-3, rows-1 under 12 rows); on tiny terminals the streaming tail can shrink to nothing and several tools show as `N tools running`.

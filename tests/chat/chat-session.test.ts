@@ -211,7 +211,7 @@ test('timeout ends the turn with a message and recycles', async () => {
 	await new Promise(r => setTimeout(r, 60));
 	const end = ends()[0];
 	assert.equal(end?.type === 'turn-end' && end.outcome, 'timeout');
-	assert.equal(end?.type === 'turn-end' && end.error, 'Request timed out after 0 seconds');
+	assert.equal(end?.type === 'turn-end' && end.error, 'Request timed out: no activity for 0 seconds');
 	assert.equal(session.state, 'idle');
 	assert.equal(queries[0]?.closed, 1);
 });
@@ -712,4 +712,20 @@ test('supportedCommands adds descriptions and argument hints', async () => {
 		delete orig.supportedCommands;
 		session.close();
 	}
+});
+
+test('the turn timeout counts silence: any SDK message, subagents included, restarts it', async () => {
+	const {session, queries, ends} = setup({timeoutMs: 60, graceMs: 10});
+	session.send('x');
+	await tick();
+	const q = queries[0]!;
+	for (let i = 0; i < 4; i++) {
+		await new Promise(r => setTimeout(r, 40));
+		q.emit({type: 'assistant', parent_tool_use_id: 'agent-1', message: {content: []}});
+		await tick();
+	}
+	assert.equal(ends().length, 0, 'still running after 160 ms of steady activity');
+	await new Promise(r => setTimeout(r, 120));
+	assert.equal(ends().at(-1)?.type === 'turn-end' && ends().at(-1)!.outcome, 'timeout');
+	session.close();
 });

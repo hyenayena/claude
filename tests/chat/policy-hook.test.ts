@@ -40,6 +40,7 @@ test('the hook never allows by itself and passes calls inside the policy', async
 	assert.equal(await decision('Edit', {file_path: path.join(projectDir, 'a.txt'), old_string: 'a', new_string: 'b'}), 'pass');
 	assert.equal(await decision('Bash', {command: 'ls'}), 'pass');
 	assert.equal(await decision('AskUserQuestion', {}), 'pass');
+	assert.equal(await decision('Agent', {subagent_type: 'coder', prompt: 'x'}), 'pass');
 });
 
 test('the hook denies paths outside the policy in any mode', async () => {
@@ -51,6 +52,8 @@ test('the hook denies paths outside the policy in any mode', async () => {
 	assert.equal(await decision('Read', {file_path: paths.tokenFile}), `deny:${POLICY_DENY.outside}`);
 	assert.equal(await decision('Edit', {}), `deny:${POLICY_DENY.invalidInput}`);
 	assert.equal(await decision('Bash', {command: 'sleep 9', run_in_background: true}), `deny:${POLICY_DENY.background}`);
+	assert.equal(await decision('Agent', {prompt: 'x', run_in_background: true}), `deny:${POLICY_DENY.background}`);
+	assert.equal(await decision('Agent', {prompt: 'x', isolation: 'remote'}), `deny:${POLICY_DENY.isolation}`);
 });
 
 test('policyHooks registers the hook for PreToolUse only', () => {

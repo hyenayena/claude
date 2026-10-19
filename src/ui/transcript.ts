@@ -18,6 +18,8 @@ export interface RunningTool {
 	name: string;
 	input: unknown;
 	elapsedSeconds: number;
+	// For an Agent call: the subagent's latest tool call.
+	activity?: {name: string; input: unknown};
 }
 
 export type StatusLine =
@@ -119,6 +121,13 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 			const tools = new Map(state.tools);
 			tools.set(e.toolUseId, {id: e.toolUseId, name: e.name, input: e.input, elapsedSeconds: 0});
 			return {state: {...state, tools, status: null}, out: []};
+		}
+		case 'agent-activity': {
+			const tool = state.tools.get(e.toolUseId);
+			if (!tool) return {state, out: []};
+			const tools = new Map(state.tools);
+			tools.set(e.toolUseId, {...tool, activity: {name: e.name, input: e.input}});
+			return {state: {...state, tools}, out: []};
 		}
 		case 'tool-progress': {
 			const tool = state.tools.get(e.toolUseId);

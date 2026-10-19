@@ -1,5 +1,6 @@
 import type {HookCallback, HookCallbackMatcher, HookJSONOutput} from '@anthropic-ai/claude-agent-sdk';
 import {classifyEditTarget, createCanUseTool, type Scope} from '../policy.js';
+import {agentDenial} from './agent-policy.js';
 import {POLICY_DENY} from './permission.js';
 
 const allow: HookJSONOutput = {continue: true};
@@ -38,8 +39,10 @@ export function createPolicyHook(scope: Scope): HookCallback {
 			}
 			case 'Bash':
 				return args.run_in_background || args.dangerouslyDisableSandbox ? denyWith(POLICY_DENY.background) : allow;
-			default:
-				return allow;
+			default: {
+				const denial = agentDenial(tool, args);
+				return denial ? denyWith(denial) : allow;
+			}
 		}
 	};
 }

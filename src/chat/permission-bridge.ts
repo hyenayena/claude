@@ -3,6 +3,7 @@ import {realpath} from 'node:fs/promises';
 import path from 'node:path';
 import type {CanUseTool, PermissionResult} from '@anthropic-ai/claude-agent-sdk';
 import {classifyEditTarget, createCanUseTool, type Scope} from '../policy.js';
+import {agentDenial} from './agent-policy.js';
 import {
 	BASH_REVIEW_MAX,
 	CANCEL_MESSAGE,
@@ -325,6 +326,13 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 				if (r?.behavior === 'allow') return r;
 				prompter.audit({outcome: 'denied-by-policy', toolName, summary: 'outside scope'});
 				return r ?? deny(POLICY_DENY.outside, opts.toolUseID);
+			}
+			case 'Agent':
+			case 'Task':
+			case 'SendMessage': {
+				const denial = agentDenial(toolName, input);
+				if (denial) return policyDeny(toolName, denial, 'agent option not allowed', opts.toolUseID);
+				return {behavior: 'allow', updatedInput: input, toolUseID: opts.toolUseID};
 			}
 			case 'AskUserQuestion':
 				return handleQuestion(input, opts);

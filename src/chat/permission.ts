@@ -111,6 +111,7 @@ export const POLICY_DENY = {
 	guard: 'Access to that path is not allowed (protected Claude configuration file).',
 	secret: 'Access to that path is not allowed (secret or credential file).',
 	background: 'Background execution is not available in the chat.',
+	isolation: 'Running an agent in a worktree or remotely is not available in the chat.',
 	invalidInput: 'The tool input is invalid.',
 	unknownTool: 'That tool is not available in the chat.',
 } as const;

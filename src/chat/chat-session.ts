@@ -360,6 +360,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		try {
 			for await (const msg of handle.q) {
 				if (this.handle !== handle) return;
+				this.keepTurnAlive(handle);
 				for (const ev of normalize(msg)) {
 					if (this.handle !== handle) return;
 					this.onUi(ev, handle);
@@ -506,12 +507,21 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.turnTimer = setTimeout(
 			() =>
 				this.abortTurn(
-					{outcome: 'timeout', error: `Request timed out after ${Math.round(this.timeoutMs / 1000)} seconds`},
+					{outcome: 'timeout', error: `Request timed out: no activity for ${Math.round(this.timeoutMs / 1000)} seconds`},
 					handle,
 				),
 			ms,
 		);
 		this.turnTimer.unref();
+	}
+
+	// The timeout counts silence, not total time: any SDK message (subagents included) restarts it,
+	// so long pipelines keep going while a hung request still ends.
+	private keepTurnAlive(handle: Handle): void {
+		if (!this.turnTimer || this.turnHandle !== handle || this._state !== 'running') return;
+		clearTimeout(this.turnTimer);
+		this.turnTimer = undefined;
+		this.armTurnTimer(this.timeoutMs);
 	}
 
 	// Human waiting time must not count against the turn timeout.

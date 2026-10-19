@@ -457,3 +457,15 @@ test('revealed delimiters in prompts do not reach the highlight input', async ()
 	await call('Bash', {command: 'echo \u001b'});
 	assert.deepEqual(seen, ['echo \u001b']);
 });
+
+test('Agent and SendMessage are allowed without a prompt; background and isolated agents are denied', async () => {
+	const {call, prompter} = setup();
+	const input = {subagent_type: 'coder', description: 'x', prompt: 'do it'};
+	const r = await call('Agent', input);
+	assert.deepEqual(r, {behavior: 'allow', updatedInput: input, toolUseID: 'tu1'});
+	assert.equal((await call('SendMessage', {to: 'a1', message: 'go'}))?.behavior, 'allow');
+	assert.equal((await call('Agent', {...input, run_in_background: true}))?.behavior, 'deny');
+	const iso = await call('Agent', {...input, isolation: 'worktree'});
+	assert.equal(iso?.behavior === 'deny' && iso.message, POLICY_DENY.isolation);
+	assert.equal(prompter.requests.length, 0);
+});
