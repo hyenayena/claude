@@ -14,6 +14,7 @@ import {
 	GUARD_DENY,
 	MAX_TURNS,
 } from './policy.js';
+import {applyTuning, type ChatTuning} from './chat-prefs.js';
 import type {Credential} from './types.js';
 
 export {GUARD_DENY};
@@ -207,27 +208,31 @@ export function buildChatOptions(p: {
 	canUseTool: CanUseTool;
 	resume?: string;
 	model?: string;
+	tuning?: ChatTuning;
 	env?: Record<string, string | undefined>;
 	runtimeBin?: string;
 }): Options {
-	const {canUseTool, ...rest} = p;
+	const {canUseTool, tuning, ...rest} = p;
 	const base = buildOptions(rest);
 	const full = base.env ?? {};
 	// The credential is found by value, so no variable names are read here.
 	const keep = Object.keys(full).filter(k => full[k] === p.cred.value && p.cred.value !== '');
-	return {
-		...base,
-		env: {
-			...scrubChatEnv(full, keep),
-			CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+	return applyTuning(
+		{
+			...base,
+			env: {
+				...scrubChatEnv(full, keep),
+				CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+			},
+			systemPrompt: {type: 'preset', preset: 'claude_code', append: buildChatHint(p.paths)},
+			settings: buildChatSettings(p.paths),
+			tools: [...CHAT_TOOLS],
+			disallowedTools: [...CHAT_DISALLOWED_TOOLS],
+			permissionMode: 'default',
+			canUseTool,
 		},
-		systemPrompt: {type: 'preset', preset: 'claude_code', append: buildChatHint(p.paths)},
-		settings: buildChatSettings(p.paths),
-		tools: [...CHAT_TOOLS],
-		disallowedTools: [...CHAT_DISALLOWED_TOOLS],
-		permissionMode: 'default',
-		canUseTool,
-	};
+		tuning,
+	);
 }
 
 function readJson(file: string): Record<string, unknown> | undefined {

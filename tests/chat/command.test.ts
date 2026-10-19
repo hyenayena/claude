@@ -531,3 +531,46 @@ test('the chat view gets the host and the print of the mount control', async () 
 	s.props[0]!.print('x');
 	assert.deepEqual(printed, ['x']);
 });
+
+test('the Claude tab offers model, effort, thinking, fast mode and output style', async () => {
+	const s = await setupChat();
+	assert.deepEqual(
+		s.chat.settings!.settings.map(x => x.key),
+		['chatModel', 'chatEffort', 'chatThinking', 'chatFastMode', 'chatOutputStyle'],
+	);
+});
+
+test('chat tuning settings are stored, validated and reach new chats', async () => {
+	const s = await setupChat({run: sendOnce});
+	const by = (k: string) => s.chat.settings!.settings.find(x => x.key === k)!;
+	await by('chatEffort').set('high');
+	await by('chatThinking').set('disabled');
+	await by('chatFastMode').set('on');
+	await by('chatOutputStyle').set('Learning');
+	await assert.rejects(Promise.resolve(by('chatEffort').set('turbo')), /Unknown option/);
+	assert.equal(await by('chatFastMode').get(), 'on');
+	assert.deepEqual(await readState(s.dataDir), {
+		chatEffort: 'high',
+		chatThinking: 'disabled',
+		chatFastMode: true,
+		chatOutputStyle: 'Learning',
+	});
+	await s.chat.run([], s.ctx);
+	const o = s.q.calls[0]!.options as Record<string, unknown> & {settings: Record<string, unknown>};
+	assert.equal(o.effort, 'high');
+	assert.deepEqual(o.thinking, {type: 'disabled'});
+	assert.equal(o.settings.fastMode, true);
+	assert.equal(o.settings.outputStyle, 'Learning');
+	assert.ok(Array.isArray((o.settings.permissions as {deny: unknown}).deny));
+	await by('chatFastMode').set('');
+	assert.equal('chatFastMode' in (await readState(s.dataDir)), false);
+});
+
+test('without tuning the chat options keep the Claude Code defaults', async () => {
+	const s = await setupChat({run: sendOnce});
+	await s.chat.run([], s.ctx);
+	const o = s.q.calls[0]!.options;
+	assert.equal('effort' in o, false);
+	assert.equal('thinking' in o, false);
+	assert.equal('fastMode' in (o.settings as object), false);
+});

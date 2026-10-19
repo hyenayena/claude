@@ -11,7 +11,7 @@ It is a yena plugin (`runtime: "node"`, `entry: src/index.ts`, version 0.4.0): t
   <answer>
   [session d503c507 · model claude-haiku-5-5 · subscription token]
   ```
-- `chat [model]` — top-level command: opens a new chat (fresh session) with `model` or, without it, the chat model from the settings. It has `autostart: true`, so core opens it at startup, and it contributes the `Claude` settings tab (`Chat model`: Default, Fable 5.1, Opus, Sonnet, Haiku; stored as `chatModel` in `state.json`, unset means the account default). A model argument must match `[A-Za-z0-9][A-Za-z0-9._[\]-]*` (at most 100 chars) and is used for that chat only.
+- `chat [model]` — top-level command: opens a new chat (fresh session) with `model` or, without it, the chat model from the settings. It has `autostart: true`, so core opens it at startup, and it contributes the `Claude` settings tab, all applied to new chats and stored in `state.json` (unset keeps the Claude Code default): `Chat model` (`chatModel`: Default, Fable 5.1, Opus, Sonnet, Haiku), `Effort` (`chatEffort`: low…max, SDK `effort`), `Thinking` (`chatThinking`: Adaptive or Off, SDK `thinking: {type: 'disabled'}`), `Fast mode` (`chatFastMode`, settings flag `fastMode`), `Output style` (`chatOutputStyle`: Explanatory or Learning, settings flag `outputStyle`). Code: `src/chat-prefs.ts`. A model argument must match `[A-Za-z0-9][A-Za-z0-9._[\]-]*` (at most 100 chars) and is used for that chat only.
 - `claude chat [--new]` — opens an interactive streaming chat (see below). Continues the last session; `--new` starts a fresh one. Uses the chat model from the settings.
 - `claude new` — the next ask starts a new session (`Next ask starts a new session`).
 - `claude session` — prints `Session`, `Model`, `Chat model`, `Claude Code runtime`, `Agent SDK` and `Binary in use` (`runtime` or `bundled`).
@@ -98,7 +98,7 @@ Records (level, message, fields):
 - warn `no credential` (ask and chat); info `credential resolved` {kind, source} (ask).
 - info `ask started` {fresh, promptChars}; info `ask finished` {outcome, ms, model, numTurns, session8}; warn `ask failed` {outcome (`timeout`|`error`), ms, errClass, reason}; warn `ask timed out` {timeoutMs}; error `sdk load failed` {missingModule, err}.
 - warn `result error` {subtype, authFailed}; warn `query threw` {errClass, aborted}.
-- info `chat starting` {fresh, kind, source, resuming, model} (`model` is the chosen id or `default`); info `chat model set` {model}; error `chat dependencies failed to load` {missingModule, err}; info `chat closed` {ms, session8, model}.
+- info `chat starting` {fresh, kind, source, resuming, model} (`model` is the chosen id or `default`); info `chat setting set` {key, value}; error `chat dependencies failed to load` {missingModule, err}; info `chat closed` {ms, session8, model}.
 - info `sdk session spawned` {resuming}; info `turn started` {chars}; info `turn aborting` {outcome}; info `turn ended` {outcome, ms, reason?}; warn `sdk stream threw` {errClass}; warn `sdk stream ended unexpectedly` {authFailed}; warn `authentication failed`; warn `interrupt grace expired; recycling` {graceMs}; warn `session recycled`.
 - warn `state write failed` {code}; warn `exit hook aborting requests` {count}.
 

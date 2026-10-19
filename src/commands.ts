@@ -1,7 +1,8 @@
 import {constants} from 'node:fs';
 import {lstat, open, realpath, stat} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
-import type {Command, CommandContext, Logger, SettingOption} from '../../../src/api.js';
+import type {Command, CommandContext, Logger} from '../../../src/api.js';
+import {chatSettings, tuningFromState} from './chat-prefs.js';
 import {buildEnv, buildOptions, resolvePaths, runtimeInfo} from './config.js';
 import {
 	describeCredential,
@@ -40,13 +41,7 @@ const KEY_USAGE = 'Usage: claude auth key --from-file <path>';
 const CHAT_NEW_USAGE = 'Usage: chat [model]';
 const MAX_KEY_FILE_BYTES = 4096;
 
-export const MODEL_OPTIONS: SettingOption[] = [
-	{value: '', label: 'Default', description: 'the account default'},
-	{value: 'claude-fable-5-1', label: 'Fable 5.1'},
-	{value: 'opus', label: 'Opus', description: 'latest Opus'},
-	{value: 'sonnet', label: 'Sonnet', description: 'latest Sonnet'},
-	{value: 'haiku', label: 'Haiku', description: 'latest Haiku'},
-];
+export {MODEL_OPTIONS} from './chat-prefs.js';
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 const SUBSCRIPTION_NOTICE =
@@ -276,8 +271,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (requested !== undefined && !isModelId(requested)) {
 			throw new Error(`Invalid model "${makeScrub(s => s)(requested).slice(0, 100)}". ${CHAT_NEW_USAGE}`);
 		}
-		const model = requested ?? (await store.read()).chatModel;
-		await replaceChat(d => openChat({fresh: true, ...(model && {model})}, ctx, d));
+		const state = await store.read();
+		const model = requested ?? state.chatModel;
+		await replaceChat(d => openChat({fresh: true, ...(model && {model}), tuning: tuningFromState(state)}, ctx, d));
 	};
 
 	const newSession = async (ctx: CommandContext): Promise<void> => {
@@ -432,23 +428,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		description: 'Start a new chat with the assistant',
 		usage: 'chat [model]',
 		autostart: true,
-		settings: {
-			title: 'Claude',
-			settings: [
-				{
-					key: 'chatModel',
-					label: 'Chat model',
-					description: 'Used by new chats',
-					options: MODEL_OPTIONS,
-					get: async () => (await store.read()).chatModel ?? '',
-					set: async value => {
-						if (value !== '' && !isModelId(value)) throw new Error('Invalid model id');
-						await store.update({chatModel: value === '' ? undefined : value});
-						log.info('chat model set', {model: value === '' ? 'default' : value});
-					},
-				},
-			],
-		},
+		settings: {title: 'Claude', settings: chatSettings(store, isModelId, log)},
 		run: newChat,
 	};
 

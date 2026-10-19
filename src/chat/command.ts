@@ -1,4 +1,5 @@
 import type {CommandContext, Logger, UiElement} from '../../../../src/api.js';
+import {tuningFromState, type ChatTuning} from '../chat-prefs.js';
 import {buildChatOptions, buildEnv, resolvePaths} from '../config.js';
 import {makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
 import {clip, noopLog} from '../log.js';
@@ -34,7 +35,7 @@ export type ChatRunDeps = {
 	onMount?: (close: () => void) => void;
 };
 
-export type ChatOpen = {fresh: boolean; model?: string};
+export type ChatOpen = {fresh: boolean; model?: string; tuning?: ChatTuning};
 
 export const runChat = async (args: string[], ctx: CommandContext, deps: ChatRunDeps): Promise<void> => {
 	let fresh = false;
@@ -45,7 +46,7 @@ export const runChat = async (args: string[], ctx: CommandContext, deps: ChatRun
 	if (!ctx.mount) throw new Error(NEEDS_MOUNT_MESSAGE);
 
 	const state = await deps.store.read();
-	await openChat({fresh, ...(state.chatModel && {model: state.chatModel})}, ctx, deps);
+	await openChat({fresh, ...(state.chatModel && {model: state.chatModel}), tuning: tuningFromState(state)}, ctx, deps);
 };
 
 export const openChat = async (open: ChatOpen, ctx: CommandContext, deps: ChatRunDeps): Promise<void> => {
@@ -60,7 +61,7 @@ export const openChat = async (open: ChatOpen, ctx: CommandContext, deps: ChatRu
 };
 
 const runLocked = async (
-	{fresh, model}: ChatOpen,
+	{fresh, model, tuning}: ChatOpen,
 	ctx: CommandContext,
 	mount: NonNullable<CommandContext['mount']>,
 	deps: ChatRunDeps,
@@ -125,6 +126,7 @@ const runLocked = async (
 				abortController,
 				resume: id,
 				...(model !== undefined && {model}),
+				...(tuning && {tuning}),
 				env: buildEnv(env, paths, cred),
 				canUseTool: createChatCanUseTool({
 					scope,

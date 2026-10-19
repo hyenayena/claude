@@ -1,6 +1,7 @@
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {Logger} from '../../../src/api.js';
+import {isEffort, isOutputStyle} from './chat-prefs.js';
 import {atomicWriteFile} from './fsutil.js';
 import {noopLog} from './log.js';
 import type {ClaudeState} from './types.js';
@@ -20,6 +21,10 @@ const sanitize = (raw: unknown): ClaudeState => {
 		state.lastModel = r.lastModel;
 	}
 	if (typeof r.chatModel === 'string' && isModelId(r.chatModel)) state.chatModel = r.chatModel;
+	if (isEffort(r.chatEffort)) state.chatEffort = r.chatEffort;
+	if (r.chatThinking === 'disabled') state.chatThinking = 'disabled';
+	if (r.chatFastMode === true) state.chatFastMode = true;
+	if (isOutputStyle(r.chatOutputStyle)) state.chatOutputStyle = r.chatOutputStyle;
 	if (typeof r.subscriptionNoticeShown === 'boolean') state.subscriptionNoticeShown = r.subscriptionNoticeShown;
 	return state;
 };

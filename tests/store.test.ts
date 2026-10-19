@@ -89,3 +89,22 @@ test('chatModel keeps model ids and drops anything else', async () => {
 	await store.update({chatModel: 'bad id\u001b'});
 	assert.equal((await store.read()).chatModel, undefined);
 });
+
+test('chat tuning fields keep only known values', async () => {
+	const dir = await mkdtemp(join(tmpdir(), 'claude-store-tuning-'));
+	await writeFile(
+		join(dir, 'state.json'),
+		JSON.stringify({chatEffort: 'max', chatThinking: 'disabled', chatFastMode: true, chatOutputStyle: 'Explanatory'}),
+	);
+	assert.deepEqual(await createStore(dir).read(), {
+		chatEffort: 'max',
+		chatThinking: 'disabled',
+		chatFastMode: true,
+		chatOutputStyle: 'Explanatory',
+	});
+	await writeFile(
+		join(dir, 'state.json'),
+		JSON.stringify({chatEffort: 'turbo', chatThinking: 'on', chatFastMode: 'yes', chatOutputStyle: '../x'}),
+	);
+	assert.deepEqual(await createStore(dir).read(), {});
+});

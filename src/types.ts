@@ -28,6 +28,10 @@ export type ClaudeState = {
 	lastModel?: string;
 	// Model for new chats (an alias such as "opus" or a full model id); unset means the account default.
 	chatModel?: string;
+	chatEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+	chatThinking?: 'disabled';
+	chatFastMode?: boolean;
+	chatOutputStyle?: 'Explanatory' | 'Learning';
 	subscriptionNoticeShown?: boolean;
 };
 
