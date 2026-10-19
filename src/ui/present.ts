@@ -29,6 +29,7 @@ export const SGR = {
 	italicOff: '\u001b[23m',
 	underlineOff: '\u001b[24m',
 	fgOff: '\u001b[39m',
+	userBg: '\u001b[48;5;237m',
 } as const;
 
 const paint = (style: string, text: string): string =>
@@ -42,7 +43,8 @@ const ARGS_MAX = 100;
 const ARGS_PRE_CAP = 4096;
 
 export function formatUserLine(text: string, scrub: Scrub): string {
-	return paint(SGR.dim, `> ${scrub(text)}`);
+	const lines = scrub(text).split('\n').map((line, i) => ` ${i === 0 ? '>' : ' '} ${line} `);
+	return paint(SGR.userBg, lines.join('\n'));
 }
 
 const THINKING_LINES = 6;
