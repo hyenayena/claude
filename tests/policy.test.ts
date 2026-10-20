@@ -206,7 +206,13 @@ describe('chat static policy', () => {
 		assert.deepEqual(s.permissions.allow, [`Edit(/${paths.mdDir}/**)`]);
 		const hubbed = buildChatSettings({...paths, hubDir: '/data/md'}).permissions;
 		assert.deepEqual(hubbed.allow, ['Edit(//data/md/**)']);
-		assert.ok(hubbed.deny.includes(`Edit(/${paths.mdDir}/**)`));
+		// Claude Code resolves symlinks in rule paths: no deny rule may name the md link or the linked config folders.
+		for (const rule of hubbed.deny) {
+			assert.ok(!rule.startsWith(`Edit(/${paths.mdDir}`), rule);
+			for (const d of ['agents', 'skills', 'commands', 'output-styles']) {
+				assert.ok(!rule.startsWith(`Edit(/${paths.configDir}/${d}`), rule);
+			}
+		}
 		for (const rule of buildAskSettings(paths).permissions.deny) assert.ok(s.permissions.deny.includes(rule), rule);
 		for (const rule of GUARD_DENY) assert.ok(s.permissions.deny.includes(rule));
 		for (const rule of [
@@ -214,7 +220,6 @@ describe('chat static policy', () => {
 			`Edit(/${paths.credentialsFile})`,
 			`Edit(/${paths.stateFile})`,
 			`Edit(/${paths.configDir}/settings.json)`.replace('settings.json', '*.json'),
-			`Edit(/${paths.configDir}/agents/**)`,
 			`Edit(/${paths.configDir}/projects/**)`,
 			'Edit(//proc/**)',
 			'Edit(~/.ssh/**)',

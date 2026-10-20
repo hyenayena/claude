@@ -137,16 +137,15 @@ export function buildAskSettings(paths: PolicyPaths): {
 // Everything in the Claude config dir except plans/ (where plan mode writes its plan file): settings
 // rules cannot express "all but", so the parts are listed; the policy hook still refuses any other
 // write into the config dir.
+// agents, skills, commands and output-styles are not listed: they are symlinks into the md hub, and
+// Claude Code resolves symlinks in rule paths, so a deny rule on them would deny the hub itself. The
+// policy hook still refuses writes through those links (class 'deny-locked').
 export const CONFIG_EDIT_DENY = [
 	'*.json',
 	'*.jsonl',
 	'*.md',
-	'agents/**',
-	'commands/**',
-	'skills/**',
 	'plugins/**',
 	'hooks/**',
-	'output-styles/**',
 	'projects/**',
 	'file-history/**',
 	'sessions/**',
@@ -173,8 +172,6 @@ export function buildChatSettings(paths: PolicyPaths): {
 		`Edit(${absRule(paths.credentialsFile)})`,
 		`Edit(${absRule(paths.stateFile)})`,
 		...CONFIG_EDIT_DENY.map(p => `Edit(${absRule(paths.configDir)}/${p})`),
-		// The hub is edited at its own path, never through the md link in the data dir.
-		...(paths.hubDir && paths.hubDir !== paths.mdDir ? [`Edit(${absRule(paths.mdDir)}/**)`] : []),
 		'Edit(//proc/**)',
 		'Edit(~/.ssh/**)',
 		'Edit(**/.env*)',

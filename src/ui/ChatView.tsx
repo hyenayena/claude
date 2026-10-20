@@ -6,7 +6,7 @@ import {MODE_CYCLE, QUESTION_LIMITS, REASON_MAX} from '../chat/permission.js';
 import type {ChatMode, PermissionDecision, PermissionRequest} from '../chat/permission.js';
 import {sanitizeInput} from '../chat/sanitize.js';
 import {editorReduce, emptyEditor, MAX_INPUT, type EditorAction, type EditorState} from './editor.js';
-import {InputLine} from './InputLine.js';
+import {cursorFromClick, InputLine} from './InputLine.js';
 import {LiveTools, toolLayout} from './LiveTools.js';
 import {PermissionPrompt} from './PermissionPrompt.js';
 import {
@@ -39,6 +39,7 @@ import {
 import {QuestionPrompt} from './QuestionPrompt.js';
 import {StatusBar} from './StatusBar.js';
 import {useViewHost} from './view-host.js';
+import {mouseHost, validEvent} from './view-mouse.js';
 import {vimKey, vimStart, type VimEffect, type VimState} from './vim.js';
 import {matchFiles, mentionAt} from '../chat/files.js';
 import {
@@ -140,6 +141,8 @@ export function ChatView(props: ChatViewProps) {
 	const vimRef = useRef<VimState>(vimStart);
 	// Ctrl+O: the full transcript and the first row shown (-1 means the bottom).
 	const viewerRef = useRef<{lines: string[]; top: number} | undefined>(undefined);
+	// What the last render showed, for mouse events that arrive between renders.
+	const shownRef = useRef({columns: 0, rows: 0, inputRows: 0, vimNormal: false, statusBar: false, waiting: false});
 	const [, setTick] = useState(0);
 	const render = useCallback(() => setTick(n => n + 1), []);
 
@@ -520,26 +523,58 @@ export function ChatView(props: ChatViewProps) {
 		);
 	};
 
-	const viewerKey = (input: string, key: Key) => {
+	const scrollViewer = (width: number, height: number, step: (top: number, max: number) => number) => {
 		const v = viewerRef.current!;
+		const total = wrapPlain(v.lines, Math.max(1, width - 1)).length;
+		const max = Math.max(0, total - height);
+		const top = v.top < 0 ? max : v.top;
+		viewerRef.current = {...v, top: Math.min(max, Math.max(0, step(top, max)))};
+		render();
+	};
+
+	const viewerKey = (input: string, key: Key) => {
 		if (key.escape || input === 'q' || (key.ctrl && input === 'o')) {
 			viewerRef.current = undefined;
 			return render();
 		}
-		const total = wrapPlain(v.lines, Math.max(1, columns - 1)).length;
 		const height = viewerRows();
-		const max = Math.max(0, total - height);
-		const top = v.top < 0 ? max : v.top;
-		let next = top;
-		if (key.upArrow || input === 'k') next = top - 1;
-		else if (key.downArrow || input === 'j') next = top + 1;
-		else if (key.pageUp || input === 'b') next = top - height;
-		else if (key.pageDown || input === ' ' || input === 'f') next = top + height;
-		else if (input === 'g' || key.home) next = 0;
-		else if (input === 'G' || key.end) next = max;
-		viewerRef.current = {...v, top: Math.min(max, Math.max(0, next))};
-		render();
+		scrollViewer(columns, height, (top, max) => {
+			if (key.upArrow || input === 'k') return top - 1;
+			if (key.downArrow || input === 'j') return top + 1;
+			if (key.pageUp || input === 'b') return top - height;
+			if (key.pageDown || input === ' ' || input === 'f') return top + height;
+			if (input === 'g' || key.home) return 0;
+			if (input === 'G' || key.end) return max;
+			return top;
+		});
 	};
+
+	const onMouse = (raw: unknown): boolean => {
+		if (!validEvent(raw) || closedRef.current) return false;
+		const shown = shownRef.current;
+		if (raw.kind === 'wheel') {
+			if (!viewerRef.current) return false;
+			const height = Math.max(3, (shown.rows >= 12 ? shown.rows - 3 : shown.rows - 1) - 2);
+			scrollViewer(shown.columns, height, top => top + (raw.wheel === 'up' ? -3 : 3));
+			return true;
+		}
+		if (raw.kind !== 'press' || raw.button !== 'left') return false;
+		if (controller.pendingPermissions.length > 0 || viewerRef.current || searchRef.current || pendingModeRef.current) return false;
+		if (shown.waiting || shown.inputRows < 1) return false;
+		const below = (shown.vimNormal ? 1 : 0) + (shown.statusBar ? 1 : 0);
+		const row = shown.inputRows - 1 - (raw.height - 1 - below - raw.y);
+		if (row < 0 || row >= shown.inputRows) return false;
+		const ed = edRef.current;
+		let cursor = cursorFromClick(ed.text, ed.cursor, shown.columns, shown.inputRows, row, raw.x);
+		if (cursor === undefined) return false;
+		// NORMAL mode sits on a character, never after the last one of a line.
+		if (shown.vimNormal && cursor > 0 && (cursor === ed.text.length || ed.text[cursor] === '\n') && ed.text[cursor - 1] !== '\n') cursor--;
+		edit({type: 'moveTo', cursor});
+		return true;
+	};
+	const mouseRef = useRef(onMouse);
+	mouseRef.current = onMouse;
+	useEffect(() => mouseHost(host)?.(event => mouseRef.current(event)), [host]);
 
 	const runVimEffect = (effect: VimEffect) => {
 		switch (effect.kind) {
@@ -710,6 +745,7 @@ export function ChatView(props: ChatViewProps) {
 	// A host with a title bar shows the chat's name and this status above the chat instead.
 	const barTitle = scrub(controller.title ?? NEW_CHAT_TITLE);
 	const statusBar = host?.setTitle ? null : <StatusBar text={barStatusFull} />;
+	shownRef.current = {columns, rows, inputRows: 0, vimNormal: false, statusBar: statusBar !== null, waiting: false};
 
 	if (prompt) {
 		const layout = layoutPrompt(rows, columns);
@@ -795,6 +831,7 @@ export function ChatView(props: ChatViewProps) {
 	const toolRows = toolLayout(tools.length, t.liveRaw ? Math.floor(rem / 2) : rem).rows;
 	rem -= toolRows;
 	const tail = liveTail(t.liveRaw, scrub, Math.min(LIVE.maxTailRows, Math.max(0, rem)), columns);
+	shownRef.current = {...shownRef.current, inputRows, vimNormal, waiting: t.phase !== 'idle' && ed.text === ''};
 
 	return (
 		<Box flexDirection="column">

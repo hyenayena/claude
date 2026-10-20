@@ -25,6 +25,7 @@ export type EditorAction =
 	| {type: 'wordLeft'}
 	| {type: 'wordRight'}
 	| {type: 'yank'}
+	| {type: 'moveTo'; cursor: number}
 	| {type: 'set'; text: string}
 	| {type: 'clear'};
 
@@ -118,6 +119,8 @@ function reduce(state: EditorState, action: EditorAction): EditorState {
 			return {...state, cursor: wordStartBefore(text, cursor), truncated: false};
 		case 'wordRight':
 			return {...state, cursor: wordEndAfter(text, cursor), truncated: false};
+		case 'moveTo':
+			return {...state, cursor: Math.min(text.length, Math.max(0, Math.trunc(action.cursor) || 0)), truncated: false};
 		case 'yank':
 			return state.killed ? editorReduce(state, {type: 'insert', text: state.killed}) : state;
 		case 'set':
