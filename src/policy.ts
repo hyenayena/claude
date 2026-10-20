@@ -287,6 +287,7 @@ export type EditTargetClass =
 
 const NO_AUTO_EXACT = new Set([
 	'Makefile',
+	'yena',
 	'Dockerfile',
 	'compose.yaml',
 	'.dockerignore',

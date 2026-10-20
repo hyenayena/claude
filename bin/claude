@@ -43,6 +43,13 @@ for f in CLAUDE.md SOUL.md; do
 		mv "$DATA_DIR/$f" "$MD_DIR/$f"
 	fi
 done
+# Agents and skills live in md/ (Claude may edit them there); the config dir links to them
+for d in agents skills; do
+	mkdir -p "$MD_DIR/$d"
+	if [ ! -e "$CLAUDE_DIR/$d" ] && [ ! -L "$CLAUDE_DIR/$d" ]; then
+		ln -s "../md/$d" "$CLAUDE_DIR/$d"
+	fi
+done
 
 export CLAUDE_CONFIG_DIR="$CLAUDE_DIR"
 # Load CLAUDE.md from --add-dir folders, i.e. .yena/claude/md/CLAUDE.md

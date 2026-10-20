@@ -1,4 +1,4 @@
-import {accessSync, constants, readFileSync} from 'node:fs';
+import {accessSync, constants, lstatSync, mkdirSync, readFileSync, symlinkSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {CanUseTool, Options} from '@anthropic-ai/claude-agent-sdk';
@@ -50,6 +50,28 @@ export function resolvePaths(dataDir: string, moduleDir?: string): ClaudePaths {
 		stateFile: path.join(dataDir, 'state.json'),
 		credentialsFile: path.join(dataDir, 'credentials.json'),
 	};
+}
+
+/** Folders kept in md/ (where Claude may edit them) and linked into the config dir, where Claude Code looks for them. */
+export const MD_LINKED_DIRS = ['agents', 'skills'] as const;
+
+/**
+ * Creates md/agents and md/skills and links config/agents and config/skills to them, when missing.
+ * An existing entry in the config dir (a real folder or another link) is left alone. Best effort: errors are ignored.
+ */
+export function ensureMdLinks(paths: Pick<ClaudePaths, 'mdDir' | 'configDir'>): void {
+	for (const name of MD_LINKED_DIRS) {
+		try {
+			mkdirSync(path.join(paths.mdDir, name), {recursive: true});
+			const link = path.join(paths.configDir, name);
+			try {
+				lstatSync(link);
+				continue;
+			} catch {}
+			mkdirSync(paths.configDir, {recursive: true});
+			symlinkSync(path.relative(paths.configDir, path.join(paths.mdDir, name)), link, 'dir');
+		} catch {}
+	}
 }
 
 function isExecutable(file: string): boolean {

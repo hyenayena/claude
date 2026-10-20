@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {after, describe, it} from 'node:test';
@@ -10,6 +10,7 @@ import {
 	buildEnv,
 	buildHint,
 	buildOptions,
+	ensureMdLinks,
 	GUARD_DENY,
 	resolvePaths,
 	runtimeInfo,
@@ -352,5 +353,29 @@ describe('bin/claude parity', () => {
 			.replaceAll('$CLAUDE_DIR', paths.configDir)
 			.replaceAll('$PROJECT_DIR', paths.projectDir);
 		assert.equal(text, buildHint(paths));
+	});
+});
+
+describe('ensureMdLinks', () => {
+	it('creates md/agents and md/skills and links them from the config dir', () => {
+		const data = mkdtempSync(path.join(tmp, 'data-'));
+		const paths = {mdDir: path.join(data, 'md'), configDir: path.join(data, 'config')};
+		ensureMdLinks(paths);
+		for (const name of ['agents', 'skills']) {
+			assert.equal(readlinkSync(path.join(paths.configDir, name)), path.join('..', 'md', name));
+			assert.ok(lstatSync(path.join(paths.mdDir, name)).isDirectory());
+		}
+		writeFileSync(path.join(paths.mdDir, 'agents', 'a.md'), 'x');
+		assert.equal(readFileSync(path.join(paths.configDir, 'agents', 'a.md'), 'utf8'), 'x');
+		ensureMdLinks(paths);
+	});
+
+	it('leaves an existing config folder alone', () => {
+		const data = mkdtempSync(path.join(tmp, 'data-'));
+		const paths = {mdDir: path.join(data, 'md'), configDir: path.join(data, 'config')};
+		mkdirSync(path.join(paths.configDir, 'skills'), {recursive: true});
+		ensureMdLinks(paths);
+		assert.ok(!lstatSync(path.join(paths.configDir, 'skills')).isSymbolicLink());
+		assert.ok(lstatSync(path.join(paths.configDir, 'agents')).isSymbolicLink());
 	});
 });

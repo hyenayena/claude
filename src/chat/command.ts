@@ -1,6 +1,6 @@
 import type {CommandContext, Logger, UiElement} from '../../../../src/api.js';
 import {tuningFromState, withPatch, type ChatTuning, type LivePatch} from '../chat-prefs.js';
-import {buildChatOptions, buildEnv, resolvePaths} from '../config.js';
+import {buildChatOptions, buildEnv, ensureMdLinks, resolvePaths} from '../config.js';
 import {makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
 import {clip, noopLog} from '../log.js';
 import type {ClaudeState, ChatQueryFn, Credential, CredentialInfo} from '../types.js';
@@ -127,7 +127,7 @@ const runLocked = async (
 		if (missingModule) {
 			const raw = err instanceof Error ? err.message : '';
 			if (/ink|react/i.test(raw) && !/claude-agent-sdk/i.test(raw)) {
-				throw new Error('The chat interface dependencies (ink, react) are not installed in the yena host. Run "make install".');
+				throw new Error('The chat interface dependencies (ink, react) are not installed in the yena host. Run "./yena install".');
 			}
 			throw new Error('The Claude Agent SDK is not installed. Run modules/claude/bin/install.');
 		}
@@ -136,6 +136,7 @@ const runLocked = async (
 
 	const state = await store.read();
 	const paths = resolvePaths(dataDir, deps.moduleDir);
+	ensureMdLinks(paths);
 	const scope = buildScope(paths);
 	const resume = chosen ?? (fresh ? undefined : state.lastSessionId);
 	log.info('chat starting', {

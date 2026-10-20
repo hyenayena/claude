@@ -266,7 +266,7 @@ describe('classifyEditTarget', () => {
 	it('prompts only for the md dir and sensitive project files', async () => {
 		assert.equal(await cls(path.join(paths.mdDir, 'CLAUDE.md')), 'prompt-only');
 		for (const rel of [
-			'.git/config', '.github/w.yml', '.vscode/s.json', 'Makefile', 'Dockerfile', 'compose.yaml',
+			'.git/config', '.github/w.yml', '.vscode/s.json', 'Makefile', 'yena', 'Dockerfile', 'compose.yaml',
 			'.dockerignore', 'package.json', 'package-lock.json', 'scripts/x.sh', 'modules/claude/bin/claude',
 			'modules/claude/yena.json', 'yena-modules.json', 'modules/claude/src/a.ts',
 		]) {
@@ -275,7 +275,7 @@ describe('classifyEditTarget', () => {
 	});
 
 	it('auto-accepts ordinary project files', async () => {
-		for (const rel of ['a.txt', 'new/dir/file.ts', 'src/package.json', 'modules/claude/tests/a.ts', 'modules/other/src/a.ts']) {
+		for (const rel of ['a.txt', 'new/dir/file.ts', 'src/package.json', 'src/yena', 'modules/claude/tests/a.ts', 'modules/other/src/a.ts']) {
 			assert.equal(await cls(f(rel)), 'auto-eligible', rel);
 		}
 		assert.equal(await cls('a.txt'), 'auto-eligible');

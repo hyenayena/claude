@@ -127,7 +127,7 @@ test('missing ink or react maps to the host dependency error before mount', asyn
 		},
 	});
 	await assert.rejects(command.run(['chat'], ctx), {
-		message: 'The chat interface dependencies (ink, react) are not installed in the yena host. Run "make install".',
+		message: 'The chat interface dependencies (ink, react) are not installed in the yena host. Run "./yena install".',
 	});
 	assert.equal(mounts(), 0);
 });

@@ -8,7 +8,7 @@ import {diskCommands} from './disk-commands.js';
 import {listPrompts, listSessions, readHistory} from './chat/history.js';
 import {readSessionTitle, transcriptFile} from './chat/title.js';
 import {ago, type PickerItem} from './ui/picker-model.js';
-import {buildEnv, buildOptions, resolvePaths, runtimeInfo} from './config.js';
+import {buildEnv, buildOptions, ensureMdLinks, resolvePaths, runtimeInfo} from './config.js';
 import {
 	describeCredential,
 	inspectFileMode,
@@ -179,6 +179,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 		try {
 			const paths = resolvePaths(dataDir, deps.moduleDir);
+			ensureMdLinks(paths);
 			const resume = fresh ? undefined : state.lastSessionId;
 			const options = buildOptions({paths, cred, abortController: controller, resume, env: buildEnv(env, paths, cred)});
 			let result;

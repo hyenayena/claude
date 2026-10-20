@@ -34,7 +34,7 @@ It is a yena plugin (`runtime: "node"`, `entry: src/index.ts`, version 0.4.0): t
 
 Without a subcommand the command fails with `Usage: claude <ping|ask|chat|new|session|auth|<Claude Code command>>`.
 
-`<dataDir>` is `<YENA_DATA>/claude` (`/data/claude` in the container). It holds `md/`, `config/`, `state.json`, `credentials.json` and `.token`.
+`<dataDir>` is `<YENA_DATA>/claude` (`/data/claude` in the container). It holds `md/`, `config/`, `state.json`, `credentials.json` and `.token`. Agents and skills live in `md/agents` and `md/skills`, where Claude may edit them (each edit asks); `config/agents` and `config/skills` are symlinks to them, created when missing at the start of a chat or ask (and by `bin/claude`) so Claude Code finds them. An existing real folder there is left alone (`ensureMdLinks` in `src/config.ts`).
 
 ## Chat
 `chat` and `claude chat [--new]` show the chat as core's main view (needs a core that provides `ctx.mount`; otherwise it fails with `"claude chat" needs an interface that can show views`). Opening a chat closes the open one first; a chat cannot run together with an ask (`A chat is already open`, `An ask is already running`). Unknown arguments give `Usage: claude chat [--new]` / `Usage: chat [model]`.
@@ -82,7 +82,7 @@ Residual risks:
 
 Manual TTY check (cheap model, credential only in the environment):
 ```
-make sh
+./yena sh
 ANTHROPIC_MODEL=claude-haiku-5-5 npm run dev
 claude chat --new
 ```
@@ -137,21 +137,21 @@ Never logged: the prompt (only its length), assistant text, tool arguments and r
 `registerLogRedaction` (`src/credentials.ts`) adds an exact-value redactor for the resolved credential to the logger (once per credential, keyed by a SHA-256 digest) before `credential resolved` and every later record, in addition to the host's built-in patterns. `credentials.ts` stays the only code that reads credential names and files.
 
 ## Claude Code wrapper
-`make claude` (from the host repo) runs `bin/claude`, unchanged by the `ask` work. Its `GUARD` and `HINT` strings are kept in sync with `src/config.ts` by a test. `bin/install` refreshes Claude Code in `.runtime/`, and installs the module dependencies (the Agent SDK pinned to 0.3.302, matching the runtime) when the installed SDK version differs from the pin.
+`./yena claude` (from the host repo) runs `bin/claude`, unchanged by the `ask` work. Its `GUARD` and `HINT` strings are kept in sync with `src/config.ts` by a test. `bin/install` refreshes Claude Code in `.runtime/`, and installs the module dependencies (the Agent SDK pinned to 0.3.302, matching the runtime) when the installed SDK version differs from the pin.
 
 ## Development
 From `modules/claude`: `npm install && npm run typecheck && npm test` (`npm test` runs the `.ts` and `.tsx` tests under `tests/`; `typecheck` also checks them via `tests/tsconfig.json`). `tsc` and `tsx` still come from the host's `node_modules` and types are imported from the host's `src/api.ts`, so this only works inside the host tree. The SDK and its peers are installed in the module's own `node_modules`. Tests fake the SDK. `ink` and `react` come from the host (`/app/node_modules`) and must not be added to this module's dependencies. Every `.tsx` file must start with `import React from 'react'`: yena runs tsx from `/app`, where the module's JSX settings do not apply, and `npm test` (cwd = the module) would not notice. `tests/ui/runtime.test.ts` renders the UI components in a subprocess started from the host root to catch this (on failure it reports a missing frame text, not the `ReferenceError`). From the host root, `npm run typecheck:modules` and `npm run test:modules` run these for every module.
 
 Manual live check: use a throwaway session and a cheap model, with the credential only in the environment and never printed:
 ```
-make sh
+./yena sh
 ANTHROPIC_MODEL=claude-haiku-5-5 npm run dev
 claude ask hello
 claude new
 ```
 
 ## Host-side steps
-- `make rebuild` (or recreate the container) so the image has `ripgrep` and the container gets `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` from the host environment. These variables also reach `make claude`, where the API key takes precedence over `.token`.
+- `./yena rebuild` (or recreate the container) so the image has `ripgrep` and the container gets `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` from the host environment. These variables also reach `./yena claude`, where the API key takes precedence over `.token`.
 - Commit the module changes in this repo, and `Dockerfile` / `compose.yaml` in the host repo.
 - `npm install --prefix` on a completely fresh clone through `bin/install` has not been tested end to end.
 
