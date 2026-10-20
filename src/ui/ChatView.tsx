@@ -555,7 +555,7 @@ export function ChatView(props: ChatViewProps) {
 		if (raw.kind === 'wheel') {
 			if (!viewerRef.current) return false;
 			const height = Math.max(3, (shown.rows >= 12 ? shown.rows - 3 : shown.rows - 1) - 2);
-			scrollViewer(shown.columns, height, top => top + (raw.wheel === 'up' ? -3 : 3));
+			scrollViewer(shown.columns, height, top => top + (raw.wheel === 'up' ? -1 : 1));
 			return true;
 		}
 		if (raw.kind !== 'press' || raw.button !== 'left') return false;

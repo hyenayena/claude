@@ -991,3 +991,116 @@ test('Ctrl+O shows the full transcript with scrolling; Esc closes it', async () 
 	assert.doesNotMatch(t.lastFrame(), /Transcript/);
 	assert.match(t.lastFrame(), /API key/);
 });
+
+function mouseFakeHost() {
+	const f = fakeHost(50);
+	const listeners: Array<(e: unknown) => boolean | void> = [];
+	const host = {
+		...f.host,
+		subscribeMouse: (l: (e: unknown) => boolean | void) => {
+			listeners.push(l);
+			return () => void listeners.splice(listeners.indexOf(l), 1);
+		},
+	};
+	const send = (e: Record<string, unknown>) => {
+		const l = listeners.at(-1);
+		assert.ok(l, 'no mouse listener');
+		return l({button: 'none', shift: false, meta: false, ctrl: false, width: 50, height: 10, ...e});
+	};
+	const click = (x: number, y: number, height = 10) => send({kind: 'press', button: 'left', x, y, height});
+	return {host, listeners, send, click};
+}
+
+test('mouse: a click on the input moves the cursor there; malformed events are ignored', async () => {
+	const m = mouseFakeHost();
+	const t = setup(undefined, 'API key', {host: m.host});
+	await t.settle();
+	assert.equal(m.listeners.length, 1);
+	t.press('hello world');
+	await t.settle();
+	// The status bar is the bottom row, the input the one above it.
+	assert.equal(m.click(7, 8), true);
+	assert.equal(m.send({kind: 'press', button: 'left', x: 60, y: 8}), false);
+	assert.equal(m.send({kind: 'press', button: 'left', x: 2, y: 8, width: 'x'}), false);
+	assert.equal(m.click(7, 2), false);
+	assert.equal(m.send({kind: 'press', button: 'right', x: 2, y: 8}), false);
+	t.press('X');
+	await t.settle();
+	t.press(ENTER);
+	await t.settle();
+	assert.deepEqual(t.controller.calls.sent, ['helloX world']);
+	t.unmount();
+	assert.equal(m.listeners.length, 0);
+});
+
+test('mouse: in vim NORMAL the row above the mode line is the input and the cursor stays on a character', async () => {
+	const m = mouseFakeHost();
+	const t = setup(undefined, 'API key', {host: m.host, inputMode: () => 'vim'});
+	await t.settle();
+	t.press('abc');
+	await t.settle();
+	t.press(ESC);
+	await t.settle(60);
+	assert.equal(m.click(2, 8), false);
+	assert.equal(m.click(2, 7), true);
+	t.press('x');
+	await t.settle();
+	assert.match(t.lastFrame(), /> bc/);
+	assert.equal(m.click(40, 7), true);
+	t.press('x');
+	await t.settle();
+	assert.match(t.lastFrame(), /> b(?!c)/);
+});
+
+test('mouse: the wheel is taken only while the transcript viewer is open', async () => {
+	const m = mouseFakeHost();
+	const lines = Array.from({length: 60}, (_v, i) => `row ${i}`);
+	const t = setup({columns: 80, rows: 24}, 'API key', {host: m.host, loadTranscript: async () => lines});
+	await t.settle();
+	assert.equal(m.send({kind: 'wheel', wheel: 'up', x: 1, y: 1}), false);
+	t.press('\u000f');
+	await t.settle(60);
+	assert.match(t.lastFrame(), /row 59/);
+	assert.equal(m.send({kind: 'wheel', wheel: 'up', x: 1, y: 1}), true);
+	await t.settle();
+	assert.doesNotMatch(t.lastFrame(), /row 59/);
+	assert.match(t.lastFrame(), /row 56/);
+	assert.equal(m.send({kind: 'wheel', wheel: 'down', x: 1, y: 1}), true);
+	await t.settle();
+	assert.match(t.lastFrame(), /row 59/);
+	assert.equal(m.click(5, 8), false);
+	t.press(ESC);
+	await t.settle(60);
+	assert.equal(m.send({kind: 'wheel', wheel: 'down', x: 1, y: 1}), false);
+});
+
+test('mouse: clicks during a permission prompt or while waiting for the answer are not taken', async () => {
+	const m = mouseFakeHost();
+	const t = setup(undefined, 'API key', {...armed, host: m.host});
+	await t.settle();
+	t.press('draft');
+	await t.settle();
+	t.controller.request(toolReq());
+	await t.settle(ARM + 50);
+	assert.equal(m.click(3, 8), false);
+	t.press('y');
+	await t.settle();
+	t.press('\x15');
+	await t.settle();
+	t.controller.setState('running');
+	t.controller.emit({type: 'state', state: 'running'});
+	await t.settle();
+	assert.match(t.lastFrame(), /Waiting for the answer/);
+	assert.equal(m.click(3, 8), false);
+});
+
+test('mouse: a host without subscribeMouse changes nothing', async () => {
+	const f = fakeHost();
+	const t = setup(undefined, 'API key', {host: f.host});
+	await t.settle();
+	t.press('abc');
+	await t.settle();
+	t.press(ENTER);
+	await t.settle();
+	assert.deepEqual(t.controller.calls.sent, ['abc']);
+});

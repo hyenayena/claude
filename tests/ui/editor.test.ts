@@ -51,3 +51,12 @@ test('cap at MAX_INPUT sets truncated', () => {
 	assert.equal(t.text.length, MAX_INPUT);
 	assert.equal(t.truncated, true);
 });
+
+test('moveTo places the cursor, clamped to the text', () => {
+	const s = ins(emptyEditor, 'abc');
+	assert.equal(editorReduce(s, {type: 'moveTo', cursor: 1}).cursor, 1);
+	assert.equal(editorReduce(s, {type: 'moveTo', cursor: 99}).cursor, 3);
+	assert.equal(editorReduce(s, {type: 'moveTo', cursor: -4}).cursor, 0);
+	assert.equal(editorReduce(s, {type: 'moveTo', cursor: Number.NaN}).cursor, 0);
+	assert.equal(editorReduce(s, {type: 'moveTo', cursor: 2}).text, 'abc');
+});
