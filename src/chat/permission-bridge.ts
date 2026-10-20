@@ -274,18 +274,16 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		const resolvedPath = resolved === lexical ? undefined : resolved;
 		const summaryPath = resolvedPath === undefined ? lexical : `${lexical} -> ${resolvedPath}`;
 		if (cls === 'deny-outside') return policyDeny(toolName, POLICY_DENY.outside, summaryPath, b.id);
+		if (cls === 'deny-locked') return policyDeny(toolName, POLICY_DENY.locked, summaryPath, b.id);
 		if (cls === 'deny-guard') return policyDeny(toolName, POLICY_DENY.guard, summaryPath, b.id);
 		if (cls === 'deny-secret') return policyDeny(toolName, POLICY_DENY.secret, summaryPath, b.id);
 
 		const added = countLines(String(input.new_string ?? input.content));
 		const removed = toolName === 'Edit' ? countLines(String(input.old_string)) : 0;
-		if (
-			prompter.mode === 'acceptEdits' &&
-			cls === 'auto-eligible' &&
-			b.reasonType === undefined &&
-			!b.defaultToNo &&
-			!b.interaction
-		) {
+		// The md hub is Claude's own: no prompt in any mode, even though it lies outside the working dir.
+		const autoEdit =
+			cls === 'free' || (prompter.mode === 'acceptEdits' && cls === 'auto-eligible' && b.reasonType === undefined);
+		if (autoEdit && !b.defaultToNo && !b.interaction) {
 			prompter.audit({
 				outcome: 'auto-accepted',
 				toolName,

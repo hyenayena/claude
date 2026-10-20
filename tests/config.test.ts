@@ -42,6 +42,7 @@ describe('resolvePaths', () => {
 		const p = resolvePaths('/data/claude', '/app/modules/claude');
 		assert.equal(p.projectDir, '/app');
 		assert.equal(p.mdDir, '/data/claude/md');
+		assert.equal(p.hubDir, '/data/md');
 		assert.equal(p.configDir, '/data/claude/config');
 		assert.equal(p.runtimeBin, '/app/modules/claude/.runtime/node_modules/.bin/claude');
 		assert.equal(p.tokenFile, '/data/claude/.token');
@@ -106,7 +107,7 @@ describe('buildOptions', () => {
 	it('sets cwd, directories and setting sources', () => {
 		const o = buildOptions(base);
 		assert.equal(o.cwd, paths.projectDir);
-		assert.deepEqual(o.additionalDirectories, [paths.mdDir, paths.configDir]);
+		assert.deepEqual(o.additionalDirectories, [paths.hubDir, paths.configDir]);
 		assert.deepEqual(o.settingSources, ['user', 'project', 'local']);
 		assert.equal(o.permissionMode, 'default');
 		assert.deepEqual(o.tools, ['Read', 'Glob', 'Grep']);
@@ -349,7 +350,7 @@ describe('bin/claude parity', () => {
 		const text = (m[1] as string)
 			.replace(/\\\n/g, '')
 			.replaceAll('$DATA_DIR', paths.dataDir)
-			.replaceAll('$MD_DIR', paths.mdDir)
+			.replaceAll('$HUB_DIR', paths.hubDir)
 			.replaceAll('$CLAUDE_DIR', paths.configDir)
 			.replaceAll('$PROJECT_DIR', paths.projectDir);
 		assert.equal(text, buildHint(paths));
@@ -357,25 +358,77 @@ describe('bin/claude parity', () => {
 });
 
 describe('ensureMdLinks', () => {
-	it('creates md/agents and md/skills and links them from the config dir', () => {
+	const setup = () => {
 		const data = mkdtempSync(path.join(tmp, 'data-'));
-		const paths = {mdDir: path.join(data, 'md'), configDir: path.join(data, 'config')};
+		const claude = path.join(data, 'claude');
+		return {data, paths: {hubDir: path.join(data, 'md'), mdDir: path.join(claude, 'md'), configDir: path.join(claude, 'config')}};
+	};
+
+	it('creates the hub and links the md dir and the config folders to it', () => {
+		const {paths} = setup();
 		ensureMdLinks(paths);
+		assert.equal(readlinkSync(paths.mdDir), path.join('..', 'md'));
 		for (const name of ['agents', 'skills']) {
 			assert.equal(readlinkSync(path.join(paths.configDir, name)), path.join('..', 'md', name));
-			assert.ok(lstatSync(path.join(paths.mdDir, name)).isDirectory());
+			assert.ok(lstatSync(path.join(paths.hubDir, name)).isDirectory());
 		}
-		writeFileSync(path.join(paths.mdDir, 'agents', 'a.md'), 'x');
+		writeFileSync(path.join(paths.hubDir, 'agents', 'a.md'), 'x');
 		assert.equal(readFileSync(path.join(paths.configDir, 'agents', 'a.md'), 'utf8'), 'x');
 		ensureMdLinks(paths);
+		assert.equal(readFileSync(path.join(paths.mdDir, 'agents', 'a.md'), 'utf8'), 'x');
 	});
 
-	it('leaves an existing config folder alone', () => {
-		const data = mkdtempSync(path.join(tmp, 'data-'));
-		const paths = {mdDir: path.join(data, 'md'), configDir: path.join(data, 'config')};
+	it('moves an old md dir into a blank hub', () => {
+		const {paths} = setup();
+		mkdirSync(path.join(paths.mdDir, 'skills', 's'), {recursive: true});
+		writeFileSync(path.join(paths.mdDir, 'CLAUDE.md'), 'mine');
+		mkdirSync(path.join(paths.hubDir, 'agents'), {recursive: true});
+		ensureMdLinks(paths);
+		assert.ok(lstatSync(paths.mdDir).isSymbolicLink());
+		assert.equal(readFileSync(path.join(paths.hubDir, 'CLAUDE.md'), 'utf8'), 'mine');
+		assert.ok(lstatSync(path.join(paths.hubDir, 'skills', 's')).isDirectory());
+		assert.ok(lstatSync(path.join(paths.hubDir, 'agents')).isDirectory());
+	});
+
+	it('leaves an old md dir alone when the hub already has content', () => {
+		const {paths} = setup();
+		mkdirSync(paths.mdDir, {recursive: true});
+		writeFileSync(path.join(paths.mdDir, 'CLAUDE.md'), 'old');
+		mkdirSync(paths.hubDir, {recursive: true});
+		writeFileSync(path.join(paths.hubDir, 'CLAUDE.md'), 'hub');
+		ensureMdLinks(paths);
+		assert.ok(!lstatSync(paths.mdDir).isSymbolicLink());
+		assert.equal(readFileSync(path.join(paths.mdDir, 'CLAUDE.md'), 'utf8'), 'old');
+		assert.equal(readFileSync(path.join(paths.hubDir, 'CLAUDE.md'), 'utf8'), 'hub');
+		assert.equal(readlinkSync(path.join(paths.configDir, 'agents')), path.join('..', 'md', 'agents'));
+	});
+
+	it('links commands and output-styles too', () => {
+		const {paths} = setup();
+		ensureMdLinks(paths);
+		for (const name of ['commands', 'output-styles']) {
+			assert.equal(readlinkSync(path.join(paths.configDir, name)), path.join('..', 'md', name));
+		}
+	});
+
+	it('moves a real config folder into the hub when the hub folder is empty', () => {
+		const {paths} = setup();
+		mkdirSync(path.join(paths.configDir, 'commands'), {recursive: true});
+		writeFileSync(path.join(paths.configDir, 'commands', 'pipeline.md'), 'p');
+		ensureMdLinks(paths);
+		assert.ok(lstatSync(path.join(paths.configDir, 'commands')).isSymbolicLink());
+		assert.equal(readFileSync(path.join(paths.hubDir, 'commands', 'pipeline.md'), 'utf8'), 'p');
+	});
+
+	it('leaves a real config folder alone when the hub folder has content', () => {
+		const {paths} = setup();
 		mkdirSync(path.join(paths.configDir, 'skills'), {recursive: true});
+		writeFileSync(path.join(paths.configDir, 'skills', 'mine'), 'c');
+		mkdirSync(path.join(paths.hubDir, 'skills'), {recursive: true});
+		writeFileSync(path.join(paths.hubDir, 'skills', 'hub'), 'h');
 		ensureMdLinks(paths);
 		assert.ok(!lstatSync(path.join(paths.configDir, 'skills')).isSymbolicLink());
+		assert.equal(readFileSync(path.join(paths.configDir, 'skills', 'mine'), 'utf8'), 'c');
 		assert.ok(lstatSync(path.join(paths.configDir, 'agents')).isSymbolicLink());
 	});
 });

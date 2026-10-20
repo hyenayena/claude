@@ -202,7 +202,11 @@ describe('chat static policy', () => {
 	it('extends the ask deny list with Edit denies', () => {
 		const s = buildChatSettings(paths);
 		assert.equal(s.disableAllHooks, true);
-		assert.ok(!('allow' in s.permissions) && !('ask' in s.permissions));
+		assert.ok(!('ask' in s.permissions));
+		assert.deepEqual(s.permissions.allow, [`Edit(/${paths.mdDir}/**)`]);
+		const hubbed = buildChatSettings({...paths, hubDir: '/data/md'}).permissions;
+		assert.deepEqual(hubbed.allow, ['Edit(//data/md/**)']);
+		assert.ok(hubbed.deny.includes(`Edit(/${paths.mdDir}/**)`));
 		for (const rule of buildAskSettings(paths).permissions.deny) assert.ok(s.permissions.deny.includes(rule), rule);
 		for (const rule of GUARD_DENY) assert.ok(s.permissions.deny.includes(rule));
 		for (const rule of [
@@ -224,6 +228,27 @@ describe('chat static policy', () => {
 	});
 });
 
+describe('locked data dir', () => {
+	const hub = path.join(tmp, 'hub');
+	const lpaths = {...paths, hubDir: hub, dataDir};
+	mkdirSync(path.join(hub, 'agents'), {recursive: true});
+	mkdirSync(path.join(paths.configDir, 'plans'), {recursive: true});
+	const lscope = buildScope(lpaths, home);
+	const cls = (p: string) => classifyEditTarget(p, lscope);
+
+	it('refuses every write into the data dir, the md link included, except plans', async () => {
+		for (const f of ['new.txt', 'exports/x.md', 'state.json', 'config/settings.json', 'config/agents/x.md', 'md/CLAUDE.md']) {
+			assert.equal(await cls(path.join(dataDir, f)), 'deny-locked', f);
+		}
+		assert.equal(await cls(path.join(paths.configDir, 'plans', 'p.md')), 'prompt-only');
+	});
+
+	it('leaves the hub free at its own path', async () => {
+		assert.equal(await cls(path.join(hub, 'CLAUDE.md')), 'free');
+		assert.equal(await cls(path.join(hub, 'agents', 'new', 'x.md')), 'free');
+	});
+});
+
 describe('isGuardedPath', () => {
 	it('guards CLAUDE.md, CLAUDE.local.md and .claude/**', () => {
 		for (const f of ['CLAUDE.md', 'CLAUDE.local.md', '.claude', '.claude/x', '.claude/a/b']) {
@@ -237,7 +262,7 @@ describe('isGuardedPath', () => {
 });
 
 describe('classifyEditTarget', () => {
-	const cscope = {roots: [projectDir, paths.mdDir], denied: scope.denied};
+	const cscope = {roots: [projectDir, paths.mdDir], denied: scope.denied, free: [paths.mdDir]};
 	const cls = (p: string) => classifyEditTarget(p, cscope);
 	const f = (rel: string) => path.join(projectDir, rel);
 	writeFileSync(f('CLAUDE.md'), 'c');
@@ -263,8 +288,13 @@ describe('classifyEditTarget', () => {
 		assert.equal(await cls(f('.yena/other')), 'deny-secret');
 	});
 
-	it('prompts only for the md dir and sensitive project files', async () => {
-		assert.equal(await cls(path.join(paths.mdDir, 'CLAUDE.md')), 'prompt-only');
+	it('leaves the md dir free, including new files and folders', async () => {
+		assert.equal(await cls(path.join(paths.mdDir, 'CLAUDE.md')), 'free');
+		assert.equal(await cls(path.join(paths.mdDir, 'agents', 'new', 'x.md')), 'free');
+		assert.equal(await cls(path.join(paths.mdDir, '.env')), 'deny-secret');
+	});
+
+	it('prompts only for sensitive project files', async () => {
 		for (const rel of [
 			'.git/config', '.github/w.yml', '.vscode/s.json', 'Makefile', 'yena', 'Dockerfile', 'compose.yaml',
 			'.dockerignore', 'package.json', 'package-lock.json', 'scripts/x.sh', 'modules/claude/bin/claude',

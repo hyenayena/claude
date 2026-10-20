@@ -267,13 +267,24 @@ test('acceptEdits still prompts for markdown-adjacent, dotfile, build and decisi
 	const {call, prompter} = setup();
 	prompter.mode = 'acceptEdits';
 	const base = {old_string: 'a', new_string: 'b'};
-	await call('Edit', {file_path: path.join(mdDir, 'notes.md'), ...base});
 	await call('Edit', {file_path: f('.git/config'), ...base});
+	await call('Edit', {file_path: f('yena'), ...base});
 	await call('Edit', {file_path: f('package.json'), ...base});
 	await call('Edit', {file_path: f('src/a.ts'), ...base}, {decisionReasonType: 'workingDir'} as never);
 	await call('Edit', {file_path: f('src/a.ts'), ...base}, {defaultToNo: true});
 	assert.equal(prompter.requests.length, 5);
 	assert.equal(prompter.audits.filter(a => a.outcome === 'auto-accepted').length, 0);
+});
+
+test('edits in the md dir never ask, in any mode', async () => {
+	for (const mode of ['default', 'acceptEdits'] as const) {
+		const {call, prompter} = setup();
+		prompter.mode = mode;
+		const e = await call('Write', {file_path: path.join(mdDir, 'agents', 'x.md'), content: 'a'}, {decisionReasonType: 'workingDir'} as never);
+		assert.equal(e?.behavior, 'allow', mode);
+		assert.equal(prompter.requests.length, 0, mode);
+		assert.equal(prompter.audits[0]?.outcome, 'auto-accepted', mode);
+	}
 });
 
 test('always: eligible command is remembered and the second identical one is auto-allowed', async () => {

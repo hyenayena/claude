@@ -1,4 +1,4 @@
-import {accessSync, constants, lstatSync, mkdirSync, readFileSync, symlinkSync} from 'node:fs';
+import {accessSync, constants, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, symlinkSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {CanUseTool, Options} from '@anthropic-ai/claude-agent-sdk';
@@ -23,6 +23,8 @@ export type ClaudePaths = {
 	moduleDir: string;
 	projectDir: string;
 	dataDir: string;
+	/** The shared md hub of the md module, <YENA_DATA>/md; mdDir links to it. */
+	hubDir: string;
 	mdDir: string;
 	configDir: string;
 	runtimeBin: string;
@@ -43,6 +45,7 @@ export function resolvePaths(dataDir: string, moduleDir?: string): ClaudePaths {
 		moduleDir: mod,
 		projectDir: path.resolve(mod, '..', '..'),
 		dataDir,
+		hubDir: path.join(path.dirname(dataDir), 'md'),
 		mdDir: path.join(dataDir, 'md'),
 		configDir: path.join(dataDir, 'config'),
 		runtimeBin: path.join(mod, '.runtime', 'node_modules', '.bin', 'claude'),
@@ -52,24 +55,85 @@ export function resolvePaths(dataDir: string, moduleDir?: string): ClaudePaths {
 	};
 }
 
-/** Folders kept in md/ (where Claude may edit them) and linked into the config dir, where Claude Code looks for them. */
-export const MD_LINKED_DIRS = ['agents', 'skills'] as const;
+/**
+ * Claude Code config folders kept in the md hub (where Claude may edit them) and linked into the config
+ * dir, where Claude Code looks for them. settings and hooks stay in the config dir: they can run code
+ * and change permissions.
+ */
+export const MD_LINKED_DIRS = ['agents', 'skills', 'commands', 'output-styles'] as const;
+
+const lexists = (p: string): boolean => {
+	try {
+		lstatSync(p);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+const isEmptyDir = (p: string): boolean => {
+	try {
+		return readdirSync(p).length === 0;
+	} catch {
+		return false;
+	}
+};
+
+/** True when the hub is missing or holds nothing but empty hub folders (as the md module creates them). */
+function hubIsBlank(hub: string): boolean {
+	if (!lexists(hub)) return true;
+	try {
+		return readdirSync(hub).every(
+			n => (MD_LINKED_DIRS as readonly string[]).includes(n) && isEmptyDir(path.join(hub, n)),
+		);
+	} catch {
+		return false;
+	}
+}
+
+/** Removes a blank hub; rmdir only removes empty folders, so nothing with content can be lost. */
+function removeBlankHub(hub: string): void {
+	if (!lexists(hub)) return;
+	for (const n of readdirSync(hub)) rmdirSync(path.join(hub, n));
+	rmdirSync(hub);
+}
 
 /**
- * Creates md/agents and md/skills and links config/agents and config/skills to them, when missing.
- * An existing entry in the config dir (a real folder or another link) is left alone. Best effort: errors are ignored.
+ * Links Claude's md dir to the shared hub of the md module and the config dir to the hub's folders:
+ *   <data>/claude/md           -> ../md        (the hub, <YENA_DATA>/md)
+ *   <data>/claude/config/<dir> -> ../md/<dir>  (each of MD_LINKED_DIRS)
+ * A real md dir from before the hub is moved into the hub when the hub is blank; otherwise it is left
+ * alone (and keeps being used). A real config folder moves into the hub while the hub's folder is empty;
+ * otherwise it is left alone.
+ * Best effort: errors are ignored, so a chat still starts.
  */
-export function ensureMdLinks(paths: Pick<ClaudePaths, 'mdDir' | 'configDir'>): void {
+export function ensureMdLinks(paths: Pick<ClaudePaths, 'hubDir' | 'mdDir' | 'configDir'>): void {
+	try {
+		const md = lstatSync(paths.mdDir, {throwIfNoEntry: false});
+		if (md?.isDirectory() && hubIsBlank(paths.hubDir)) {
+			removeBlankHub(paths.hubDir);
+			renameSync(paths.mdDir, paths.hubDir);
+		}
+		for (const name of MD_LINKED_DIRS) mkdirSync(path.join(paths.hubDir, name), {recursive: true});
+		if (!lexists(paths.mdDir)) {
+			mkdirSync(path.dirname(paths.mdDir), {recursive: true});
+			symlinkSync(path.relative(path.dirname(paths.mdDir), paths.hubDir), paths.mdDir, 'dir');
+		}
+	} catch {}
 	for (const name of MD_LINKED_DIRS) {
 		try {
-			mkdirSync(path.join(paths.mdDir, name), {recursive: true});
+			const hubSub = path.join(paths.mdDir, name);
 			const link = path.join(paths.configDir, name);
-			try {
-				lstatSync(link);
-				continue;
-			} catch {}
+			const own = lstatSync(link, {throwIfNoEntry: false});
+			// A real config folder from before the hub moves into it while the hub's folder is empty.
+			if (own?.isDirectory() && (!lexists(hubSub) || isEmptyDir(hubSub))) {
+				if (lexists(hubSub)) rmdirSync(hubSub);
+				renameSync(link, hubSub);
+			}
+			mkdirSync(hubSub, {recursive: true});
+			if (lexists(link)) continue;
 			mkdirSync(paths.configDir, {recursive: true});
-			symlinkSync(path.relative(paths.configDir, path.join(paths.mdDir, name)), link, 'dir');
+			symlinkSync(path.relative(paths.configDir, hubSub), link, 'dir');
 		} catch {}
 	}
 }
@@ -116,7 +180,7 @@ export function buildEnv(
 export function buildHint(paths: ClaudePaths): string {
 	return (
 		`This project's Claude files live outside the project, in ${paths.dataDir}: ` +
-		`instructions (CLAUDE.md, SOUL.md) in ${paths.mdDir} (use ${paths.mdDir}/CLAUDE.md wherever you would use ./CLAUDE.md, e.g. for /init or remembering things) ` +
+		`instructions (CLAUDE.md, SOUL.md), agents and skills in the md hub ${paths.hubDir} (use ${paths.hubDir}/CLAUDE.md wherever you would use ./CLAUDE.md, e.g. for /init or remembering things; edit hub files at this path) ` +
 		`and Claude config (settings, agents, commands, skills) in ${paths.configDir} (instead of ./.claude). ` +
 		`Never create CLAUDE.md, CLAUDE.local.md or .claude/ inside ${paths.projectDir}.`
 	);
@@ -136,7 +200,7 @@ export function buildOptions(p: {
 	const options: Options = {
 		cwd: paths.projectDir,
 		env: p.env ?? buildEnv(process.env, paths, p.cred),
-		additionalDirectories: [paths.mdDir, paths.configDir],
+		additionalDirectories: [paths.hubDir, paths.configDir],
 		settingSources: ['user', 'project', 'local'],
 		abortController: p.abortController,
 		systemPrompt: {type: 'preset', preset: 'claude_code', append: buildHint(paths)},

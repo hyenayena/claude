@@ -37,22 +37,47 @@ fi
 if [ -d "$DATA_DIR/.claude" ] && [ ! -e "$CLAUDE_DIR" ]; then
 	mv "$DATA_DIR/.claude" "$CLAUDE_DIR"
 fi
-mkdir -p "$CLAUDE_DIR" "$MD_DIR"
-for f in CLAUDE.md SOUL.md; do
-	if [ -f "$DATA_DIR/$f" ] && [ ! -e "$MD_DIR/$f" ]; then
-		mv "$DATA_DIR/$f" "$MD_DIR/$f"
+mkdir -p "$CLAUDE_DIR"
+# Instructions and Claude Code config folders live in the md module's hub, <YENA_DATA>/md; md/ links to it
+# (an old md/ is moved there while the hub is blank) and the config dir links to the hub's folders.
+# The folder list must match MD_LINKED_DIRS in src/config.ts.
+HUB_DIR="$(dirname "$DATA_DIR")/md"
+LINKED="agents skills commands output-styles"
+hub_blank() {
+	[ ! -e "$HUB_DIR" ] && return 0
+	for e in "$HUB_DIR"/* "$HUB_DIR"/.[!.]*; do
+		[ -e "$e" ] || [ -L "$e" ] || continue
+		case " $LINKED " in *" $(basename "$e") "*) [ -z "$(ls -A "$e")" ] || return 1 ;; *) return 1 ;; esac
+	done
+	return 0
+}
+if [ -d "$MD_DIR" ] && [ ! -L "$MD_DIR" ] && hub_blank; then
+	rmdir "$HUB_DIR"/* "$HUB_DIR" 2>/dev/null || true
+	mv "$MD_DIR" "$HUB_DIR"
+fi
+mkdir -p "$HUB_DIR"
+if [ ! -e "$MD_DIR" ] && [ ! -L "$MD_DIR" ]; then
+	ln -s ../md "$MD_DIR"
+fi
+for d in $LINKED; do
+	# A real config folder from before the hub moves into it while the hub's folder is empty
+	if [ -d "$CLAUDE_DIR/$d" ] && [ ! -L "$CLAUDE_DIR/$d" ] && [ -z "$(ls -A "$MD_DIR/$d" 2>/dev/null)" ]; then
+		rmdir "$MD_DIR/$d" 2>/dev/null || true
+		mv "$CLAUDE_DIR/$d" "$MD_DIR/$d"
 	fi
-done
-# Agents and skills live in md/ (Claude may edit them there); the config dir links to them
-for d in agents skills; do
 	mkdir -p "$MD_DIR/$d"
 	if [ ! -e "$CLAUDE_DIR/$d" ] && [ ! -L "$CLAUDE_DIR/$d" ]; then
 		ln -s "../md/$d" "$CLAUDE_DIR/$d"
 	fi
 done
+for f in CLAUDE.md SOUL.md; do
+	if [ -f "$DATA_DIR/$f" ] && [ ! -e "$MD_DIR/$f" ]; then
+		mv "$DATA_DIR/$f" "$MD_DIR/$f"
+	fi
+done
 
 export CLAUDE_CONFIG_DIR="$CLAUDE_DIR"
-# Load CLAUDE.md from --add-dir folders, i.e. .yena/claude/md/CLAUDE.md
+# Load CLAUDE.md from --add-dir folders, i.e. the hub's CLAUDE.md (.yena/md/CLAUDE.md)
 export CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1
 # Updates are handled above, not by Claude Code itself
 export DISABLE_AUTOUPDATER=1
@@ -68,9 +93,9 @@ fi
 # Keep Claude from writing its files into the project (e.g. via /init or memory edits)
 GUARD='{"permissions":{"deny":["Edit(./CLAUDE.md)","Edit(./CLAUDE.local.md)","Edit(./.claude/**)"]}}'
 HINT="This project's Claude files live outside the project, in $DATA_DIR: \
-instructions (CLAUDE.md, SOUL.md) in $MD_DIR (use $MD_DIR/CLAUDE.md wherever you would use ./CLAUDE.md, e.g. for /init or remembering things) \
+instructions (CLAUDE.md, SOUL.md), agents and skills in the md hub $HUB_DIR (use $HUB_DIR/CLAUDE.md wherever you would use ./CLAUDE.md, e.g. for /init or remembering things; edit hub files at this path) \
 and Claude config (settings, agents, commands, skills) in $CLAUDE_DIR (instead of ./.claude). \
 Never create CLAUDE.md, CLAUDE.local.md or .claude/ inside $PROJECT_DIR."
 
 cd "$PROJECT_DIR"
-exec "$BIN" --add-dir "$MD_DIR" --settings "$GUARD" --append-system-prompt "$HINT" "$@"
+exec "$BIN" --add-dir "$HUB_DIR" --settings "$GUARD" --append-system-prompt "$HINT" "$@"

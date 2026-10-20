@@ -62,14 +62,26 @@ export const GUARD_DENY = [
 	'Edit(./.claude/**)',
 ];
 
+export const PLANS_DIR = 'plans';
+
 export type Scope = {
 	roots: string[];
 	denied: string[];
+	/** Roots where Claude may change anything without asking, in every mode (the md hub). */
+	free?: string[];
+	/** Dirs Claude may not write into, by the given or the resolved path (yena's Claude data dir). */
+	locked?: string[];
+	/** Parts of the locked dirs that stay writable (plan mode's plans dir). */
+	lockedExcept?: string[];
 };
 
 export type PolicyPaths = {
 	projectDir: string;
 	mdDir: string;
+	/** The md hub that mdDir links to; the one place Claude edits freely (defaults to mdDir). */
+	hubDir?: string;
+	/** yena's Claude data dir; closed for writes when given. */
+	dataDir?: string;
 	configDir: string;
 	tokenFile: string;
 	stateFile: string;
@@ -83,7 +95,10 @@ const absRule = (p: string) => `/${p}`;
 
 export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 	return {
-		roots: [paths.projectDir, paths.mdDir, paths.configDir],
+		roots: [paths.projectDir, paths.hubDir ?? paths.mdDir, paths.configDir],
+		free: [paths.hubDir ?? paths.mdDir],
+		locked: paths.dataDir ? [paths.dataDir] : [],
+		lockedExcept: [path.join(paths.configDir, PLANS_DIR)],
 		denied: [
 			paths.tokenFile,
 			paths.credentialsFile,
@@ -144,10 +159,13 @@ export const CONFIG_EDIT_DENY = [
 	'ide/**',
 ];
 
-export const PLANS_DIR = 'plans';
+
+// The md hub is Claude's to change: edits there are allowed without asking in every mode,
+// auto mode's classifier included. Deny rules still win over these.
+export const freeEditAllow = (paths: PolicyPaths): string[] => [`Edit(${absRule(paths.hubDir ?? paths.mdDir)}/**)`];
 
 export function buildChatSettings(paths: PolicyPaths): {
-	permissions: {deny: string[]};
+	permissions: {allow: string[]; deny: string[]};
 	disableAllHooks: true;
 } {
 	const editDeny = [
@@ -155,6 +173,8 @@ export function buildChatSettings(paths: PolicyPaths): {
 		`Edit(${absRule(paths.credentialsFile)})`,
 		`Edit(${absRule(paths.stateFile)})`,
 		...CONFIG_EDIT_DENY.map(p => `Edit(${absRule(paths.configDir)}/${p})`),
+		// The hub is edited at its own path, never through the md link in the data dir.
+		...(paths.hubDir && paths.hubDir !== paths.mdDir ? [`Edit(${absRule(paths.mdDir)}/**)`] : []),
 		'Edit(//proc/**)',
 		'Edit(~/.ssh/**)',
 		'Edit(**/.env*)',
@@ -163,7 +183,7 @@ export function buildChatSettings(paths: PolicyPaths): {
 		'Edit(./.yena/**)',
 	];
 	return {
-		permissions: {deny: [...buildAskSettings(paths).permissions.deny, ...editDeny]},
+		permissions: {allow: freeEditAllow(paths), deny: [...buildAskSettings(paths).permissions.deny, ...editDeny]},
 		disableAllHooks: true,
 	};
 }
@@ -283,7 +303,9 @@ export type EditTargetClass =
 	| 'deny-guard'
 	| 'deny-secret'
 	| 'prompt-only'
-	| 'auto-eligible';
+	| 'auto-eligible'
+	| 'free'
+	| 'deny-locked';
 
 const NO_AUTO_EXACT = new Set([
 	'Makefile',
@@ -319,11 +341,16 @@ export async function classifyEditTarget(filePath: string, scope: Scope): Promis
 	} catch {
 		return 'deny-outside';
 	}
+	const lexical = path.resolve(projectDir, filePath);
+	const locked = [...(scope.locked ?? []).map(d => path.resolve(d)), ...(await realList(scope.locked ?? []))];
+	const except = await realList(scope.lockedExcept ?? []);
+	if (locked.some(d => within(lexical, d) || within(real, d)) && !except.some(d => within(real, d))) return 'deny-locked';
 	const roots = await realList(scope.roots);
 	const [realProject, ...promptRoots] = roots as [string, ...string[]];
 	if (!within(real, realProject) && !promptRoots.some(r => within(real, r))) return 'deny-outside';
 	if (isGuardedPath(real, realProject)) return 'deny-guard';
 	if (!(await isPathAllowed(real, scope))) return 'deny-secret';
+	if ((await realList(scope.free ?? [])).some(r => within(real, r))) return 'free';
 	if (!within(real, realProject) || promptRoots.some(r => within(real, r))) return 'prompt-only';
 	return noAutoAccept(path.relative(realProject, real)) ? 'prompt-only' : 'auto-eligible';
 }

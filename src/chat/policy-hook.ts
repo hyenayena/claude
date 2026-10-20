@@ -37,6 +37,7 @@ export function createPolicyHook(scope: Scope, configDir?: string): HookCallback
 				if (typeof args.file_path !== 'string') return denyWith(POLICY_DENY.invalidInput);
 				const cls = await classifyEditTarget(args.file_path, scope);
 				if (cls === 'deny-outside') return denyWith(POLICY_DENY.outside);
+				if (cls === 'deny-locked') return denyWith(POLICY_DENY.locked);
 				// The Claude config is not Claude's to change, except the plan files plan mode writes.
 				if (config && plans) {
 					const target = await resolveReal(path.resolve(scope.roots[0] ?? '/', args.file_path)).catch(() => undefined);

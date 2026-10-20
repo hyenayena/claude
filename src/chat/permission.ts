@@ -113,6 +113,7 @@ export const POLICY_DENY = {
 	outside: 'Access to that path is not allowed (outside the project).',
 	guard: 'Access to that path is not allowed (protected Claude configuration file).',
 	secret: 'Access to that path is not allowed (secret or credential file).',
+	locked: "Writing there is not allowed (yena's Claude data dir). Instructions, agents and skills are edited in the md hub, at its own path.",
 	background: 'Background execution is not available in the chat.',
 	isolation: 'Running an agent in a worktree or remotely is not available in the chat.',
 	invalidInput: 'The tool input is invalid.',

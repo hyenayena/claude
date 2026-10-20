@@ -4,5 +4,8 @@
 	"description": "Claude Code integration",
 	"runtime": "node",
 	"entry": "src/index.ts",
-	"install": "bin/install"
+	"install": "bin/install",
+	"dependencies": {
+		"md": "git@github.com:hyenayena/md.git"
+	}
 }
