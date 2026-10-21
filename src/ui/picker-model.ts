@@ -1,5 +1,4 @@
-// Shared by the list picker (UI) and the commands that fill it, without loading React.
-export type PickerItem = {id: string; label: string; meta?: string};
+export type {PickerItem} from '../kit.js';
 
 export function ago(ms: number, now: number): string {
 	const s = Math.max(0, Math.round((now - ms) / 1000));

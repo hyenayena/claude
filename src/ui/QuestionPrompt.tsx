@@ -1,8 +1,9 @@
 import React from 'react';
 import {Box, Text} from 'ink';
 import type {QuestionRequest} from '../chat/permission.js';
-import {wrapRows} from '../chat/wrap.js';
-import {Frame, headerPrefix} from './PermissionPrompt.js';
+import {wrapRows} from '../kit.js';
+import {Frame} from './kit.js';
+import {headerPrefix} from './PermissionPrompt.js';
 import {questionRows, type BodyRow, type PromptLayout, type QuestionPromptState, type Reveal} from './prompt-state.js';
 
 export interface QuestionPromptProps {
@@ -56,7 +57,7 @@ export function QuestionPrompt(props: QuestionPromptProps) {
 
 	// Status bar and hint rows are outside this component's output
 	const avail = Math.max(2, layout.budget - 1 - 1 - 2 - 1);
-	const qWrapped = wrapRows(`[${reveal(spec.header)}] ${reveal(spec.question)}`, layout.width);
+	const qWrapped = wrapRows(`[${reveal(spec.header)}] ${reveal(spec.question)}`, layout.width, {mode: 'char'});
 	const qRows = Math.min(qWrapped.length, Math.max(1, avail - optionCount));
 	const body: BodyRow[] = qWrapped.slice(0, qRows).map(text => ({text, tone: 'plain'}));
 	if (qRows < qWrapped.length) body[qRows - 1] = {text: `${(body[qRows - 1] as BodyRow).text.slice(0, -1)}…`, tone: 'plain'};

@@ -1,6 +1,6 @@
 import {createElement} from 'react';
 import {ChatView, type ChatViewProps} from './ChatView.js';
-import {ListPicker, type ListPickerProps} from './ListPicker.js';
+import {ListPicker, type ListPickerProps} from './kit.js';
 
 export type {ChatViewProps, ListPickerProps};
 

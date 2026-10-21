@@ -22,7 +22,7 @@ import {
 	REASON_MAX,
 	toolUnavailableMessage,
 } from './permission.js';
-import {sanitizeForDisplay} from './sanitize.js';
+import {sanitizeBlock} from '../kit.js';
 
 export type PermissionBridgeDeps = {
 	scope: Scope;
@@ -51,7 +51,7 @@ const deny = (message: string, toolUseID?: string): PermissionResult => ({
 });
 
 const cleanReason = (s: string): string =>
-	sanitizeForDisplay(s).replace(/\s+/g, ' ').trim().slice(0, REASON_MAX);
+	sanitizeBlock(s).replace(/\s+/g, ' ').trim().slice(0, REASON_MAX);
 
 const countLines = (s: string): number => {
 	if (s === '') return 0;
@@ -184,7 +184,7 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		const entries: Array<[string, string]> = [];
 		for (const q of questions) {
 			const raw = Object.hasOwn(d.answers, q.question) ? d.answers[q.question] : undefined;
-			const value = typeof raw === 'string' ? sanitizeForDisplay(raw).slice(0, QUESTION_LIMITS.freeText) : '';
+			const value = typeof raw === 'string' ? sanitizeBlock(raw).slice(0, QUESTION_LIMITS.freeText) : '';
 			if (value.trim() === '') return deny(DISMISS_MESSAGE, id);
 			entries.push([q.question, value]);
 		}

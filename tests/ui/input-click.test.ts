@@ -38,20 +38,26 @@ test('combining marks belong to their base character', () => {
 	assert.equal(cursorFromClick(text, 0, 80, 1, 0, 4), 3);
 });
 
-test('the scrolled cursor row maps from its first shown unit', () => {
+test('the scrolled cursor row shows a left cut marker and maps from the first shown grapheme', () => {
 	const text = 'abcdefghijkl';
 	const [row] = inputRows(text, 12, 11, 1);
-	assert.equal(row?.before, 'fghijkl');
-	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 2), 5);
+	assert.equal(row?.before, '…ghijkl');
+	assert.equal(row?.leftCut, true);
+	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 2), 6, 'the marker maps to the first shown grapheme');
+	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 3), 6);
 	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 4), 7);
 	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 9), 12);
 });
 
-test('other rows start at their first unit while the cursor row scrolls', () => {
+test('other rows are cut with a right marker while the cursor row scrolls', () => {
 	const text = 'abcdefghij\nabcdefghijkl';
+	const rows = inputRows(text, text.length, 11, 2);
+	assert.equal(rows[0]?.before, 'abcdefg…');
+	assert.equal(rows[0]?.rightCut, true);
 	assert.equal(cursorFromClick(text, text.length, 11, 2, 0, 3), 1);
 	assert.equal(cursorFromClick(text, text.length, 11, 2, 0, 40), 10);
-	assert.equal(cursorFromClick(text, text.length, 11, 2, 1, 2), 16);
+	assert.equal(cursorFromClick(text, text.length, 11, 2, 1, 2), 17);
+	assert.equal(cursorFromClick(text, text.length, 11, 2, 1, 4), 18);
 });
 
 test('with the first lines scrolled off, row 0 is the first shown line', () => {
@@ -69,8 +75,9 @@ test('rows that are not shown give undefined', () => {
 	assert.equal(cursorFromClick('abc', 0, 80, 1, 0.5, 2), undefined);
 });
 
-test('a slice that starts inside a surrogate pair snaps to the cluster start', () => {
+test('a window never starts inside a surrogate pair', () => {
 	const text = 'a\u{1f600}bcdefg';
-	assert.equal(inputRows(text, text.length, 11, 1)[0]?.before.charCodeAt(0), 0xde00);
-	assert.equal(cursorFromClick(text, text.length, 11, 1, 0, 2), 1);
+	assert.equal(inputRows(text, text.length, 11, 1)[0]?.before, '…bcdefg');
+	assert.equal(cursorFromClick(text, text.length, 11, 1, 0, 2), 3);
+	assert.equal(cursorFromClick(text, text.length, 11, 1, 0, 4), 4);
 });

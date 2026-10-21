@@ -1,8 +1,7 @@
 import type {Key} from 'ink';
 import {BASH_REVIEW_MAX, PAYLOAD_REVIEW_MAX, QUESTION_LIMITS, REASON_MAX} from '../chat/permission.js';
 import type {PermissionDecision, Preview, QuestionRequest, QuestionSpec, ToolRequest} from '../chat/permission.js';
-import {sanitizeInput} from '../chat/sanitize.js';
-import {wrapRows} from '../chat/wrap.js';
+import {sanitizeMultilineInput, wrapRows, type FrameRow, type Tone} from '../kit.js';
 
 export type Reveal = (s: string) => string;
 
@@ -113,7 +112,7 @@ export function rearm<S extends {armedAt: number}>(state: S, now: number, armMs 
 const wrapIndex = (i: number, n: number): number => ((i % n) + n) % n;
 
 export function appendText(current: string, raw: string, max: number): string {
-	return (current + sanitizeInput(raw).replace(/\n/g, ' ')).slice(0, max);
+	return (current + sanitizeMultilineInput(raw).replace(/\n/g, ' ')).slice(0, max);
 }
 
 const decide = (
@@ -419,12 +418,9 @@ export function layoutPrompt(rows: number, columns: number, choiceRows = 5): Pro
 	};
 }
 
-export type Tone = 'plain' | 'dim' | 'add' | 'del' | 'warn' | 'info';
+export type {Tone};
 
-export interface BodyRow {
-	text: string;
-	tone: Tone;
-}
+export type BodyRow = FrameRow;
 
 const ALWAYS_SHOWN = 100;
 const NOTE_MAX = 500;
@@ -433,7 +429,7 @@ const DESCRIPTION_MAX = 300;
 const clip = (s: string, max: number): string => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 
 function pushWrapped(rows: BodyRow[], text: string, tone: Tone, width: number, indent = ''): void {
-	const parts = wrapRows(text, Math.max(1, width - indent.length));
+	const parts = wrapRows(text, Math.max(1, width - indent.length), {mode: 'char'});
 	parts.forEach((part, i) => rows.push({text: `${i === 0 ? '' : indent}${part}`, tone}));
 }
 
@@ -459,7 +455,7 @@ function previewRows(preview: Preview, reveal: Reveal, width: number): BodyRow[]
 		const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' ';
 		const gutter = `${row.no === undefined ? ' '.repeat(digits) : String(row.no).padStart(digits)} ${sign} `;
 		const tone: Tone = row.kind === 'add' ? 'add' : row.kind === 'del' ? 'del' : 'plain';
-		const parts = wrapRows(text, Math.max(1, width - gutter.length));
+		const parts = wrapRows(text, Math.max(1, width - gutter.length), {mode: 'char'});
 		parts.forEach((part, i) => rows.push({text: `${i === 0 ? gutter : ' '.repeat(gutter.length)}${part}`, tone}));
 	}
 	return rows;

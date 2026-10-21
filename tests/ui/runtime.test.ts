@@ -12,7 +12,7 @@ const testkit = pathToFileURL(fileURLToPath(new URL('./testkit.ts', import.meta.
 const script = `
 import React from 'react';
 const {mountHarness, fakeController} = await import(${JSON.stringify(testkit)});
-const {StatusBar} = await import(${JSON.stringify(src('StatusBar.tsx'))});
+const {StatusBar, ListPicker, Frame, Spinner, SPINNERS} = await import(${JSON.stringify(src('kit.ts'))});
 const {InputLine} = await import(${JSON.stringify(src('InputLine.tsx'))});
 const {LiveTools} = await import(${JSON.stringify(src('LiveTools.tsx'))});
 const {ChatView} = await import(${JSON.stringify(src('ChatView.tsx'))});
@@ -28,6 +28,9 @@ const show = async (name, el) => {
 	h.unmount();
 };
 await show('StatusBar', React.createElement(StatusBar, {text: 'status-ok'}));
+await show('ListPicker', React.createElement(ListPicker, {title: 'picker-title', empty: 'none', action: 'resume', items: [{id: '1', label: 'picker-ok'}], onPick() {}, close() {}}));
+await show('Frame', React.createElement(Frame, {rows: [{text: 'frame-ok', tone: 'plain'}], width: 40}));
+await show('Spinner', React.createElement(Spinner, {frames: SPINNERS.squareCorners, intervalMs: 180}));
 await show('InputLine', React.createElement(InputLine, {text: 'input-ok', cursor: 2, columns: 80, running: false, maxRows: 5}));
 await show('LiveTools', React.createElement(LiveTools, {tools: [{id: 't', name: 'Bash', input: {command: 'tools-ok'}, elapsedSeconds: 0}], scrub: s => s, maxRows: 4}));
 await show('ChatView', React.createElement(ChatView, {controller: fakeController(), print() {}, close() {}, scrub: s => s, credentialLabel: 'chat-ok'}));
@@ -54,6 +57,9 @@ test('ui components render under tsx run from the host root', () => {
 	assert.doesNotMatch(result.stderr, /ReferenceError|React is not defined/);
 	const frames = JSON.parse(result.stdout.slice(result.stdout.indexOf('FRAMES:') + 7)) as Record<string, string>;
 	assert.match(frames['StatusBar'] as string, /status-ok/);
+	assert.match(frames['ListPicker'] as string, /picker-ok/);
+	assert.match(frames['Frame'] as string, /frame-ok/);
+	assert.match(frames['Spinner'] as string, /[◰◳◲◱]/);
 	assert.match(frames['InputLine'] as string, /input-ok/);
 	assert.match(frames['LiveTools'] as string, /Bash\(tools-ok\)/);
 	assert.match(frames['ChatView'] as string, /chat-ok/);

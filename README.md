@@ -1,7 +1,7 @@
 # claude
 Claude Code integration for yena.
 
-It is a yena plugin (`runtime: "node"`, `entry: src/index.ts`, version 0.4.0): the host loads it at startup and adds the `claude` command. It does not depend on `core`. `claude ask` and `claude chat` run the Claude Agent SDK in a read-only mode.
+It is a yena plugin (`runtime: "node"`, `entry: src/index.ts`, version 0.5.0): the host loads it at startup and adds the `claude` command. It requires core 0.2.0+ (declared in `yena.json`): text helpers and UI pieces come from core's public kit, imported only through `src/kit.ts` and `src/ui/kit.ts`; `ping` and `ask` never load React, Ink or the kit UI. `claude ask` and `claude chat` run the Claude Agent SDK in a read-only mode.
 
 ## Commands
 - `claude ping` — prints `pong`; confirms the module is loaded.
@@ -42,7 +42,7 @@ Without a subcommand the command fails with `Usage: claude <ping|ask|chat|new|se
 Next to core's console (`control.host` present) the chat reads keys only while focused, lays out in the width the host gives, ignores the console toggle (`§` or Ctrl+T, via `host.isHostKey(input, key)`), moves the input to the console with → on an empty draft, and Esc never leaves it (only Ctrl+C does): Esc twice on an idle, empty draft opens the console (`host.togglePanel()`), and Esc while an interrupt is pending does nothing.
 
 Keys:
-- Enter sends. Alt+Enter or Shift+Enter inserts a newline; a bracketed paste is inserted sanitized and never submitted. Input is limited to 32000 characters (`Input truncated to 32000 characters`).
+- Enter sends. Alt+Enter or Shift+Enter inserts a newline; a bracketed paste is inserted sanitized and never submitted. The input line scrolls by cells (widths by grapheme, wide characters count as two) and marks cut text with `…`. Input is limited to 32000 characters (`Input truncated to 32000 characters`).
 - Esc while an answer runs interrupts it; the next message continues the same conversation. Esc while idle clears the draft, or leaves the chat when the draft is empty. Ctrl+C interrupts a running answer, or leaves the chat when idle.
 - Enter while an answer runs is refused (`Wait for the answer or press Esc to interrupt`) and the draft is kept; there is no message queue.
 - `:q` (or `:q!`) as the whole message exits yena (through `host.quit()`; without a host it leaves the chat); it is never sent.
@@ -56,7 +56,7 @@ Permission modes: the `Permission mode` setting (`chatPermissionMode` in `state.
 - `auto`: the SDK `permissionMode: 'auto'` — Claude Code's model classifier approves or denies each tool call and only asks (through the usual prompt) when it cannot decide. A running query is switched with `Query.setPermissionMode`; a new one gets it in its options. If the SDK rejects it (account, model or version without auto mode), the chat falls back to `default` and prints `Auto mode is unavailable: <reason>`.
 - The hard path policy holds in every mode: a `PreToolUse` hook (`src/chat/policy-hook.ts`, passed as the SDK `hooks` option, which `disableAllHooks` does not cover) denies reads outside the roots, Edit/Write outside the project or into guarded/secret paths, and background Bash, even when the classifier approved the call. Settings deny rules still apply too. What auto mode does not limit: Bash commands inside the container that the classifier approves.
 
-Display: the answer streams in a live area (tail only; running tools with a spinner, thinking and retry status); a completed answer or tool block is then printed once into the scrollback. Tool blocks show the call and the first 3 lines of the result plus `… +N more lines`. Next to core (`host.setTitle` present) a bar above the chat shows the chat's name on the left and the status on the right: `subscription token · claude-haiku-5-5 · 5646e143 · idle · mode: default` (credential, model, session prefix, phase or `awaiting approval`, mode); without a host the same status is the last line of the chat. No cost is shown. The name is `New chat`, then the first message (first line, at most 60 characters), then the title Claude Code generates (`ai-title`, or a `/rename` `custom-title`) read from the session transcript `config/projects/<project>/<session>.jsonl` after each turn and again 3 s and 10 s later; a resumed chat reads it at once (`src/chat/title.ts`). Leaving prints `[chat closed · session <id8> · model <model>]`.
+Display: the answer streams in a live area (tail only; running tools with a spinner, thinking with a corner-square spinner, and retry status); a completed answer or tool block is then printed once into the scrollback. Tool blocks show the call and the first 3 lines of the result plus `… +N more lines`. Next to core (`host.setTitle` present) a bar above the chat shows the chat's name on the left and the status on the right: `subscription token · claude-haiku-5-5 · 5646e143 · idle · mode: default` (credential, model, session prefix, phase or `awaiting approval`, mode); without a host the same status is the last line of the chat. No cost is shown. The name is `New chat`, then the first message (first line, at most 60 characters), then the title Claude Code generates (`ai-title`, or a `/rename` `custom-title`) read from the session transcript `config/projects/<project>/<session>.jsonl` after each turn and again 3 s and 10 s later; a resumed chat reads it at once (`src/chat/title.ts`). Leaving prints `[chat closed · session <id8> · model <model>]`.
 
 Behaviour and limits:
 - One streaming query per chat; a turn ends at the SDK `result`. After an interrupt the same query is reused; if no result arrives within 8 s it is recycled and the next message respawns it with `resume`.
@@ -76,7 +76,7 @@ Behaviour and limits:
 - Same read-only policy as `ask` (Glob/Grep/Read). Permission prompts, Edit/Write and a diff view are a later phase.
 
 Residual risks:
-- Output escaping relies on this module's sanitizer, because Ink passes OSC/SGR/bidi sequences through.
+- Output escaping relies on core's kit sanitizer (`sanitizeBlock`, then this module's redaction), because Ink passes OSC/SGR/bidi sequences through.
 - A view that ignores Ctrl+C cannot be interrupted; the chat handles it.
 - If yena is killed by SIGTERM/SIGKILL, the `claude` child lingers until its stdin closes (a few seconds; a turn in progress may keep running until then). Closing the chat on unmount is a mitigation, not a guarantee.
 - Sub-agent messages are not shown.

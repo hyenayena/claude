@@ -1,18 +1,12 @@
-import React, {useEffect, useState} from 'react';
+import React from 'react';
 import {Box, Text} from 'ink';
 import {toolRunningText, type Scrub} from './present.js';
+import {SPINNERS, useSpinnerFrame} from './kit.js';
 import {LIVE, type RunningTool} from './transcript.js';
 
-const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
 export function LiveTools({tools, scrub, maxRows}: {tools: RunningTool[]; scrub: Scrub; maxRows: number}) {
-	const [frame, setFrame] = useState(0);
 	const active = tools.length > 0;
-	useEffect(() => {
-		if (!active) return;
-		const timer = setInterval(() => setFrame(f => (f + 1) % FRAMES.length), 120);
-		return () => clearInterval(timer);
-	}, [active]);
+	const frame = useSpinnerFrame(SPINNERS.braille, 120, active);
 
 	const {shown, more} = toolLayout(tools.length, maxRows);
 	if (!active || maxRows <= 0) return null;
@@ -20,7 +14,7 @@ export function LiveTools({tools, scrub, maxRows}: {tools: RunningTool[]; scrub:
 		<Box flexDirection="column">
 			{tools.slice(0, shown).map(tool => (
 				<Text key={tool.id} wrap="truncate">
-					{FRAMES[frame]} {toolRunningText(tool, scrub)}
+					{frame} {toolRunningText(tool, scrub)}
 				</Text>
 			))}
 			{more > 0 && (

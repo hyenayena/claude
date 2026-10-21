@@ -1104,3 +1104,16 @@ test('mouse: a host without subscribeMouse changes nothing', async () => {
 	await t.settle();
 	assert.deepEqual(t.controller.calls.sent, ['abc']);
 });
+
+test('thinking status shows an animated squareCorners spinner', async () => {
+	const t = setup();
+	await t.settle();
+	t.controller.ui({kind: 'thinking'});
+	await t.settle();
+	const first = t.lastFrame().match(/([◰◳◲◱]) thinking…/);
+	assert.ok(first, 'spinner frame before the status text');
+	await t.settle(400);
+	const later = t.lastFrame().match(/([◰◳◲◱]) thinking…/);
+	assert.ok(later);
+	assert.notEqual(later[1], first[1]);
+});

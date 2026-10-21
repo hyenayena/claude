@@ -4,7 +4,7 @@ import type {ViewHost} from '../../../../src/api.js';
 import type {ChatController, ChatEvent} from '../chat/events.js';
 import {MODE_CYCLE, QUESTION_LIMITS, REASON_MAX} from '../chat/permission.js';
 import type {ChatMode, PermissionDecision, PermissionRequest} from '../chat/permission.js';
-import {sanitizeInput} from '../chat/sanitize.js';
+import {sanitizeMultilineInput, wrapLines} from '../kit.js';
 import {editorReduce, emptyEditor, MAX_INPUT, type EditorAction, type EditorState} from './editor.js';
 import {cursorFromClick, InputLine} from './InputLine.js';
 import {LiveTools, toolLayout} from './LiveTools.js';
@@ -18,7 +18,6 @@ import {
 	statusLineText,
 	todoLines,
 	queuedLines,
-	wrapPlain,
 	type Scrub,
 } from './present.js';
 import {
@@ -37,8 +36,7 @@ import {
 	type ToolPromptState,
 } from './prompt-state.js';
 import {QuestionPrompt} from './QuestionPrompt.js';
-import {StatusBar} from './StatusBar.js';
-import {useViewHost} from './view-host.js';
+import {SPINNERS, Spinner, StatusBar, useViewHost} from './kit.js';
 import {mouseHost, validEvent} from './view-mouse.js';
 import {vimKey, vimStart, type VimEffect, type VimState} from './vim.js';
 import {matchFiles, mentionAt} from '../chat/files.js';
@@ -111,7 +109,7 @@ export function ChatView(props: ChatViewProps) {
 	const armMs = props.armMs ?? ARM_MS;
 	const terminal = useWindowSize();
 	const rows = terminal.rows;
-	const {focused, columns} = useViewHost(props.host, terminal.columns);
+	const {focused, columns} = useViewHost(props.host);
 	const host = props.host;
 
 	// Keys and events can arrive faster than React re-renders, so refs hold the truth.
@@ -256,9 +254,9 @@ export function ChatView(props: ChatViewProps) {
 	const insertPasted = useCallback(
 		(raw: string) => {
 			const before = edRef.current;
-			edit({type: 'insert', text: sanitizeInput(raw)});
+			edit({type: 'insert', text: sanitizeMultilineInput(raw)});
 			const after = edRef.current;
-			const requested = sanitizeInput(raw).length;
+			const requested = sanitizeMultilineInput(raw).length;
 			if (after.truncated || after.text.length - before.text.length < requested) {
 				setT(setNotice(tRef.current, `Input truncated to ${MAX_INPUT} characters`));
 			}
@@ -525,7 +523,7 @@ export function ChatView(props: ChatViewProps) {
 
 	const scrollViewer = (width: number, height: number, step: (top: number, max: number) => number) => {
 		const v = viewerRef.current!;
-		const total = wrapPlain(v.lines, Math.max(1, width - 1)).length;
+		const total = wrapLines(v.lines, Math.max(1, width - 1), {mode: 'char'}).length;
 		const max = Math.max(0, total - height);
 		const top = v.top < 0 ? max : v.top;
 		viewerRef.current = {...v, top: Math.min(max, Math.max(0, step(top, max)))};
@@ -600,7 +598,7 @@ export function ChatView(props: ChatViewProps) {
 			text => {
 				if (text === undefined || closedRef.current) return;
 				undoRef.current.push(before);
-				edRef.current = editorReduce(edRef.current, {type: 'set', text: sanitizeInput(text)});
+				edRef.current = editorReduce(edRef.current, {type: 'set', text: sanitizeMultilineInput(text)});
 				render();
 			},
 			(error: unknown) => print(formatError(error instanceof Error ? error.message : String(error), scrub)),
@@ -782,7 +780,7 @@ export function ChatView(props: ChatViewProps) {
 
 	if (viewerRef.current) {
 		const v = viewerRef.current;
-		const wrapped = wrapPlain(v.lines, Math.max(1, columns - 1));
+		const wrapped = wrapLines(v.lines, Math.max(1, columns - 1), {mode: 'char'});
 		const height = viewerRows();
 		const max = Math.max(0, wrapped.length - height);
 		const top = v.top < 0 ? max : Math.min(v.top, max);
@@ -851,7 +849,16 @@ export function ChatView(props: ChatViewProps) {
 					{line}
 				</Text>
 			))}
-			{statusRows > 0 && <Text dimColor wrap="truncate">{statusText}</Text>}
+			{statusRows > 0 && (
+				<Text dimColor wrap="truncate">
+					{t.status?.kind === 'thinking' && (
+						<>
+							<Spinner frames={SPINNERS.squareCorners} intervalMs={180} />{' '}
+						</>
+					)}
+					{statusText}
+				</Text>
+			)}
 			{noticeRows > 0 && (
 				<Text dimColor wrap={noticeRows >= noticeNeeded ? 'wrap' : 'truncate'}>
 					{noticeText}

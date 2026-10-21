@@ -49,18 +49,6 @@ export function formatUserLine(text: string, scrub: Scrub): string {
 
 const THINKING_LINES = 6;
 
-/** Plain lines cut to a width (no styling inside), for the transcript viewer. */
-export function wrapPlain(lines: readonly string[], width: number): string[] {
-	const w = Math.max(1, width);
-	const out: string[] = [];
-	for (const line of lines) {
-		const chars = [...line];
-		if (chars.length === 0) out.push('');
-		for (let i = 0; i < chars.length; i += w) out.push(chars.slice(i, i + w).join(''));
-	}
-	return out;
-}
-
 /** A finished thinking block: dim and italic, cut to its first lines. */
 export function formatThinking(text: string, scrub: Scrub): string {
 	const lines = scrub(clampChars(text, BLOCK_DISPLAY_CAP)).trim().split('\n');

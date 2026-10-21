@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {afterEach, test} from 'node:test';
 import React from 'react';
-import {stringWidth} from '../../src/chat/wrap.js';
+import {stringCells} from '../../src/kit.js';
 import {makeReveal} from '../../src/chat/reveal.js';
 import {makeScrub} from '../../src/chat/scrub.js';
 import type {PermissionRequest} from '../../src/chat/permission.js';
@@ -99,7 +99,7 @@ for (const [name, request] of Object.entries(hostile)) {
 				assert.ok(lines.length <= rows - 1, `${tag}: ${lines.length} rows`);
 				for (const line of lines) {
 					const plain = line.replace(SGR, '');
-					assert.ok(stringWidth(plain) <= columns, `${tag}: ${stringWidth(plain)} cells`);
+					assert.ok(stringCells(plain) <= columns, `${tag}: ${stringCells(plain)} cells`);
 					assert.doesNotMatch(plain, RAW_CONTROL, `${tag}: raw control character`);
 				}
 				assert.match(frame.replace(SGR, ''), /API key/, `${tag}: status bar`);

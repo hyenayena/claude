@@ -6,14 +6,15 @@ import {
 	clipBody,
 	isRestricted,
 	toolBodyRows,
-	type BodyRow,
 	type PromptLayout,
 	type Reveal,
 	type Tone,
 	type ToolPromptState,
 } from './prompt-state.js';
+import {Frame} from './kit.js';
 
-const TONE: Record<Tone, {color?: string; dim?: boolean}> = {
+// Colours of the full-view pager rows (the bordered Frame is the kit's).
+const PAGER_TONE: Record<Tone, {color?: string; dim?: boolean}> = {
 	plain: {},
 	dim: {dim: true},
 	add: {color: 'green'},
@@ -32,20 +33,6 @@ export function toolHeader(req: ToolRequest, reveal: Reveal): string {
 	return `${req.toolName}: ${reveal(req.path ?? String(req.input['file_path'] ?? ''))}`;
 }
 
-export function Frame({rows, width}: {rows: BodyRow[]; width: number}) {
-	const rule = '─'.repeat(Math.max(2, Math.min(width, 72)));
-	return (
-		<Box flexDirection="column">
-			<Text dimColor wrap="truncate">{`┌${rule}`}</Text>
-			{rows.map((row, i) => (
-				<Text key={i} wrap="truncate" color={TONE[row.tone].color} dimColor={TONE[row.tone].dim === true}>
-					{`│ ${row.text}`}
-				</Text>
-			))}
-			<Text dimColor wrap="truncate">{`└${rule}`}</Text>
-		</Box>
-	);
-}
 
 export interface PermissionPromptProps {
 	request: ToolRequest;
@@ -92,7 +79,7 @@ export function PermissionPrompt(props: PermissionPromptProps) {
 					{`Full view · rows ${range} · ↑/↓ PgUp/PgDn Home/End · Esc returns`}
 				</Text>
 				{slice.map((row, i) => (
-					<Text key={i} wrap="truncate" color={TONE[row.tone].color} dimColor={TONE[row.tone].dim === true}>
+					<Text key={i} wrap="truncate" color={PAGER_TONE[row.tone].color} dimColor={PAGER_TONE[row.tone].dim === true}>
 						{`│ ${row.text}`}
 					</Text>
 				))}
