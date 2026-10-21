@@ -6,6 +6,7 @@ import type {ChatQueryFn} from '../../src/types.js';
 import {ChatSession} from '../../src/chat/chat-session.js';
 import type {ChatEvent} from '../../src/chat/events.js';
 import {MAX_QUEUE, PERMISSION_IDLE_MS, type PermissionDecision, type PermissionPrompter, type PermissionRequest} from '../../src/chat/permission.js';
+import type {Clock} from '../../src/chat/limits.js';
 import {makeFakeLog} from '../helpers/fake-log.js';
 
 const SECRET = 'sk-ant-oat-TESTVALUE0123456789abcdef';
@@ -69,7 +70,7 @@ class FakeQuery {
 	}
 }
 
-const setup = (o: {timeoutMs?: number; graceMs?: number; initialResume?: string} = {}) => {
+const setup = (o: {timeoutMs?: number; graceMs?: number; initialResume?: string; clock?: Clock} = {}) => {
 	const log = makeFakeLog();
 	const queries: FakeQuery[] = [];
 	const resumes: Array<string | undefined> = [];
@@ -755,5 +756,202 @@ test('tasks are tracked from task messages; a settled background task keeps its 
 	assert.equal(settled?.event.background, true);
 	await session.stopTask('t2');
 	assert.deepEqual(q.stopped, ['t2']);
+	session.close();
+});
+
+const NOW_S = Math.floor(Date.now() / 1000);
+const clock: Clock = {now: () => NOW_S * 1000, timeZone: 'UTC'};
+const CLI_TEXT = "You've hit your limit · resets 3pm";
+const limitError = () => ({type: 'assistant', error: 'rate_limit', message: {id: 'm', content: [{type: 'text', text: CLI_TEXT}]}, parent_tool_use_id: null});
+const rejected = () => ({
+	type: 'rate_limit_event',
+	rate_limit_info: {status: 'rejected', resetsAt: NOW_S + 3600, rateLimitType: 'five_hour', utilization: 1},
+});
+const errResult = (extra: Record<string, unknown> = {}) => ({
+	type: 'result',
+	subtype: 'success',
+	is_error: true,
+	result: 'Prompt is too long',
+	session_id: 'sess-1',
+	...extra,
+});
+
+test('a usage limit ends the turn as limit, keeps the session and the query', async () => {
+	const {session, queries, ends, log} = setup({clock});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit(rejected());
+	queries[0]?.emit(limitError());
+	queries[0]?.emit(errResult({result: CLI_TEXT}));
+	await tick();
+	const end = ends()[0] as {outcome: string; error?: string};
+	assert.equal(end.outcome, 'limit');
+	assert.match(end.error ?? '', /Usage limit reached/);
+	assert.match(end.error ?? '', /resets at /);
+	assert.equal(session.sessionId, 'sess-1');
+	assert.equal(session.rateLimit?.status, 'rejected');
+	assert.equal(queries[0]?.closed, 0);
+	session.send('two');
+	assert.equal(queries.length, 1);
+	await tick();
+	assert.equal(queries[0]?.sent.length, 2);
+	const record = log.records.find(r => r.msg === 'turn ended');
+	assert.equal(record?.fields['failure'], 'usage-limit');
+	assert.ok(log.records.some(r => r.msg === 'rate limit' && r.fields['status'] === 'rejected' && r.fields['pct'] === 100));
+	assert.ok(!JSON.stringify(log.records).includes('hit your limit'));
+	session.close();
+});
+
+test('a temporary rate limit without a rejected report is rate-limit', async () => {
+	const {session, queries, ends} = setup({clock});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit({type: 'assistant', error: 'rate_limit', message: {content: [{type: 'text', text: 'API Error: 429 Too many requests'}]}});
+	queries[0]?.emit(errResult({result: 'API Error: 429'}));
+	await tick();
+	const end = ends()[0] as {outcome: string; error?: string};
+	assert.equal(end.outcome, 'limit');
+	assert.match(end.error ?? '', /Rate limited/);
+	session.close();
+});
+
+test('blocking_limit ends as context and the next send reaches the same query', async () => {
+	const {session, queries, ends, log} = setup({clock});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit({type: 'assistant', error: 'invalid_request', message: {content: [{type: 'text', text: 'Prompt is too long'}]}});
+	queries[0]?.emit(errResult({terminal_reason: 'blocking_limit'}));
+	await tick();
+	const end = ends()[0] as {outcome: string; error?: string};
+	assert.equal(end.outcome, 'context');
+	assert.match(end.error ?? '', /context/);
+	assert.equal(session.needsNewSession, false);
+	assert.equal(queries[0]?.closed, 0);
+	session.send('/compact', {command: true});
+	await tick();
+	assert.equal(queries.length, 1);
+	const sent = queries[0]?.sent.at(-1);
+	assert.equal(sent?.message.content, '/compact');
+	assert.equal('client_composed' in (sent ?? {}), false);
+	assert.equal(log.records.find(r => r.msg === 'turn ended')?.fields['failure'], 'context');
+	session.close();
+});
+
+test('prompt_too_long result without an assistant error is context', async () => {
+	const {session, queries, ends} = setup({clock});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit(errResult({terminal_reason: 'prompt_too_long', result: ''}));
+	await tick();
+	assert.equal((ends()[0] as {outcome: string}).outcome, 'context');
+	session.close();
+});
+
+test('api_retry for a rate limit does not end the turn', async () => {
+	const {session, queries, ends} = setup({clock});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit({type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 5, retry_delay_ms: 1000, error: 'rate_limit'});
+	await tick();
+	assert.equal(ends().length, 0);
+	assert.equal(session.state, 'running');
+	queries[0]?.emit(ok());
+	await tick();
+	assert.equal((ends()[0] as {outcome: string}).outcome, 'ok');
+	session.close();
+});
+
+test('a rejected report during a turn that succeeds still ends ok', async () => {
+	const {session, queries, ends} = setup({clock});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit(rejected());
+	queries[0]?.emit(ok());
+	await tick();
+	assert.equal((ends()[0] as {outcome: string}).outcome, 'ok');
+	assert.equal(session.rateLimit?.status, 'rejected');
+	session.close();
+});
+
+test('the limit state of an earlier turn does not leak into a later generic error', async () => {
+	const {session, queries, ends} = setup({clock});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit(limitError());
+	queries[0]?.emit(errResult({result: CLI_TEXT}));
+	await tick();
+	session.send('two');
+	queries[0]?.emit({type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['boom'], session_id: 'sess-1'});
+	await tick();
+	assert.equal((ends()[1] as {outcome: string}).outcome, 'error');
+	session.close();
+});
+
+test('rate limit logging fires on status or type change; pct-only changes are debug', async () => {
+	const {session, queries, log} = setup({clock});
+	session.send('one');
+	const ev = (status: string, utilization: number) => ({
+		type: 'rate_limit_event',
+		rate_limit_info: {status, rateLimitType: 'five_hour', utilization, resetsAt: NOW_S + 600},
+	});
+	queries[0]?.emit(ev('allowed', 0.5));
+	queries[0]?.emit(ev('allowed', 0.6));
+	queries[0]?.emit(ev('allowed_warning', 0.9));
+	await tick();
+	const rl = log.records.filter(r => r.msg === 'rate limit');
+	assert.deepEqual(rl.map(r => r.level), ['info', 'debug', 'info']);
+	assert.equal(rl[2]?.fields['resetsInMin'], 10);
+	session.close();
+});
+
+test('a stream that ends after a limit result resumes with the saved session id', async () => {
+	const {session, queries, resumes, ends} = setup({clock});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit(limitError());
+	queries[0]?.emit(errResult({result: CLI_TEXT}));
+	queries[0]?.end();
+	await tick();
+	assert.equal(ends().length, 1);
+	assert.equal((ends()[0] as {outcome: string}).outcome, 'limit');
+	session.send('two');
+	assert.equal(queries.length, 2);
+	assert.deepEqual(resumes, [undefined, 'sess-1']);
+	session.close();
+});
+
+test('a stream that ends after a limit error without a result is a limit', async () => {
+	const {session, queries, ends} = setup({clock});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit(rejected());
+	queries[0]?.emit(limitError());
+	queries[0]?.end();
+	await tick();
+	assert.equal((ends()[0] as {outcome: string}).outcome, 'limit');
+	session.close();
+});
+
+test('limit and context turns log the failure kind and no reason or CLI text', async () => {
+	const {session, queries, log} = setup({clock});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit({type: 'assistant', error: 'rate_limit', message: {content: [{type: 'text', text: `You've hit your limit ${SECRET}`}]}});
+	queries[0]?.emit(errResult({result: 'x'}));
+	await tick();
+	const ended = log.records.find(r => r.msg === 'turn ended')!;
+	assert.equal(ended.fields['failure'], 'usage-limit');
+	assert.equal('reason' in ended.fields, false);
+	assert.ok(!JSON.stringify(log.records).includes('hit your limit'));
+	session.close();
+});
+
+test('the injected clock validates resetsAt of rate limit events', async () => {
+	const FAR = 4_000_000_000;
+	const {session, queries} = setup({clock: {now: () => FAR * 1000, timeZone: 'UTC'}});
+	session.send('one');
+	queries[0]?.emit({type: 'rate_limit_event', rate_limit_info: {status: 'rejected', resetsAt: FAR + 600}});
+	await tick();
+	assert.equal(session.rateLimit?.resetsAt, FAR + 600);
 	session.close();
 });

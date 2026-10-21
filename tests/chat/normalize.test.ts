@@ -48,7 +48,7 @@ test('assistant text, tool_use, thinking and aborted', () => {
 	assert.deepEqual(n(msg([{type: 'thinking', thinking: '  '}])), []);
 });
 
-test('assistant error emits api-error and drops the text', () => {
+test('assistant error emits api-error with the CLI text as detail only', () => {
 	assert.deepEqual(
 		n({
 			type: 'assistant',
@@ -56,8 +56,21 @@ test('assistant error emits api-error and drops the text', () => {
 			message: {id: 'm', content: [{type: 'text', text: 'Please run /login'}]},
 			parent_tool_use_id: null,
 		}),
-		[{kind: 'api-error', code: 'authentication_failed'}],
+		[{kind: 'api-error', code: 'authentication_failed', detail: 'Please run /login'}],
 	);
+	assert.deepEqual(n({type: 'assistant', error: 'rate_limit', message: {content: []}}), [{kind: 'api-error', code: 'rate_limit'}]);
+	const long = n({type: 'assistant', error: 'rate_limit', message: {content: [{type: 'text', text: 'x'.repeat(500)}]}})[0];
+	assert.equal(long?.kind === 'api-error' && long.detail?.length, 300);
+});
+
+test('rate_limit_event becomes rate-limit when the info parses', () => {
+	const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+	assert.deepEqual(
+		n({type: 'rate_limit_event', rate_limit_info: {status: 'rejected', resetsAt, rateLimitType: 'five_hour', utilization: 1}}),
+		[{kind: 'rate-limit', info: {status: 'rejected', resetsAt, type: 'five_hour', utilization: 1}}],
+	);
+	assert.deepEqual(n({type: 'rate_limit_event', rate_limit_info: {status: 'bogus'}}), []);
+	assert.deepEqual(n({type: 'rate_limit_event', rate_limit_info: 5}), []);
 });
 
 test('user tool_result: string, text array, image, is_error, cap', () => {
@@ -103,4 +116,12 @@ test('unknown types, subtypes and sub-agent messages are ignored', () => {
 	assert.deepEqual(n(null), []);
 	assert.deepEqual(n({type: 'assistant', parent_tool_use_id: 'tool1', message: {id: 'm', content: [{type: 'text', text: 'sub'}]}}), []);
 	assert.deepEqual(n({type: 'stream_event', parent_tool_use_id: 'tool1', event: {type: 'content_block_delta', delta: {type: 'text_delta', text: 'x'}}}), []);
+});
+
+test('rate_limit_event validates resetsAt against the injected clock', () => {
+	const FAR = 4_000_000_000;
+	const clock = {now: () => FAR * 1000};
+	const raw = {type: 'rate_limit_event', rate_limit_info: {status: 'rejected', resetsAt: FAR + 600}};
+	assert.deepEqual(normalize(raw as SDKMessage, clock), [{kind: 'rate-limit', info: {status: 'rejected', resetsAt: FAR + 600}}]);
+	assert.deepEqual(n(raw), [{kind: 'rate-limit', info: {status: 'rejected'}}]);
 });

@@ -1,4 +1,5 @@
 import type {ChatEvent, TurnOutcome, UiEvent} from '../chat/events.js';
+import type {RateLimitInfo} from '../chat/limits.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
 
 export const LIVE = {
@@ -62,6 +63,10 @@ export interface TranscriptState {
 	pending: number;
 	mode: ChatMode;
 	approvals: number;
+	// Latest rate-limit report; the status bar derives its indicator from it.
+	limit?: RateLimitInfo;
+	// Held until the turn ends: a limit or context outcome already says it all.
+	pendingApiError?: string;
 }
 
 // Raw (unscrubbed) items; present.ts turns them into display strings.
@@ -111,7 +116,11 @@ export function setNotice(state: TranscriptState, notice: string | undefined): T
 }
 
 export function resetTranscript(state: TranscriptState): TranscriptState {
-	return {...initialTranscript({model: state.model, mode: state.mode}), phase: state.phase};
+	return {
+		...initialTranscript({model: state.model, mode: state.mode}),
+		phase: state.phase,
+		...(state.limit !== undefined && {limit: state.limit}),
+	};
 }
 
 function flushPartial(state: TranscriptState): Step {
@@ -198,7 +207,9 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 				out: [],
 			};
 		case 'api-error':
-			return {state, out: [{kind: 'api-error', code: e.code}]};
+			return {state: {...state, pendingApiError: e.code}, out: []};
+		case 'rate-limit':
+			return {state: {...state, limit: e.info}, out: []};
 		case 'result': {
 			const costUsd = typeof e.costUsd === 'number' ? e.costUsd : state.costUsd;
 			return flushPartial({...state, costUsd, status: null});
@@ -225,12 +236,21 @@ export function reduceTranscript(state: TranscriptState, event: ChatEvent): Step
 		case 'turn-end': {
 			const flushed = flushPartial(state);
 			const out: Out[] = [...flushed.out];
+			const quiet = event.outcome === 'limit' || event.outcome === 'context';
+			if (state.pendingApiError !== undefined && !quiet) out.push({kind: 'api-error', code: state.pendingApiError});
 			if (event.outcome !== 'ok') {
 				out.push({kind: 'outcome', outcome: event.outcome, error: event.error});
 			}
 			if (flushed.state.turnPrintedText || event.outcome !== 'ok') out.push({kind: 'blank'});
 			return {
-				state: {...flushed.state, tools: new Map(), status: null, turnPrintedText: false, approvals: 0},
+				state: {
+					...flushed.state,
+					tools: new Map(),
+					status: null,
+					turnPrintedText: false,
+					approvals: 0,
+					pendingApiError: undefined,
+				},
 				out,
 			};
 		}

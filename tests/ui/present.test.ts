@@ -127,3 +127,20 @@ test('audit summaries use the reveal function so they match what was approved', 
 	assert.ok(line.includes('echo <ESC>[31m'));
 	assert.ok(!line.includes(`${ESC}[31m`));
 });
+
+test('status bar appends the limit segment after the mode', () => {
+	const base = {credentialLabel: 'API key', model: 'm', sessionId: undefined, phase: 'idle' as const, mode: 'default' as const};
+	assert.equal(statusBarText({...base, limit: '5h limit 85% · resets 15:00'}, scrub), 'API key · m · idle · mode: default · 5h limit 85% · resets 15:00');
+	assert.equal(statusBarText({...base, limit: `x${SECRET}`}, scrub).includes(SECRET), false);
+});
+
+test('limit and context outcomes print a yellow notice, not an error', () => {
+	const limit = formatOut({kind: 'outcome', outcome: 'limit', error: 'You hit your 5-hour limit'}, scrub);
+	assert.match(limit, /You hit your 5-hour limit/);
+	assert.ok(limit.includes('\u001b[33m'));
+	assert.doesNotMatch(limit, /Error:/);
+	const context = formatOut({kind: 'outcome', outcome: 'context', error: undefined}, scrub);
+	assert.match(context, /context window/);
+	assert.doesNotMatch(context, /Error:/);
+	assert.ok(!formatOut({kind: 'outcome', outcome: 'limit', error: `a${SECRET}`}, scrub).includes(SECRET));
+});

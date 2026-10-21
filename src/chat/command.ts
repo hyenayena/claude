@@ -250,11 +250,11 @@ const runLocked = async (
 			const stand = titleFromPrompt(e.text);
 			if (stand) session.setTitle(stand);
 		}
-		if (e.type === 'turn-end' && e.outcome === 'ok') refreshTitleSoon();
+		if (e.type === 'turn-end' && (e.outcome === 'ok' || e.outcome === 'limit' || e.outcome === 'context')) refreshTitleSoon();
 	});
 
 	session.subscribe(e => {
-		if (e.type !== 'turn-end' || e.outcome !== 'ok') return;
+		if (e.type !== 'turn-end' || session.needsNewSession) return;
 		const lastSessionId = session.sessionId;
 		if (!lastSessionId) return;
 		const lastModel = session.model;

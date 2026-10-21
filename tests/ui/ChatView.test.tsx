@@ -5,7 +5,7 @@ void React;
 import {makeScrub} from '../../src/chat/scrub.js';
 import type {PermissionRequest} from '../../src/chat/permission.js';
 import {makeReveal} from '../../src/chat/reveal.js';
-import {BUSY_HINT, ChatView, clearSentHistory, MAX_QUEUED, type ChatViewProps} from '../../src/ui/ChatView.js';
+import {armExpiry, BUSY_HINT, ChatView, clearSentHistory, MAX_QUEUED, type ChatViewProps} from '../../src/ui/ChatView.js';
 import {createChatElement} from '../../src/ui/mount.js';
 import {fakeController, mountHarness, questionReq, toolReq, type FakeController} from './testkit.js';
 
@@ -1116,4 +1116,88 @@ test('thinking status shows an animated squareCorners spinner', async () => {
 	const later = t.lastFrame().match(/([◰◳◲◱]) thinking…/);
 	assert.ok(later);
 	assert.notEqual(later[1], first[1]);
+});
+
+function limitSetup(clock: {now: () => number; timeZone?: string}) {
+	const f = fakeHost();
+	const bars: Array<[string | undefined, string | undefined]> = [];
+	const host = {...f.host, setTitle: (title: string | undefined, detail?: string) => void bars.push([title, detail])};
+	const t = setup(undefined, 'API key', {host, clock});
+	return {...t, bars};
+}
+
+test('the limit indicator shows in the status, clears on allowed and on expiry', async () => {
+	const nowMs = {value: Date.UTC(2026, 0, 1, 10, 0, 0)};
+	const clock = {now: () => nowMs.value, timeZone: 'UTC'};
+	const resetsAt = nowMs.value / 1000 + 3600;
+	const t = limitSetup(clock);
+	await t.settle();
+	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed_warning', type: 'five_hour', utilization: 0.85, resetsAt}});
+	await t.settle();
+	assert.match(t.bars.at(-1)![1] ?? '', /mode: default · 5h limit 85% · resets 11:00/);
+	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed'}});
+	await t.settle();
+	assert.doesNotMatch(t.bars.at(-1)![1] ?? '', /limit/);
+
+	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed_warning', type: 'five_hour', utilization: 0.9, resetsAt}});
+	await t.settle();
+	assert.match(t.bars.at(-1)![1] ?? '', /5h limit/);
+	nowMs.value += 3600_000;
+	t.controller.emit({type: 'title', title: 'again'});
+	await t.settle();
+	assert.doesNotMatch(t.bars.at(-1)![1] ?? '', /limit/);
+});
+
+test('the indicator disappears by itself when the reset time passes', async () => {
+	const start = Date.now();
+	const clock = {now: () => Date.now(), timeZone: 'UTC'};
+	const t = limitSetup(clock);
+	await t.settle();
+	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed_warning', type: 'five_hour', utilization: 0.5, resetsAt: start / 1000 + 0.15}});
+	await t.settle(5);
+	assert.match(t.bars.at(-1)![1] ?? '', /5h limit/);
+	await new Promise(r => setTimeout(r, 300));
+	await t.settle();
+	assert.doesNotMatch(t.bars.at(-1)![1] ?? '', /limit/);
+});
+
+test('after a limit the queued text goes back to the draft and nothing is sent', async () => {
+	const t = setup();
+	t.controller.setState('running');
+	await t.settle();
+	t.press('queued one');
+	await t.settle();
+	t.press(ENTER);
+	await t.settle();
+	t.controller.setState('idle');
+	t.controller.emit({type: 'turn-end', outcome: 'limit', error: 'You hit your limit'});
+	await t.settle();
+	assert.deepEqual(t.controller.calls.sent, []);
+	assert.match(t.lastFrame(), /> queued one/);
+	assert.ok(t.printed.some(p => p.includes('You hit your limit')));
+});
+
+test('armExpiry re-arms after a capped wait and stops at the reset time', async () => {
+	let now = 0;
+	let fired = 0;
+	const stop = armExpiry(100, {now: () => now}, () => void fired++, 20);
+	cleanup.push(stop);
+	await new Promise(r => setTimeout(r, 30));
+	assert.equal(fired, 1, 'capped timer fired early');
+	now = 100;
+	await new Promise(r => setTimeout(r, 30));
+	assert.equal(fired, 2, 're-armed timer fired once more');
+	await new Promise(r => setTimeout(r, 30));
+	assert.equal(fired, 2, 'nothing re-armed after the reset');
+});
+
+test('armExpiry cancel stops further firing', async () => {
+	let fired = 0;
+	const stop = armExpiry(1000, {now: () => 0}, () => void fired++, 10);
+	await new Promise(r => setTimeout(r, 25));
+	stop();
+	const seen = fired;
+	await new Promise(r => setTimeout(r, 40));
+	assert.equal(fired, seen);
+	assert.ok(seen >= 1);
 });

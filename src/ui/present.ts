@@ -194,6 +194,10 @@ export function formatError(message: string, scrub: Scrub): string {
 	return paint(SGR.red, `Error: ${scrub(message)}`);
 }
 
+export function formatWarning(message: string, scrub: Scrub): string {
+	return paint(SGR.yellow, scrub(message));
+}
+
 export function formatNotice(message: string, scrub: Scrub): string {
 	return paint(SGR.dim, scrub(message));
 }
@@ -282,6 +286,10 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub): string
 					return formatError(out.error ?? 'Reached the maximum number of turns', scrub);
 				case 'error':
 					return formatError(out.error ?? 'The request failed', scrub);
+				case 'limit':
+					return formatWarning(out.error ?? 'Usage limit reached', scrub);
+				case 'context':
+					return formatWarning(out.error ?? 'The conversation is too long for the context window', scrub);
 			}
 	}
 }
@@ -323,6 +331,7 @@ export function statusBarText(
 		phase: Phase;
 		mode?: ChatMode;
 		pending?: number;
+		limit?: string;
 	},
 	scrub: Scrub,
 ): string {
@@ -331,5 +340,6 @@ export function statusBarText(
 	if (s.sessionId) parts.push(scrub(s.sessionId).slice(0, 8));
 	parts.push(s.pending !== undefined && s.pending > 0 ? 'awaiting approval' : s.phase);
 	if (s.mode !== undefined) parts.push(`mode: ${MODE_LABEL[s.mode]}`);
+	if (s.limit) parts.push(scrub(s.limit));
 	return parts.join(' · ');
 }

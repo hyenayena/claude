@@ -1,5 +1,6 @@
 import type {Options} from '@anthropic-ai/claude-agent-sdk';
 import type {Logger} from '../../../src/api.js';
+import {classifyFailure, failureMessage, parseRateLimit, systemClock, type Clock, type FailureKind, type RateLimitInfo} from './chat/limits.js';
 import {errClass, noopLog} from './log.js';
 import type {QueryFn, TurnResult} from './types.js';
 
@@ -23,6 +24,17 @@ const assistantText = (msg: Loose): string => {
 		.join('');
 };
 
+export class TurnFailure extends Error {
+	sessionId?: string;
+	model?: string;
+	kind?: FailureKind | 'auth' | 'resume' | 'cancelled' | 'timeout';
+
+	constructor(message: string, kind?: TurnFailure['kind']) {
+		super(message);
+		if (kind !== undefined) this.kind = kind;
+	}
+}
+
 export const mapFailure = (raw: string, redact: (s: string) => string): Error => {
 	if (/no conversation found/i.test(raw)) return new Error(RESUME_MESSAGE);
 	if (/not logged in|login|authenticat|\b401\b|unauthor/i.test(raw)) return new Error(AUTH_MESSAGE);
@@ -36,10 +48,12 @@ export const runTurn = async (p: {
 	signal?: AbortSignal;
 	redact: (s: string) => string;
 	log?: Logger;
+	clock?: Clock;
 }): Promise<TurnResult> => {
 	const {signal, redact} = p;
 	const log = p.log ?? noopLog;
-	if (signal?.aborted) throw new Error(CANCELLED_MESSAGE);
+	const clock = p.clock ?? systemClock;
+	if (signal?.aborted) throw new TurnFailure(CANCELLED_MESSAGE, 'cancelled');
 
 	let sessionId: string | undefined;
 	let model: string | undefined;
@@ -47,8 +61,20 @@ export const runTurn = async (p: {
 	let numTurns: number | undefined;
 	let lastAssistant = '';
 	let text: string | undefined;
-	let failure: Error | undefined;
+	let failure: TurnFailure | undefined;
 	let authFailed = false;
+	let errorCode: string | undefined;
+	let errorText: string | undefined;
+	let rateLimit: RateLimitInfo | undefined;
+
+	const fail = (e: Error, kind?: TurnFailure['kind']): TurnFailure => {
+		const f = e instanceof TurnFailure ? e : new TurnFailure(e.message, kind);
+		if (f.kind !== 'resume') {
+			if (sessionId !== undefined) f.sessionId = sessionId;
+			if (model !== undefined) f.model = model;
+		}
+		return f;
+	};
 
 	const q = p.query({prompt: p.prompt, options: p.options});
 	const onAbort = () => {
@@ -69,9 +95,16 @@ export const runTurn = async (p: {
 				model = str(msg['model']) ?? model;
 				apiKeySource = str(msg['apiKeySource']) ?? apiKeySource;
 			} else if (type === 'assistant') {
-				if (msg['error'] === 'authentication_failed') authFailed = true;
+				const code = str(msg['error']);
+				if (code === 'authentication_failed') authFailed = true;
 				const t = assistantText(msg);
+				if (code) {
+					errorCode = code;
+					errorText = t || undefined;
+				}
 				if (t) lastAssistant = t;
+			} else if (type === 'rate_limit_event') {
+				rateLimit = parseRateLimit(msg['rate_limit_info'], clock) ?? rateLimit;
 			} else if (type === 'result') {
 				sessionId = str(msg['session_id']) ?? sessionId;
 				if (typeof msg['num_turns'] === 'number') numTurns = msg['num_turns'];
@@ -81,16 +114,39 @@ export const runTurn = async (p: {
 					const errors = Array.isArray(msg['errors']) ? msg['errors'].map(String).join('; ') : '';
 					const detail = str(msg['result']) || errors || `${str(msg['subtype']) ?? 'error'}`;
 					log.warn('result error', {subtype: str(msg['subtype']), authFailed});
-					failure = authFailed ? new Error(AUTH_MESSAGE) : mapFailure(detail, redact);
+					const kind = authFailed
+						? undefined
+						: classifyFailure({
+								...(errorCode !== undefined && {code: errorCode}),
+								...(str(msg['terminal_reason']) !== undefined && {terminalReason: str(msg['terminal_reason'])}),
+								detail: errorText ?? detail,
+								...(rateLimit !== undefined && {rateLimit}),
+							});
+					if (authFailed) failure = new TurnFailure(AUTH_MESSAGE, 'auth');
+					else if (kind) {
+						failure = new TurnFailure(
+							redact(failureMessage(kind, {
+								...(rateLimit !== undefined && {rateLimit}),
+								...(errorText !== undefined && {cliText: errorText}),
+								surface: 'ask',
+								clock,
+							})),
+							kind,
+						);
+					} else {
+						const mapped = mapFailure(detail, redact);
+						failure = new TurnFailure(mapped.message, mapped.message === RESUME_MESSAGE ? 'resume' : undefined);
+					}
 				}
 			}
 		}
 	} catch (err) {
 		log.warn('query threw', {errClass: errClass(err), aborted: signal?.aborted === true});
-		if (signal?.aborted) throw new Error(CANCELLED_MESSAGE);
-		if (failure) throw failure;
-		if (authFailed) throw new Error(AUTH_MESSAGE);
-		throw mapFailure(err instanceof Error ? err.message : String(err), redact);
+		if (signal?.aborted) throw fail(new Error(CANCELLED_MESSAGE), 'cancelled');
+		if (failure) throw fail(failure);
+		if (authFailed) throw fail(new Error(AUTH_MESSAGE), 'auth');
+		const mapped = mapFailure(err instanceof Error ? err.message : String(err), redact);
+		throw fail(mapped, mapped.message === RESUME_MESSAGE ? 'resume' : undefined);
 	} finally {
 		signal?.removeEventListener('abort', onAbort);
 		try {
@@ -100,10 +156,10 @@ export const runTurn = async (p: {
 		}
 	}
 
-	if (signal?.aborted) throw new Error(CANCELLED_MESSAGE);
-	if (failure) throw failure;
-	if (authFailed) throw new Error(AUTH_MESSAGE);
-	if (text === undefined || !sessionId) throw new Error('Claude request failed: no result received');
+	if (signal?.aborted) throw fail(new Error(CANCELLED_MESSAGE), 'cancelled');
+	if (failure) throw fail(failure);
+	if (authFailed) throw fail(new Error(AUTH_MESSAGE), 'auth');
+	if (text === undefined || !sessionId) throw fail(new Error('Claude request failed: no result received'));
 	return {
 		sessionId,
 		text,

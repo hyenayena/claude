@@ -32,7 +32,7 @@ test('the fixture holds two turns recorded from the real SDK', () => {
 });
 
 test('normalize turns the real first turn into session, tool and text events', () => {
-	const events = turns[0]!.flatMap(normalize);
+	const events = turns[0]!.flatMap(m => normalize(m));
 	assert.deepEqual(collapse(events), [
 		'session',
 		'status',
@@ -49,7 +49,7 @@ test('normalize turns the real first turn into session, tool and text events', (
 
 test('streamed deltas add up to the complete text block', () => {
 	for (const turn of turns) {
-		const events = turn.flatMap(normalize);
+		const events = turn.flatMap(m => normalize(m));
 		const deltas = events.flatMap(e => (e.kind === 'text-delta' ? [e.text] : [])).join('');
 		const block = events.find(e => e.kind === 'text');
 		assert.equal(block?.kind === 'text' && block.text, deltas);

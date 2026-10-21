@@ -2,6 +2,7 @@ import React, {useCallback, useEffect, useLayoutEffect, useRef, useState} from '
 import {Box, Text, useInput, usePaste, useWindowSize, type Key} from 'ink';
 import type {ViewHost} from '../../../../src/api.js';
 import type {ChatController, ChatEvent} from '../chat/events.js';
+import {limitIndicator, systemClock, type Clock} from '../chat/limits.js';
 import {MODE_CYCLE, QUESTION_LIMITS, REASON_MAX} from '../chat/permission.js';
 import type {ChatMode, PermissionDecision, PermissionRequest} from '../chat/permission.js';
 import {sanitizeMultilineInput, wrapLines} from '../kit.js';
@@ -72,6 +73,8 @@ export interface ChatViewProps {
 	armMs?: number;
 	// Set when the chat shares the screen with the console: focus, width and reserved keys.
 	host?: ViewHost;
+	// Time source for the rate-limit indicator; tests inject a fake.
+	clock?: Clock;
 }
 
 type PromptEntry =
@@ -88,6 +91,24 @@ export const DOUBLE_ESC_MS = 500;
 export const NEW_CHAT_TITLE = 'New chat';
 export const MAX_QUEUED = 20;
 const MAX_UNDO = 100;
+// setTimeout overflows past 2^31-1 ms.
+const MAX_TIMER_MS = 2_000_000_000;
+
+/** Calls `fire` once `clock` reaches `atMs`, re-arming while a capped wait ends early. Returns the canceller. */
+export function armExpiry(atMs: number, clock: Clock, fire: () => void, maxMs = MAX_TIMER_MS): () => void {
+	let timer: NodeJS.Timeout | undefined;
+	const arm = (): void => {
+		const wait = atMs - clock.now();
+		if (wait <= 0) return;
+		timer = setTimeout(() => {
+			fire();
+			arm();
+		}, Math.min(wait, maxMs));
+		timer.unref();
+	};
+	arm();
+	return () => clearTimeout(timer);
+}
 const MENTION_ROWS = 6;
 const MAX_HISTORY = 200;
 
@@ -111,6 +132,7 @@ export function ChatView(props: ChatViewProps) {
 	const rows = terminal.rows;
 	const {focused, columns} = useViewHost(props.host);
 	const host = props.host;
+	const clock = props.clock ?? systemClock;
 
 	// Keys and events can arrive faster than React re-renders, so refs hold the truth.
 	const tRef = useRef<TranscriptState>(
@@ -190,8 +212,8 @@ export function ChatView(props: ChatViewProps) {
 			setT(event.type === 'turn-end' ? {...step.state, notice: undefined} : step.state);
 			for (const out of step.out) print(formatOut(out, scrub, reveal));
 			if (event.type === 'turn-end' && queueRef.current.length > 0) {
-				// After an interrupt the queued text comes back to the draft instead of being sent.
-				if (event.outcome === 'interrupted') {
+				// After an interrupt, limit or context failure the queued text comes back to the draft instead of being sent.
+				if (event.outcome === 'interrupted' || event.outcome === 'limit' || event.outcome === 'context') {
 					const back = queueRef.current.join('\n\n');
 					queueRef.current = [];
 					const draft = edRef.current.text;
@@ -727,6 +749,13 @@ export function ChatView(props: ChatViewProps) {
 	const prompt = currentPrompt();
 	const t = tRef.current;
 	const ed = edRef.current;
+	const limit = limitIndicator(t.limit, clock);
+	const resetsAt = t.limit?.resetsAt;
+	// Drops an expired indicator while the chat is idle.
+	useEffect(() => {
+		if (resetsAt === undefined) return;
+		return armExpiry(resetsAt * 1000, clock, render);
+	}, [resetsAt, clock, render]);
 	const barStatus = statusBarText(
 		{
 			credentialLabel,
@@ -735,6 +764,7 @@ export function ChatView(props: ChatViewProps) {
 			phase: t.phase,
 			mode: controller.mode,
 			pending: controller.pendingPermissions.length,
+			...(limit !== undefined && {limit}),
 		},
 		scrub,
 	);

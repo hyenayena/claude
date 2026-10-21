@@ -9,6 +9,7 @@ import type {CommandContext} from '../../../src/api.js';
 import {storeOauthToken} from '../src/credentials.js';
 import {createClaudeCommand, type ClaudeDeps} from '../src/commands.js';
 import type {QueryFn} from '../src/types.js';
+import {TurnFailure} from '../src/session.js';
 import {makeFakeLog, serialized} from './helpers/fake-log.js';
 
 const KEY = 'sk-ant-api03-TESTVALUE0123456789abcdef';
@@ -115,6 +116,27 @@ test('session id is not stored after a failure', async () => {
 	await assert.rejects(async () => command.run(['ask', 'x'], ctx), {message: 'Claude request failed: kaboom'});
 	await assert.rejects(readFile(join(dataDir, 'state.json'), 'utf8'));
 	assert.equal(q.closed(), 1);
+});
+
+const failedMsgs = (sid: string, error: string) => [
+	{type: 'system', subtype: 'init', session_id: sid, model: 'claude-test-1', apiKeySource: 'x'},
+	{type: 'result', subtype: 'error_during_execution', is_error: true, errors: [error], session_id: sid},
+];
+
+test('a failed turn that created a session still persists it and rethrows the failure', async () => {
+	const {command, ctx, dataDir} = await setup({loadQuery: async () => makeQuery(() => failedMsgs(SID1, 'Usage limit reached')).query});
+	await assert.rejects(async () => command.run(['ask', 'x'], ctx), /Usage limit reached/);
+	const st = await state(dataDir);
+	assert.equal(st.lastSessionId, SID1);
+	assert.equal(st.lastModel, 'claude-test-1');
+});
+
+test('a resume failure does not persist a session', async () => {
+	const {command, ctx, dataDir} = await setup({
+		loadQuery: async () => makeQuery(() => failedMsgs(SID1, 'No conversation found with session ID: x')).query,
+	});
+	await assert.rejects(async () => command.run(['ask', 'x'], ctx), /no longer exists/);
+	await assert.rejects(readFile(join(dataDir, 'state.json'), 'utf8'));
 });
 
 test('request errors are redacted', async () => {
@@ -454,7 +476,7 @@ test('ask failure logs a redacted, capped reason at warn', async () => {
 	const failed = log.records.find(r => r.msg === 'ask failed')!;
 	assert.equal(failed.level, 'warn');
 	assert.equal(failed.fields.outcome, 'error');
-	assert.equal(failed.fields.errClass, 'Error');
+	assert.equal(failed.fields.errClass, 'TurnFailure');
 	assert.ok((failed.fields.reason as string).length <= 301);
 	assert.equal(serialized(log).includes(KEY), false);
 	assert.ok(log.records.some(r => r.msg === 'query threw' && r.level === 'warn'));
@@ -512,4 +534,19 @@ test('auth status, key and logout are logged with labels only', async () => {
 	await command.run(['auth', 'key', '--from-file', keyFile], ctx);
 	assert.ok(log.records.some(r => r.msg === 'api key stored'));
 	assert.equal(serialized(log).includes(KEY), false);
+});
+
+test('ask limit failure logs the failure kind and no reason', async () => {
+	const log = makeFakeLog();
+	const msgs = [
+		{type: 'system', subtype: 'init', session_id: SID1, model: 'claude-test-1', apiKeySource: 'x'},
+		{type: 'assistant', error: 'rate_limit', message: {content: [{type: 'text', text: "You've hit your limit · resets 3pm"}]}},
+		{type: 'result', subtype: 'success', is_error: true, result: 'x', session_id: SID1},
+	];
+	const {command, ctx} = await setup({log, loadQuery: async () => makeQuery(() => msgs).query});
+	await assert.rejects(async () => command.run(['ask', 'hi'], ctx), /Usage limit reached/);
+	const failed = log.records.find(r => r.msg === 'ask failed')!;
+	assert.equal(failed.fields.failure, 'usage-limit');
+	assert.equal('reason' in failed.fields, false);
+	assert.ok(!JSON.stringify(log.records).includes('hit your limit'));
 });

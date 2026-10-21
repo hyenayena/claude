@@ -25,9 +25,13 @@ import {editFile, readHidden, runInteractive, waitForEnter} from './terminal.js'
 import {clip, errClass, noopLog} from './log.js';
 import {openChat, runChat, type ChatOpen, type ChatRunDeps, type ChatUi} from './chat/command.js';
 import {makeScrub} from './chat/scrub.js';
-import {runTurn} from './session.js';
+import {runTurn, TurnFailure} from './session.js';
 import {createStore, isModelId} from './store.js';
 import type {ChatQueryFn, Credential, CredentialInfo, QueryFn} from './types.js';
+
+const LIMIT_KINDS = new Set(['usage-limit', 'rate-limit', 'billing', 'context']);
+const limitKind = (err: unknown): string | undefined =>
+	err instanceof TurnFailure && err.kind !== undefined && LIMIT_KINDS.has(err.kind) ? err.kind : undefined;
 
 export type ClaudeDeps = {
 	dataDir: string;
@@ -187,11 +191,19 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				result = await runTurn({query, prompt: text, options, signal: controller.signal, redact, log});
 			} catch (err) {
 				const failure = timedOut ? new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds`) : err;
+				// A failed turn (limit, timeout) can still have created a session worth resuming.
+				if (err instanceof TurnFailure && err.sessionId && err.kind !== 'resume') {
+					await store
+						.update({lastSessionId: err.sessionId, ...(err.model && {lastModel: err.model})})
+						.catch(() => log.warn('ask state save failed'));
+				}
 				log.warn('ask failed', {
 					outcome: timedOut ? 'timeout' : 'error',
 					ms: Date.now() - startedAt,
 					errClass: errClass(failure),
-					reason: clip(scrub(failure instanceof Error ? failure.message : String(failure))),
+					...(limitKind(err) !== undefined
+						? {failure: limitKind(err)}
+						: {reason: clip(scrub(failure instanceof Error ? failure.message : String(failure)))}),
 				});
 				throw failure;
 			}

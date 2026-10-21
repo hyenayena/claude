@@ -1,9 +1,11 @@
 import type {SDKMessage} from '@anthropic-ai/claude-agent-sdk';
 import type {UiEvent} from './events.js';
+import {type Clock, parseRateLimit} from './limits.js';
 
 type Loose = Record<string, unknown>;
 
 const TOOL_RESULT_CAP = 64 * 1024;
+const ERROR_DETAIL_CAP = 300;
 
 const isRecord = (v: unknown): v is Loose => typeof v === 'object' && v !== null;
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
@@ -116,7 +118,15 @@ const fromStream = (msg: Loose): UiEvent[] => {
 
 const fromAssistant = (msg: Loose): UiEvent[] => {
 	const err = str(msg['error']);
-	if (err) return [{kind: 'api-error', code: err}];
+	if (err) {
+		const detail = blocks(msg)
+			.filter(b => b['type'] === 'text')
+			.map(b => str(b['text']) ?? '')
+			.join('')
+			.trim()
+			.slice(0, ERROR_DETAIL_CAP);
+		return [{kind: 'api-error', code: err, ...(detail !== '' && {detail})}];
+	}
 	const inner = isRecord(msg['message']) ? msg['message'] : {};
 	const messageId = str(inner['id']) ?? str(msg['uuid']) ?? '';
 	const out: UiEvent[] = [];
@@ -177,7 +187,7 @@ const fromResult = (msg: Loose): UiEvent[] => {
 	];
 };
 
-export const normalize = (message: SDKMessage): UiEvent[] => {
+export const normalize = (message: SDKMessage, clock?: Clock): UiEvent[] => {
 	const msg = message as unknown as Loose;
 	if (!isRecord(msg)) return [];
 	const parent = msg['parent_tool_use_id'];
@@ -206,6 +216,10 @@ export const normalize = (message: SDKMessage): UiEvent[] => {
 		}
 		case 'result':
 			return fromResult(msg);
+		case 'rate_limit_event': {
+			const info = parseRateLimit(msg['rate_limit_info'], clock);
+			return info ? [{kind: 'rate-limit', info}] : [];
+		}
 		default:
 			return [];
 	}

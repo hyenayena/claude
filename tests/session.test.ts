@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {runTurn} from '../src/session.js';
+import {runTurn, TurnFailure} from '../src/session.js';
 import type {QueryFn} from '../src/types.js';
 
 const SECRET = 'sk-ant-api03-TESTVALUE0123456789abcdef';
@@ -144,4 +144,87 @@ test('already aborted signal rejects without querying', async () => {
 test('missing result is an error', async () => {
 	const f = fake([init]);
 	await assert.rejects(run(f), /no result/);
+});
+
+const NOW_S = Math.floor(Date.now() / 1000);
+const clock = {now: () => NOW_S * 1000, timeZone: 'UTC'};
+const runAt = (f: ReturnType<typeof fake>) => runTurn({query: f.query, prompt: 'hi', options: {} as never, redact, clock});
+const limitMsg = {type: 'assistant', error: 'rate_limit', message: {content: [{type: 'text', text: "You've hit your limit"}]}};
+const failed = (extra: Msg = {}) => ({type: 'result', subtype: 'success', is_error: true, result: 'x', session_id: 's-res', ...extra});
+
+test('usage limit is classified, carries the session id and model', async () => {
+	const f = fake([
+		init,
+		{type: 'rate_limit_event', rate_limit_info: {status: 'rejected', resetsAt: NOW_S + 3600, rateLimitType: 'five_hour'}},
+		limitMsg,
+		failed(),
+	]);
+	const err = await runAt(f).then(
+		() => undefined,
+		(e: unknown) => e,
+	);
+	assert.ok(err instanceof TurnFailure);
+	assert.equal(err.kind, 'usage-limit');
+	assert.equal(err.sessionId, 's-res');
+	assert.equal(err.model, 'm1');
+	assert.match(err.message, /Usage limit reached/);
+	assert.match(err.message, /claude ask/);
+});
+
+test('a rate_limit error without a rejected report is a rate-limit', async () => {
+	const f = fake([init, {...limitMsg, message: {content: [{type: 'text', text: 'API Error: 429'}]}}, failed()]);
+	await assert.rejects(runAt(f), (e: unknown) => e instanceof TurnFailure && e.kind === 'rate-limit');
+});
+
+test('blocking_limit is a context failure', async () => {
+	const f = fake([
+		init,
+		{type: 'assistant', error: 'invalid_request', message: {content: [{type: 'text', text: 'Prompt is too long'}]}},
+		failed({terminal_reason: 'blocking_limit', result: 'Prompt is too long'}),
+	]);
+	await assert.rejects(runAt(f), (e: unknown) => e instanceof TurnFailure && e.kind === 'context' && e.sessionId === 's-res');
+});
+
+test('billing errors are classified', async () => {
+	const f = fake([init, {type: 'assistant', error: 'billing_error', message: {content: []}}, failed()]);
+	await assert.rejects(runAt(f), (e: unknown) => e instanceof TurnFailure && e.kind === 'billing');
+});
+
+test('a resume failure carries no session id', async () => {
+	const f = fake([failed({subtype: 'error_during_execution', result: '', errors: ['No conversation found with session ID: x'], session_id: undefined})]);
+	await assert.rejects(runAt(f), (e: unknown) => e instanceof TurnFailure && e.kind === 'resume' && e.sessionId === undefined);
+});
+
+test('cancel and auth failures carry the session id when known', async () => {
+	const ac = new AbortController();
+	const f = fake([init], {hang: true});
+	const p = run(f, {signal: ac.signal});
+	setImmediate(() => ac.abort());
+	await assert.rejects(p, (e: unknown) => e instanceof TurnFailure && e.kind === 'cancelled' && e.sessionId === 's-init');
+	const g = fake([init, {type: 'assistant', error: 'authentication_failed', message: {content: []}}, failed()]);
+	await assert.rejects(run(g), (e: unknown) => e instanceof TurnFailure && e.kind === 'auth' && e.sessionId === 's-res');
+});
+
+test('a generic failure still reads as before and has no kind', async () => {
+	const f = fake([init, failed({result: `boom ${SECRET}`})]);
+	await assert.rejects(run(f), (e: unknown) => e instanceof TurnFailure && e.kind === undefined && !e.message.includes(SECRET));
+});
+
+test('limit messages are redacted and use the injected clock for resetsAt', async () => {
+	const FAR = 4_000_000_000;
+	const farClock = {now: () => FAR * 1000, timeZone: 'UTC'};
+	const f = fake([
+		init,
+		{type: 'rate_limit_event', rate_limit_info: {status: 'rejected', resetsAt: FAR + 600, rateLimitType: 'five_hour'}},
+		{type: 'assistant', error: 'rate_limit', message: {content: [{type: 'text', text: 'limit'}]}},
+		failed(),
+	]);
+	const err = await runTurn({query: f.query, prompt: 'hi', options: {} as never, redact, clock: farClock}).catch((e: unknown) => e);
+	assert.ok(err instanceof TurnFailure);
+	assert.match(err.message, /resets at .*\(in 10m\)/);
+
+	const g = fake([init, {type: 'assistant', error: 'rate_limit', message: {content: [{type: 'text', text: `You've hit your limit ${SECRET}`}]}}, failed()]);
+	const e2 = await runAt(g).catch((e: unknown) => e);
+	assert.ok(e2 instanceof TurnFailure && e2.kind === 'usage-limit');
+	assert.ok(!e2.message.includes(SECRET));
 });

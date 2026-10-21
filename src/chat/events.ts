@@ -1,3 +1,4 @@
+import type {RateLimitInfo} from './limits.js';
 import type {AuditEntry, ChatMode, PermissionDecision, PermissionRequest} from './permission.js';
 
 export type UiEvent =
@@ -16,7 +17,8 @@ export type UiEvent =
 	| {kind: 'agent-activity'; toolUseId: string; name: string; input: unknown}
 	| {kind: 'status'; status: 'compacting' | 'requesting' | null}
 	| {kind: 'retry'; attempt: number; maxRetries: number; delayMs: number; errorCode?: string}
-	| {kind: 'api-error'; code: string}
+	| {kind: 'api-error'; code: string; detail?: string}
+	| {kind: 'rate-limit'; info: RateLimitInfo}
 	| {
 			kind: 'result';
 			ok: boolean;
@@ -29,7 +31,7 @@ export type UiEvent =
 			terminalReason?: string;
 	  };
 
-export type TurnOutcome = 'ok' | 'error' | 'interrupted' | 'timeout' | 'max-turns';
+export type TurnOutcome = 'ok' | 'error' | 'interrupted' | 'timeout' | 'max-turns' | 'limit' | 'context';
 export type ChatState = 'idle' | 'running' | 'closed';
 
 export type ChatEvent =

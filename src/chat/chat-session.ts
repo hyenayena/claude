@@ -7,6 +7,7 @@ import type {LivePatch} from '../chat-prefs.js';
 import type {ChatQueryFn, RewindResult} from '../types.js';
 import type {ChatController, ChatEvent, ChatState, TurnOutcome, UiEvent} from './events.js';
 import {InputQueue} from './input-queue.js';
+import {classifyFailure, type Clock, failureMessage, type FailureKind, type RateLimitInfo, systemClock} from './limits.js';
 import {normalize} from './normalize.js';
 import {
 	type AuditEntry,
@@ -35,6 +36,7 @@ export type ChatSessionOptions = {
 	savedApprovals?: readonly string[];
 	onRemember?: (key: string) => void;
 	log?: Logger;
+	clock?: Clock;
 };
 
 export type SlashCommandInfo = {name: string; description?: string; argumentHint?: string};
@@ -58,6 +60,7 @@ type Handle = {
 };
 
 type Pending = {outcome: TurnOutcome; error?: string};
+type TurnError = {code: string; detail?: string};
 
 type Entry = {
 	req: PermissionRequest;
@@ -114,6 +117,9 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private _needsNewSession = false;
 	private _costUsd: number | undefined;
 	private authFailed = false;
+	private turnError: TurnError | undefined;
+	private _rateLimit: RateLimitInfo | undefined;
+	private readonly clock: Clock;
 	private pending: Pending | undefined;
 	private turnTimer: NodeJS.Timeout | undefined;
 	private graceTimer: NodeJS.Timeout | undefined;
@@ -134,6 +140,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.timeoutMs = opts.timeoutMs ?? 300_000;
 		this.graceMs = opts.graceMs ?? 8_000;
 		this.log = opts.log ?? noopLog;
+		this.clock = opts.clock ?? systemClock;
 		this._sessionId = opts.initialResume;
 		if (opts.initialMode && MODE_CYCLE.includes(opts.initialMode)) this._mode = opts.initialMode;
 		for (const key of opts.savedApprovals ?? []) this.saved.add(key);
@@ -154,6 +161,11 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	/** Cumulative cost reported by the latest result; replaced, never summed. */
 	get costUsd(): number | undefined {
 		return this._costUsd;
+	}
+
+	/** Latest subscription limit report, kept across turns. */
+	get rateLimit(): RateLimitInfo | undefined {
+		return this._rateLimit;
 	}
 
 	get mode(): ChatMode {
@@ -241,6 +253,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 
 		const handle = this.handle ?? this.spawn();
 		this.authFailed = false;
+		this.turnError = undefined;
 		this.pending = undefined;
 		this.setState('running');
 		this.turnStartedAt = Date.now();
@@ -438,7 +451,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			for await (const msg of handle.q) {
 				if (this.handle !== handle) return;
 				this.keepTurnAlive(handle);
-				for (const ev of normalize(msg)) {
+				for (const ev of normalize(msg, this.clock)) {
 					if (this.handle !== handle) return;
 					this.onUi(ev, handle);
 				}
@@ -447,15 +460,20 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			if (this.handle !== handle) return;
 			this.log.warn('sdk stream threw', {errClass: errClass(err)});
 			this.dropHandle();
+			const raw = err instanceof Error ? err.message : String(err);
 			this.failTurn(
-				this.authFailed ? AUTH_MESSAGE : mapFailure(err instanceof Error ? err.message : String(err), this.opts.redact).message,
+				this.authFailed ? AUTH_MESSAGE : mapFailure(raw, this.opts.redact).message,
+				this.authFailed ? undefined : this.classifyTurn(raw),
 			);
 			return;
 		}
 		if (this.handle !== handle) return;
 		this.log.warn('sdk stream ended unexpectedly', {authFailed: this.authFailed});
 		this.dropHandle();
-		this.failTurn(this.authFailed ? AUTH_MESSAGE : 'Claude request failed: the session ended unexpectedly');
+		this.failTurn(
+			this.authFailed ? AUTH_MESSAGE : 'Claude request failed: the session ended unexpectedly',
+			this.authFailed ? undefined : this.classifyTurn(undefined),
+		);
 	}
 
 	private onUi(event: UiEvent, handle: Handle): void {
@@ -468,6 +486,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			if (!this.authFailed) this.log.warn('authentication failed');
 			this.authFailed = true;
 		}
+		if (ev.kind === 'api-error') this.turnError = {code: ev.code, ...(ev.detail !== undefined && {detail: ev.detail})};
+		if (ev.kind === 'rate-limit') this.noteRateLimit(ev.info);
 		if (ev.kind === 'task') {
 			const known = this._tasks.get(ev.id);
 			this._tasks.set(ev.id, {
@@ -506,6 +526,13 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			return;
 		}
 		const detail = ev.text || (ev.errors ?? []).join('; ') || ev.subtype;
+		if (!this.authFailed) {
+			const kind = this.classifyTurn(detail, ev.terminalReason);
+			if (kind) {
+				this.endTurn(kind === 'context' ? 'context' : 'limit', this.failureText(kind), kind);
+				return;
+			}
+		}
 		const failure = this.authFailed ? new Error(AUTH_MESSAGE) : mapFailure(detail, this.opts.redact);
 		if (failure.message === RESUME_MESSAGE) {
 			this._needsNewSession = true;
@@ -514,9 +541,43 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.endTurn('error', failure.message);
 	}
 
-	private failTurn(message: string): void {
+	private classifyTurn(detail: string | undefined, terminalReason?: string): FailureKind | undefined {
+		const cliDetail = this.turnError?.detail ?? detail;
+		return classifyFailure({
+			...(this.turnError !== undefined && {code: this.turnError.code}),
+			...(terminalReason !== undefined && {terminalReason}),
+			...(cliDetail !== undefined && {detail: cliDetail}),
+			...(this._rateLimit !== undefined && {rateLimit: this._rateLimit}),
+		});
+	}
+
+	private failureText(kind: FailureKind): string {
+		const cliText = this.turnError?.detail;
+		return failureMessage(kind, {
+			...(this._rateLimit !== undefined && {rateLimit: this._rateLimit}),
+			...(cliText !== undefined && {cliText}),
+			surface: 'chat',
+			clock: this.clock,
+		});
+	}
+
+	private noteRateLimit(info: RateLimitInfo): void {
+		const prev = this._rateLimit;
+		this._rateLimit = info;
+		const fields = {
+			status: info.status,
+			...(info.type !== undefined && {type: info.type}),
+			...(info.utilization !== undefined && {pct: Math.round(info.utilization * 100)}),
+			...(info.resetsAt !== undefined && {resetsInMin: Math.max(0, Math.round((info.resetsAt * 1000 - this.clock.now()) / 60_000))}),
+		};
+		if (prev?.status !== info.status || prev?.type !== info.type) this.log.info('rate limit', fields);
+		else if (prev.utilization !== info.utilization) this.log.debug('rate limit', fields);
+	}
+
+	private failTurn(message: string, kind?: FailureKind): void {
 		if (this._state !== 'running') return;
 		if (this.pending) this.endTurn(this.pending.outcome, this.pending.error);
+		else if (kind) this.endTurn(kind === 'context' ? 'context' : 'limit', this.failureText(kind), kind);
 		else this.endTurn('error', this.opts.redact(message));
 	}
 
@@ -548,7 +609,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		}
 	}
 
-	private endTurn(outcome: TurnOutcome, error?: string): void {
+	private endTurn(outcome: TurnOutcome, error?: string, failure?: FailureKind): void {
 		if (this._state !== 'running') return;
 		this.clearTimers();
 		this.pending = undefined;
@@ -556,7 +617,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.log.info('turn ended', {
 			outcome,
 			ms: Date.now() - this.turnStartedAt,
-			...(error !== undefined && {reason: clip(this.opts.redact(error))}),
+			...(failure !== undefined && {failure}),
+			...(error !== undefined && failure === undefined && {reason: clip(this.opts.redact(error))}),
 		});
 		this.emit({type: 'turn-end', outcome, ...(error !== undefined && {error})});
 	}

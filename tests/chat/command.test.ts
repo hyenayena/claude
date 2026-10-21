@@ -17,7 +17,7 @@ const SID2 = '33333333-aaaa-4bbb-8ccc-444444444444';
 
 type Props = Parameters<ChatUi['createChatElement']>[0];
 
-const makeChatQuery = (failFirst = false) => {
+const makeChatQuery = (failFirst = false, failMessage = 'boom') => {
 	const calls: Array<{options: Record<string, unknown>}> = [];
 	let closed = 0;
 	const query = ((arg: {prompt: AsyncIterable<unknown>; options: Record<string, unknown>}) => {
@@ -26,7 +26,7 @@ const makeChatQuery = (failFirst = false) => {
 			for await (const _ of arg.prompt) {
 				yield {type: 'system', subtype: 'init', session_id: SID2, model: 'claude-test-1', apiKeySource: 'x'};
 				if (failFirst) {
-					yield {type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['boom'], session_id: SID2};
+					yield {type: 'result', subtype: 'error_during_execution', is_error: true, errors: [failMessage], session_id: SID2};
 				} else {
 					yield {type: 'result', subtype: 'success', is_error: false, result: 'hi', session_id: SID2};
 				}
@@ -44,7 +44,7 @@ const turnDone = (props: Props): Promise<void> =>
 		});
 	});
 
-const setup = async (opts: {mount?: boolean; failFirst?: boolean; run?: (p: Props) => Promise<void>; deps?: Partial<ClaudeDeps>} = {}) => {
+const setup = async (opts: {mount?: boolean; failFirst?: boolean; failMessage?: string; run?: (p: Props) => Promise<void>; deps?: Partial<ClaudeDeps>} = {}) => {
 	const dataDir = await mkdtemp(join(tmpdir(), 'claude-chat-'));
 	const printed: string[] = [];
 	const props: Props[] = [];
@@ -58,7 +58,7 @@ const setup = async (opts: {mount?: boolean; failFirst?: boolean; run?: (p: Prop
 			await opts.run?.(props[props.length - 1]!);
 		};
 	}
-	const q = makeChatQuery(opts.failFirst);
+	const q = makeChatQuery(opts.failFirst, opts.failMessage);
 	const aborts: AbortController[] = [];
 	let unregistered = 0;
 	const real = createClaudeCommand({
@@ -194,9 +194,77 @@ test('resume uses lastSessionId on the first send', async () => {
 	assert.equal(s.q.calls[2]!.options.resume, undefined);
 });
 
-test('a failed first turn does not write state', async () => {
+test('a failed first turn still persists the session it created', async () => {
 	const s = await setup({
 		failFirst: true,
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	const st = await readState(s.dataDir);
+	assert.equal(st.lastSessionId, SID2);
+	assert.equal(st.lastModel, 'claude-test-1');
+});
+
+test('a first turn that hits the usage limit persists the session and the next send reuses the same query', async () => {
+	const calls: Array<{options: Record<string, unknown>}> = [];
+	let sent = 0;
+	const query = ((arg: {prompt: AsyncIterable<unknown>; options: Record<string, unknown>}) => {
+		calls.push({options: arg.options});
+		const gen = (async function* () {
+			for await (const _ of arg.prompt) {
+				sent++;
+				yield {type: 'system', subtype: 'init', session_id: SID2, model: 'claude-test-1', apiKeySource: 'x'};
+				if (sent === 1) {
+					yield {
+						type: 'rate_limit_event',
+						rate_limit_info: {status: 'rejected', rateLimitType: 'five_hour', resetsAt: Date.now() / 1000 + 3600},
+					};
+					yield {type: 'assistant', error: 'rate_limit', message: {content: [{type: 'text', text: "You've hit your limit"}]}, session_id: SID2};
+					yield {type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit", session_id: SID2};
+				} else {
+					yield {type: 'result', subtype: 'success', is_error: false, result: 'hi', session_id: SID2};
+				}
+			}
+		})();
+		return Object.assign(gen, {interrupt: async () => {}, close: () => {}});
+	}) as unknown as ChatQueryFn;
+	const outcomes: string[] = [];
+	const s = await setup({
+		deps: {loadChatQuery: async () => query},
+		run: async p => {
+			p.controller.subscribe(e => {
+				if (e.type === 'turn-end') outcomes.push(e.outcome);
+			});
+			const first = turnDone(p);
+			p.controller.send('first');
+			await first;
+			assert.equal(p.controller.state, 'idle');
+			for (let i = 0; i < 50 && sent === 1; i++) {
+				const st = await readState(s.dataDir).catch(() => ({}) as Record<string, unknown>);
+				if (st.lastSessionId) break;
+				await new Promise(r => setTimeout(r, 5));
+			}
+			assert.equal((await readState(s.dataDir)).lastSessionId, SID2);
+			const second = turnDone(p);
+			p.controller.send('second');
+			await second;
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	assert.deepEqual(outcomes, ['limit', 'ok']);
+	assert.equal(calls.length, 1);
+	assert.equal(sent, 2);
+	assert.equal((await readState(s.dataDir)).lastSessionId, SID2);
+});
+
+test('a turn that needs a new session does not write state', async () => {
+	const s = await setup({
+		failFirst: true,
+		failMessage: 'No conversation found with session ID: x',
 		run: async p => {
 			const done = turnDone(p);
 			p.controller.send('hello');
