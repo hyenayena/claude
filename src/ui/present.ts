@@ -58,9 +58,9 @@ export function formatThinking(text: string, scrub: Scrub): string {
 	return paint(SGR.dim + SGR.italic, body.join('\n'));
 }
 
-export function formatAssistantBlock(text: string, scrub: Scrub, interrupted = false): string {
+export function formatAssistantBlock(text: string, scrub: Scrub, interrupted = false, width?: number): string {
 	// Markdown styling is applied to the scrubbed text, so it only adds the constant SGR codes.
-	const body = renderMarkdown(scrub(clampChars(text, BLOCK_DISPLAY_CAP)));
+	const body = renderMarkdown(scrub(clampChars(text, BLOCK_DISPLAY_CAP)), {width});
 	return interrupted ? `${body}\n${paint(SGR.dim, '(interrupted)')}` : body;
 }
 
@@ -256,7 +256,7 @@ export function formatModeLine(mode: ChatMode, error?: string, scrub: Scrub = s 
 	return paint(SGR.dim, line);
 }
 
-export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub): string {
+export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?: number): string {
 	switch (out.kind) {
 		case 'audit':
 			return formatAudit(out.entry, scrub, reveal);
@@ -267,7 +267,7 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub): string
 		case 'task':
 			return paint(SGR.dim, `⚙ Background task ${out.status}: ${scrub(out.description)}${out.summary ? ` — ${scrub(out.summary)}` : ''}`);
 		case 'assistant':
-			return formatAssistantBlock(out.text, scrub, out.interrupted);
+			return formatAssistantBlock(out.text, scrub, out.interrupted, width);
 		case 'tool':
 			return formatToolBlock(out, scrub);
 		case 'error':

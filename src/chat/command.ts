@@ -355,7 +355,7 @@ const runLocked = async (
 		if (resume && printHistory) {
 			const print = printHistory;
 			const earlier = await readHistory(transcriptFile(paths.configDir, paths.projectDir, resume), 40, historyUntil).catch(() => []);
-			for (const m of earlier) print(m.role === 'user' ? formatUserLine(m.text, scrub) : formatAssistantBlock(m.text, scrub));
+			for (const m of earlier) print(m.role === 'user' ? formatUserLine(m.text, scrub) : formatAssistantBlock(m.text, scrub, false, chatHost?.columns() || undefined));
 			if (earlier.length > 0) print(formatNotice('Resumed — earlier messages above.', scrub));
 		}
 		await mounted;

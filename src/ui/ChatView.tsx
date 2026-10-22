@@ -165,6 +165,9 @@ export function ChatView(props: ChatViewProps) {
 	const shownRef = useRef({columns: 0, rows: 0, inputRows: 0, vimNormal: false, statusBar: false, waiting: false});
 	const [, setTick] = useState(0);
 	const render = useCallback(() => setTick(n => n + 1), []);
+	// Core reports 0 columns while the console covers the chat; tables are laid out to the last real width.
+	const lastWidthRef = useRef(0);
+	if (columns > 0) lastWidthRef.current = columns;
 
 	const setT = useCallback(
 		(next: TranscriptState) => {
@@ -210,7 +213,7 @@ export function ChatView(props: ChatViewProps) {
 			}
 			const step = reduceTranscript(tRef.current, event);
 			setT(event.type === 'turn-end' ? {...step.state, notice: undefined} : step.state);
-			for (const out of step.out) print(formatOut(out, scrub, reveal));
+			for (const out of step.out) print(formatOut(out, scrub, reveal, lastWidthRef.current || undefined));
 			if (event.type === 'turn-end' && queueRef.current.length > 0) {
 				// After an interrupt, limit or context failure the queued text comes back to the draft instead of being sent.
 				if (event.outcome === 'interrupted' || event.outcome === 'limit' || event.outcome === 'context') {

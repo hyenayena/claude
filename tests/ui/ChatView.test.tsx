@@ -1201,3 +1201,22 @@ test('armExpiry cancel stops further firing', async () => {
 	assert.equal(fired, seen);
 	assert.ok(seen >= 1);
 });
+
+const TABLE_TEXT = '| name | description | notes |\n| --- | --- | --- |\n| alpha | a rather long description of alpha | first |\n| beta | another long description for beta | second |';
+const plainLen = (s: string) => [...s.replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '')].length;
+
+test('assistant tables are printed within the host width, and the last width is kept while it reads 0', async () => {
+	const f = fakeHost(40);
+	const t = setup(undefined, 'API key', {host: f.host});
+	await t.settle();
+	t.controller.ui({kind: 'text', messageId: 'm1', text: TABLE_TEXT});
+	await t.settle();
+	assert.equal(t.printed.length, 1);
+	for (const line of t.printed[0]!.split('\n')) assert.ok(plainLen(line) <= 39, line);
+	f.set({columns: 0});
+	await t.settle();
+	t.controller.ui({kind: 'text', messageId: 'm2', text: TABLE_TEXT});
+	await t.settle();
+	assert.equal(t.printed.length, 2);
+	for (const line of t.printed[1]!.split('\n')) assert.ok(plainLen(line) <= 39, line);
+});

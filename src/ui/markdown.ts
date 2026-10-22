@@ -1,3 +1,5 @@
+import {matchTable, renderTable} from './markdown-table.js';
+
 // Terminal styling for Claude's Markdown. Input is already scrubbed (no escapes); the output adds
 // only constant SGR codes. It is a light reading aid, not a full CommonMark renderer.
 
@@ -59,10 +61,15 @@ function inline(text: string): string {
 	return out.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => spans[Number(i)] ?? '');
 }
 
-export function renderMarkdown(text: string): string {
+const DEFAULT_WIDTH = 100;
+
+export function renderMarkdown(text: string, options: {width?: number} = {}): string {
+	const width = options.width !== undefined && Number.isFinite(options.width) ? options.width : DEFAULT_WIDTH;
 	const out: string[] = [];
 	let fence: {lang: string; marker: string} | undefined;
-	for (const line of text.split('\n')) {
+	const lines = text.split('\n');
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i]!;
 		const open = /^\s*(```+|~~~+)\s*([\w+#.-]*)\s*$/.exec(line);
 		if (fence) {
 			if (open && open[1]!.startsWith(fence.marker[0]!) && open[1]!.length >= fence.marker.length && open[2] === '') {
@@ -76,6 +83,12 @@ export function renderMarkdown(text: string): string {
 		if (open) {
 			fence = {lang: open[2] ?? '', marker: open[1]!};
 			out.push(`${S.dim}╭─${fence.lang ? ` ${fence.lang}` : ''}${S.reset}`);
+			continue;
+		}
+		const table = matchTable(lines, i);
+		if (table) {
+			out.push(...renderTable(table, {width: width - 1, inline, style: S}));
+			i = table.end - 1;
 			continue;
 		}
 		const heading = /^(#{1,6})\s+(.*)$/.exec(line);

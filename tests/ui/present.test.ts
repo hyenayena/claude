@@ -144,3 +144,11 @@ test('limit and context outcomes print a yellow notice, not an error', () => {
 	assert.doesNotMatch(context, /Error:/);
 	assert.ok(!formatOut({kind: 'outcome', outcome: 'limit', error: `a${SECRET}`}, scrub).includes(SECRET));
 });
+
+const TABLE = '| name | description | notes |\n| --- | --- | --- |\n| alpha | a rather long description of alpha | first |\n| beta | another long description for beta | second |';
+const plainCells = (s: string) => [...s.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '')].length;
+
+test('formatOut lays assistant tables out to the given width', () => {
+	const out = formatOut({kind: 'assistant', text: TABLE, interrupted: false}, scrub, scrub, 40);
+	for (const line of out.split('\n')) assert.ok(plainCells(line) <= 39, line);
+});
