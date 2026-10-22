@@ -122,6 +122,16 @@ When core provides a command bridge (`ctx.commandBridge`, core 0.4.0+), the chat
 - Own metadata: `chat` and the `claude` command are `deny`; `claude session|tasks|mcp` are `safe`; `ping|rename|export|auth` are `confirm`; `ask|chat|new|resume|rewind|fork|copy|memory` are `deny`.
 - Residual risks: a confirmed command runs with the console's rights; the confirmation shows the line as typed by the model, and a command can still do more than its name suggests; the list of commands and their output go to the Anthropic API.
 
+## Projects
+
+With the `project` module installed, the chat and `ask` can read the projects in `/workplace` and the stages in `/stage`, and writes there follow the project module's isolation:
+
+- `src/projects.ts` reads `<YENA_DATA>/project/state.json` (written by the project module, format v1) on every Read/Edit/Write check, so `project isolate` and `project finish` take effect in the open chat at once.
+- An Edit or Write under `/workplace`, `/stage` or the hub's `projects/` folder is refused ("that project is read-only in this work session") unless it lands inside an isolated project's folder, its docs folder `<hub>/projects/<name>` or one of its stages. The target is resolved through symlinks first. Inside an isolated project the usual rules apply: secret files are refused, `CLAUDE.md`/`.claude` are refused, `.`-folders and files always ask, the rest is auto-accepted in `acceptEdits`; docs folders are free like the rest of the hub.
+- No state file: nothing changes (no project roots). Unreadable or invalid file: the workplace is not readable and every docs folder is read-only.
+- The chat settings deny `Edit` in `<YENA_DATA>/project/`; the policy hook refuses a Bash command naming `project/state.json`; `/workplace` and `/stage` are added as working directories when they exist at spawn; the chat hint names the `project` commands.
+- Residual risk: Bash is not confined by isolation. In `default` mode every Bash call still asks; in `auto` mode the classifier decides.
+
 ## Credentials
 Precedence: environment `ANTHROPIC_API_KEY`, then environment `CLAUDE_CODE_OAUTH_TOKEN`, then a Claude Code login (`auth login`), then the stored `credentials.json` (an API key from `auth key` or a subscription token from `auth login --token`; shown as `stored credential (credentials.json)`, a token as `subscription token (stored by yena)`, and passed to the child as `CLAUDE_CODE_OAUTH_TOKEN`). `src/credentials.ts` is the only code that reads these.
 

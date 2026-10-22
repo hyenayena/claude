@@ -15,6 +15,7 @@ import {
 	MAX_TURNS,
 } from './policy.js';
 import {CONSOLE_SERVER_NAME} from './chat/console-tools.js';
+import {projectStateFile, readProjectAccessSync} from './projects.js';
 import {applyTuning, type ChatTuning} from './chat-prefs.js';
 import type {Credential} from './types.js';
 
@@ -33,6 +34,8 @@ export type ClaudePaths = {
 	credentialsFile: string;
 	/** Written by Claude Code's own login; only its metadata is ever inspected. */
 	loginFile: string;
+	/** The project module's state (<YENA_DATA>/project/state.json): which projects are writable. */
+	projectStateFile: string;
 };
 
 export type RuntimeInfo = {
@@ -54,6 +57,7 @@ export function resolvePaths(dataDir: string, moduleDir?: string): ClaudePaths {
 		stateFile: path.join(dataDir, 'state.json'),
 		credentialsFile: path.join(dataDir, 'credentials.json'),
 		loginFile: path.join(dataDir, 'config', '.credentials.json'),
+		projectStateFile: projectStateFile(path.join(path.dirname(dataDir), 'md')),
 	};
 }
 
@@ -208,7 +212,7 @@ export function buildOptions(p: {
 	const options: Options = {
 		cwd: paths.projectDir,
 		env: p.env ?? buildEnv(process.env, paths, p.cred),
-		additionalDirectories: [paths.hubDir, paths.configDir],
+		additionalDirectories: [paths.hubDir, paths.configDir, ...projectRoots(paths)],
 		settingSources: ['user', 'project', 'local'],
 		abortController: p.abortController,
 		systemPrompt: {type: 'preset', preset: 'claude_code', append: buildHint(paths)},
@@ -294,9 +298,27 @@ export function cliEnv(
 	return {...scrubChatEnv(base), CLAUDE_CONFIG_DIR: paths.configDir, DISABLE_AUTOUPDATER: '1'};
 }
 
+/** The workplace and stage dirs, when the project module manages them and they exist. */
+function projectRoots(paths: Pick<ClaudePaths, 'projectStateFile' | 'hubDir'>): string[] {
+	const access = readProjectAccessSync(paths.projectStateFile, paths.hubDir);
+	return (access?.roots ?? []).filter(dir => lexists(dir));
+}
+
+function projectHint(paths: ClaudePaths): string {
+	const access = readProjectAccessSync(paths.projectStateFile, paths.hubDir);
+	if (!access || access.roots.length === 0) return '';
+	const [workplace, stage] = access.roots as [string, string];
+	return (
+		` Projects to work on are mounted in ${workplace}/<name>, their docs live in ${access.docs}/<name>, stage copies in ${stage}.` +
+		' Every project, its docs and its stages are read-only until the console command "project isolate <name>" makes them writable for the work session;' +
+		' "project list" shows them, "project stage make|apply" copies a project for parallel work and moves the changes back, "project finish" ends the session.'
+	);
+}
+
 export function buildChatHint(paths: ClaudePaths): string {
 	return (
 		buildHint(paths) +
+		projectHint(paths) +
 		" Tool calls that run commands or change files (Bash, Edit, Write) need the user's approval in this interface." +
 		' Bash runs as root in the project directory.' +
 		' If the user denies a call, do not retry it or work around the denial; explain what you needed and ask.' +

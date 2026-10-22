@@ -113,6 +113,9 @@ export const POLICY_DENY = {
 	outside: 'Access to that path is not allowed (outside the project).',
 	guard: 'Access to that path is not allowed (protected Claude configuration file).',
 	secret: 'Access to that path is not allowed (secret or credential file).',
+	readonly:
+		'Writing there is not allowed: that project is read-only in this work session. Ask the user which projects the change touches, then run the console command "project isolate <name>" (it asks the user).',
+	projectState: "The project module's state file is not to be touched.",
 	locked: "Writing there is not allowed (yena's Claude data dir). Instructions, agents and skills are edited in the md hub, at its own path.",
 	authFiles: 'Access to authentication files is blocked.',
 	background: 'Background execution is not available in the chat.',

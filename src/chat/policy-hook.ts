@@ -6,6 +6,8 @@ import {POLICY_DENY} from './permission.js';
 
 // Heuristic that over-denies on purpose: a shell command naming an auth file is refused in every mode.
 const AUTH_FILE = /credentials\.json|\.claude\.json|config\/backups/;
+// Same heuristic for the file that decides which projects are writable.
+const PROJECT_STATE = /project\/state\.json/;
 
 const allow: HookJSONOutput = {continue: true};
 
@@ -41,6 +43,7 @@ export function createPolicyHook(scope: Scope, configDir?: string): HookCallback
 				const cls = await classifyEditTarget(args.file_path, scope);
 				if (cls === 'deny-outside') return denyWith(POLICY_DENY.outside);
 				if (cls === 'deny-locked') return denyWith(POLICY_DENY.locked);
+				if (cls === 'deny-readonly') return denyWith(POLICY_DENY.readonly);
 				// The Claude config is not Claude's to change, except the plan files plan mode writes.
 				if (config && plans) {
 					const target = await resolveReal(path.resolve(scope.roots[0] ?? '/', args.file_path)).catch(() => undefined);
@@ -54,7 +57,9 @@ export function createPolicyHook(scope: Scope, configDir?: string): HookCallback
 			}
 			case 'Bash':
 				if (args.dangerouslyDisableSandbox) return denyWith(POLICY_DENY.background);
-				return typeof args.command === 'string' && AUTH_FILE.test(args.command) ? denyWith(POLICY_DENY.authFiles) : allow;
+				if (typeof args.command !== 'string') return allow;
+				if (AUTH_FILE.test(args.command)) return denyWith(POLICY_DENY.authFiles);
+				return PROJECT_STATE.test(args.command) ? denyWith(POLICY_DENY.projectState) : allow;
 			default: {
 				const denial = agentDenial(tool, args);
 				return denial ? denyWith(denial) : allow;

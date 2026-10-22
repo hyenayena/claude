@@ -2,6 +2,7 @@ import {realpath} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import type {CanUseTool} from '@anthropic-ai/claude-agent-sdk';
+import {type ProjectAccess, readProjectAccess} from './projects.js';
 
 export const ALLOWED_TOOLS = ['Read', 'Glob', 'Grep'];
 
@@ -73,6 +74,8 @@ export type Scope = {
 	locked?: string[];
 	/** Parts of the locked dirs that stay writable (plan mode's plans dir). */
 	lockedExcept?: string[];
+	/** The project module's current isolation, read on every check (it changes during a chat). */
+	projects?: () => Promise<ProjectAccess | undefined>;
 };
 
 export type PolicyPaths = {
@@ -85,6 +88,8 @@ export type PolicyPaths = {
 	configDir: string;
 	stateFile: string;
 	credentialsFile: string;
+	/** The project module's state file; projects are read-only unless it isolates them. */
+	projectStateFile?: string;
 };
 
 // `auth login --console` writes primaryApiKey into .claude.json and its backups.
@@ -109,8 +114,13 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 			path.join(home, '.ssh'),
 			...CONFIG_SECRET.map(x => path.join(paths.configDir, x)),
 		],
+		...(paths.projectStateFile !== undefined && {
+			projects: readProjects(paths.projectStateFile, paths.hubDir ?? paths.mdDir),
+		}),
 	};
 }
+
+const readProjects = (file: string, hubDir: string) => () => readProjectAccess(file, hubDir);
 
 export function buildAskSettings(paths: PolicyPaths): {
 	permissions: {deny: string[]};
@@ -183,6 +193,7 @@ export function buildChatSettings(paths: PolicyPaths): {
 		'Edit(**/*.pem)',
 		'Edit(**/id_rsa*)',
 		'Edit(./.yena/**)',
+		...(paths.projectStateFile !== undefined ? [`Edit(${absRule(path.dirname(paths.projectStateFile))}/**)`] : []),
 	];
 	return {
 		permissions: {allow: freeEditAllow(paths), deny: [...buildAskSettings(paths).permissions.deny, ...editDeny]},
@@ -234,7 +245,8 @@ export async function isPathAllowed(p: string, scope: Scope): Promise<boolean> {
 	} catch {
 		return false;
 	}
-	const roots = await realList(scope.roots);
+	const extra = (await scope.projects?.())?.roots ?? [];
+	const roots = await realList([...scope.roots, ...extra]);
 	const denied = await realList(scope.denied);
 	const rootLen = Math.max(-1, ...roots.filter(r => within(real, r)).map(r => r.length));
 	if (rootLen < 0) {
@@ -307,7 +319,8 @@ export type EditTargetClass =
 	| 'prompt-only'
 	| 'auto-eligible'
 	| 'free'
-	| 'deny-locked';
+	| 'deny-locked'
+	| 'deny-readonly';
 
 const NO_AUTO_EXACT = new Set([
 	'Makefile',
@@ -332,6 +345,20 @@ function noAutoAccept(rel: string): boolean {
 	return false;
 }
 
+/**
+ * A write under a managed dir (workplace, stages, the hub's projects dir) is allowed only inside a
+ * writable folder (an isolated project, its docs or its stages). Undefined: not a project path.
+ */
+async function projectTarget(real: string, access: ProjectAccess): Promise<'readonly' | {dir: string; docs: boolean} | undefined> {
+	const managed = await realList(access.managed);
+	if (!managed.some(d => within(real, d))) return undefined;
+	const [docsRoot] = (await realList([access.docs])) as [string];
+	const writable = await realList(access.writable);
+	const dir = writable.filter(d => within(real, d)).sort((a, b) => b.length - a.length)[0];
+	if (dir === undefined || dir === real) return 'readonly';
+	return {dir, docs: within(dir, docsRoot)};
+}
+
 export async function classifyEditTarget(filePath: string, scope: Scope): Promise<EditTargetClass> {
 	const projectDir = scope.roots[0];
 	if (projectDir === undefined || typeof filePath !== 'string' || filePath === '' || filePath.includes('\0')) {
@@ -347,6 +374,18 @@ export async function classifyEditTarget(filePath: string, scope: Scope): Promis
 	const locked = [...(scope.locked ?? []).map(d => path.resolve(d)), ...(await realList(scope.locked ?? []))];
 	const except = await realList(scope.lockedExcept ?? []);
 	if (locked.some(d => within(lexical, d) || within(real, d)) && !except.some(d => within(real, d))) return 'deny-locked';
+	const access = await scope.projects?.();
+	if (access) {
+		const verdict = await projectTarget(real, access);
+		if (verdict === 'readonly') return 'deny-readonly';
+		if (verdict !== undefined) {
+			if (!verdict.docs && isGuardedPath(real, verdict.dir)) return 'deny-guard';
+			if (!(await isPathAllowed(real, scope))) return 'deny-secret';
+			if (verdict.docs) return 'free';
+			const [first] = path.relative(verdict.dir, real).split(path.sep);
+			return first === undefined || first.startsWith('.') ? 'prompt-only' : 'auto-eligible';
+		}
+	}
 	const roots = await realList(scope.roots);
 	const [realProject, ...promptRoots] = roots as [string, ...string[]];
 	if (!within(real, realProject) && !promptRoots.some(r => within(real, r))) return 'deny-outside';
