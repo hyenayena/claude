@@ -127,6 +127,10 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private turnHandle: Handle | undefined;
 	private turnDeadline = 0;
 	private turnRemaining: number | undefined;
+	private holds = 0;
+	// Bumped when the counter is reset, so a release from an earlier turn cannot touch the next one.
+	private holdEpoch = 0;
+	private permissionHold: (() => void) | undefined;
 	private _mode: ChatMode = 'default';
 	private _commands: SlashCommandInfo[] = [];
 	private _title: string | undefined;
@@ -370,7 +374,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			};
 			this.queue.push(entry);
 			this.log.info('permission requested', {tool: toolNameOf(req), kind: req.kind, queued: this.queue.length});
-			if (this.queue.length === 1) this.pauseTurnTimer();
+			if (this.queue.length === 1) this.permissionHold = this.holdTurnTimer();
 			this.emit({type: 'permission-requested', request: req, pending: this.queue.length});
 		});
 	}
@@ -653,6 +657,21 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.turnTimer = undefined;
 		this.graceTimer = undefined;
 		this.turnRemaining = undefined;
+		this.holds = 0;
+		this.holdEpoch++;
+		this.permissionHold = undefined;
+	}
+
+	// Pauses the turn timeout until every hold is released (permission prompts, console commands).
+	holdTurnTimer(): () => void {
+		const epoch = this.holdEpoch;
+		let released = false;
+		if (++this.holds === 1) this.pauseTurnTimer();
+		return () => {
+			if (released || epoch !== this.holdEpoch) return;
+			released = true;
+			if (--this.holds === 0) this.resumeTurnTimer();
+		};
 	}
 
 	private armTurnTimer(ms: number): void {
@@ -711,7 +730,11 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		});
 		this.emit({type: 'permission-resolved', id: entry.req.id, pending: this.queue.length});
 		this.audit({outcome: outcomeOf(entry.req, decision), toolName: tool, summary: summaryOf(entry.req)});
-		if (this.queue.length === 0) this.resumeTurnTimer();
+		if (this.queue.length === 0) {
+			const release = this.permissionHold;
+			this.permissionHold = undefined;
+			release?.();
+		}
 		entry.resolve(decision);
 	}
 

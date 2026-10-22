@@ -15,7 +15,6 @@ const paths = {
 	projectDir,
 	mdDir: path.join(dataDir, 'md'),
 	configDir: path.join(dataDir, 'config'),
-	tokenFile: path.join(dataDir, '.token'),
 	stateFile: path.join(dataDir, 'state.json'),
 	credentialsFile: path.join(dataDir, 'credentials.json'),
 };
@@ -35,6 +34,11 @@ const decision = async (tool: string, input: Record<string, unknown>) => {
 	return out.hookSpecificOutput ? `${out.hookSpecificOutput.permissionDecision}:${out.hookSpecificOutput.permissionDecisionReason}` : 'pass';
 };
 
+test('the hook does not deny the yena console tools', async () => {
+	assert.equal(await decision('mcp__yena__list_commands', {}), 'pass');
+	assert.equal(await decision('mcp__yena__run_command', {command: 'help'}), 'pass');
+});
+
 test('the hook never allows by itself and passes calls inside the policy', async () => {
 	assert.equal(await decision('Read', {file_path: path.join(projectDir, 'a.txt')}), 'pass');
 	assert.equal(await decision('Edit', {file_path: path.join(projectDir, 'a.txt'), old_string: 'a', new_string: 'b'}), 'pass');
@@ -49,7 +53,7 @@ test('the hook denies paths outside the policy in any mode', async () => {
 	assert.equal(await decision('Write', {file_path: '/etc/x', content: ''}), `deny:${POLICY_DENY.outside}`);
 	assert.equal(await decision('Edit', {file_path: path.join(projectDir, 'CLAUDE.md')}), `deny:${POLICY_DENY.guard}`);
 	assert.equal(await decision('Write', {file_path: path.join(projectDir, '.env'), content: ''}), `deny:${POLICY_DENY.secret}`);
-	assert.equal(await decision('Read', {file_path: paths.tokenFile}), `deny:${POLICY_DENY.outside}`);
+	assert.equal(await decision('Read', {file_path: path.join(dataDir, '.token')}), `deny:${POLICY_DENY.outside}`);
 	assert.equal(await decision('Edit', {}), `deny:${POLICY_DENY.invalidInput}`);
 	assert.equal(await decision('Bash', {command: 'sleep 9', run_in_background: true}), 'pass');
 	assert.equal(await decision('Bash', {command: 'ls', dangerouslyDisableSandbox: true}), `deny:${POLICY_DENY.background}`);
@@ -70,4 +74,39 @@ test('the hook keeps the Claude config read-only except the plan files of plan m
 	}
 	symlinkSync(paths.configDir, path.join(projectDir, 'cfg-link'));
 	assert.equal(await decision('Edit', {file_path: path.join(projectDir, 'cfg-link', 'settings.json')}), `deny:${POLICY_DENY.guard}`);
+});
+
+test('the hook denies the auth files of the config dir for every tool', async () => {
+	mkdirSync(path.join(paths.configDir, 'backups'), {recursive: true});
+	mkdirSync(path.join(paths.configDir, 'projects'), {recursive: true});
+	const creds = path.join(paths.configDir, '.credentials.json');
+	const state = path.join(paths.configDir, '.claude.json');
+	const backups = path.join(paths.configDir, 'backups');
+	const denied = `deny:${POLICY_DENY.outside}`;
+	for (const f of [creds, state]) {
+		assert.equal(await decision('Read', {file_path: f}), denied, f);
+		assert.equal(await decision('Grep', {pattern: 'k', path: f}), denied, f);
+		assert.notEqual(await decision('Edit', {file_path: f, old_string: 'a', new_string: 'b'}), 'pass', f);
+		assert.notEqual(await decision('Write', {file_path: f, content: ''}), 'pass', f);
+	}
+	assert.equal(await decision('Glob', {pattern: '*', path: backups}), denied);
+	assert.equal(await decision('Read', {file_path: path.join(backups, '.claude.json.backup.1')}), denied);
+	assert.equal(await decision('Read', {file_path: path.join(paths.configDir, 'projects', 'x.jsonl')}), 'pass');
+});
+
+test('the hook denies Bash commands that name an auth file', async () => {
+	const reason = 'Access to authentication files is blocked.';
+	for (const command of [
+		`cat ${path.join(paths.configDir, '.credentials.json')}`,
+		'cat ~/.claude.json',
+		'grep k "$X/credentials.json"',
+		`ls ${path.join(paths.configDir, 'backups')}`,
+		'cat $HOME/.claude.json',
+		'cat ../config/.credentials.json',
+	]) {
+		assert.equal(await decision('Bash', {command}), `deny:${reason}`, command);
+	}
+	for (const command of ['ls', 'echo token', 'cat notes.tokens.md', 'git status', 'cat my.token', 'npm run token', 'cat foo/.tokens', 'cat .token', 'cat /data/claude/.token']) {
+		assert.equal(await decision('Bash', {command}), 'pass', command);
+	}
 });

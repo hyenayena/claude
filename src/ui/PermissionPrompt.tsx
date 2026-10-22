@@ -29,6 +29,7 @@ export function toolHeader(req: ToolRequest, reveal: Reveal): string {
 	}
 	if (req.toolName === 'WebFetch') return `WebFetch: fetch ${reveal(String(req.input['url'] ?? ''))}?`;
 	if (req.toolName === 'ExitPlanMode') return 'The plan is ready. Start working on it?';
+	if (req.toolName === 'Command') return `Run console command: ${reveal(String(req.input['command'] ?? ''))}?`;
 	if (req.toolName === 'Mcp') return `MCP: run ${reveal(String(req.input['__mcpTool'] ?? ''))}?`;
 	return `${req.toolName}: ${reveal(req.path ?? String(req.input['file_path'] ?? ''))}`;
 }

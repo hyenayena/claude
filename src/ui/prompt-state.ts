@@ -480,6 +480,9 @@ export function toolBodyRows(req: ToolRequest, reveal: Reveal, width: number): B
 		const command = raw.length > BASH_REVIEW_MAX ? raw.slice(0, BASH_REVIEW_MAX) : raw;
 		pushWrapped(rows, reveal(command), 'plain', width);
 		if (command.length < raw.length) rows.push({text: `… [${raw.length - command.length} more characters not shown]`, tone: 'dim'});
+	} else if (req.toolName === 'Command') {
+		pushWrapped(rows, reveal(String(req.input['command'] ?? '')), 'plain', width);
+		rows.push({text: 'The command runs in the yena console and may change state.', tone: 'warn'});
 	} else if (req.toolName === 'Mcp') {
 		const {__mcpTool: _tool, ...args} = req.input;
 		const json = JSON.stringify(args, null, 2) ?? '';

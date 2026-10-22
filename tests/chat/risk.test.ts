@@ -105,3 +105,7 @@ test('huge and hostile commands finish quickly', () => {
 test('non-string input does not throw', () => {
 	assert.deepEqual(bashHighlights(undefined as unknown as string), []);
 });
+
+test('a command reading .claude.json is flagged', () => {
+	assert.ok(has('cat /data/claude/config/.claude.json', 'warn', /\.claude\.json/));
+});

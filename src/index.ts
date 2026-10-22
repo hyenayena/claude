@@ -1,6 +1,7 @@
 import type {Logger, ModulePlugin} from '../../../src/api.js';
 import {createClaudeCommands} from './commands.js';
 import type {ChatUi} from './chat/command.js';
+import type {ConsoleSdk} from './chat/console-tools.js';
 import {noopLog} from './log.js';
 import type {ChatQueryFn, QueryFn} from './types.js';
 
@@ -36,6 +37,11 @@ const loadChatQuery = async (): Promise<ChatQueryFn> => {
 	return sdk.query as unknown as ChatQueryFn;
 };
 
+const loadConsoleSdk = async (): Promise<ConsoleSdk> => {
+	const [sdk, {z}] = await Promise.all([import('@anthropic-ai/claude-agent-sdk'), import('zod')]);
+	return {createSdkMcpServer: sdk.createSdkMcpServer, tool: sdk.tool, z};
+};
+
 // Lazy import: ping and ask must never load React or Ink.
 const loadUi = (): Promise<ChatUi> => import('./ui/mount.js');
 
@@ -44,7 +50,7 @@ const plugin: ModulePlugin = host => {
 	exitLog = log;
 	log.info('plugin loaded');
 	return [
-		...createClaudeCommands({dataDir: host.dataDir, env: process.env, log, loadQuery, loadChatQuery, loadUi, registerAbort}),
+		...createClaudeCommands({dataDir: host.dataDir, env: process.env, log, loadQuery, loadChatQuery, loadConsoleSdk, loadUi, registerAbort}),
 	];
 };
 

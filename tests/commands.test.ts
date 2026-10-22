@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {chmod, mkdtemp, readdir, readFile, stat, symlink, writeFile} from 'node:fs/promises';
+import {chmod, mkdir, mkdtemp, readdir, readFile, stat, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -8,6 +8,7 @@ import {test} from 'node:test';
 import type {CommandContext} from '../../../src/api.js';
 import {storeOauthToken} from '../src/credentials.js';
 import {createClaudeCommand, type ClaudeDeps} from '../src/commands.js';
+import type {LoginStatus} from '../src/claude-login.js';
 import type {QueryFn} from '../src/types.js';
 import {TurnFailure} from '../src/session.js';
 import {makeFakeLog, serialized} from './helpers/fake-log.js';
@@ -50,6 +51,7 @@ const setup = async (over: Partial<ClaudeDeps> & {env?: NodeJS.ProcessEnv} = {})
 		dataDir,
 		env: {ANTHROPIC_API_KEY: KEY},
 		loadQuery: async () => q.query,
+		login: {probe: async () => undefined},
 		...over,
 	});
 	return {command, dataDir, printed, ctx, q};
@@ -161,7 +163,7 @@ test('missing credential makes ask throw the exact error', async () => {
 	const {command, ctx} = await setup({env: {}});
 	await assert.rejects(async () => command.run(['ask', 'x'], ctx), {
 		message:
-			'No credentials found. Set ANTHROPIC_API_KEY, or run "claude auth key --from-file <path>" to store an API key. See "claude auth status".',
+			'No credentials found. Set ANTHROPIC_API_KEY, run "claude auth login", or run "claude auth key --from-file <path>" to store an API key. See "claude auth status".',
 	});
 });
 
@@ -237,14 +239,14 @@ test('new clears the session; session prints id and model', async () => {
 	void dataDir;
 });
 
-test('auth status warns on a world-readable legacy file and reports no secret', async () => {
+test('auth status warns on a world-readable credentials.json and reports no secret', async () => {
 	const {command, ctx, printed, dataDir} = await setup({env: {}});
-	await writeFile(join(dataDir, '.token'), OAUTH);
-	await chmod(join(dataDir, '.token'), 0o644);
+	await storeOauthToken(dataDir, OAUTH);
+	await chmod(join(dataDir, 'credentials.json'), 0o644);
 	await command.run(['auth', 'status'], ctx);
 	const out = printed.join('\n');
-	assert.match(out, /subscription token \(from legacy file \.token\)/);
-	assert.match(out, /Warning: \.token is readable by other users/);
+	assert.match(out, /subscription token \(stored by yena\)/);
+	assert.match(out, /Warning: credentials\.json is readable by other users/);
 	assert.ok(!out.includes(OAUTH));
 });
 
@@ -258,10 +260,10 @@ test('auth status lists other sources by name only', async () => {
 	const {command, ctx, printed, dataDir} = await setup();
 	await command.run(['auth', 'status'], ctx);
 	assert.ok(!printed.some(l => l.startsWith('Other available')));
-	await writeFile(join(dataDir, '.token'), OAUTH, {mode: 0o600});
+	await storeOauthToken(dataDir, OAUTH);
 	printed.length = 0;
 	await command.run(['auth', 'status'], ctx);
-	assert.ok(printed.includes('Other available sources: legacy file (.token)'));
+	assert.ok(printed.includes('Other available sources: stored credential (credentials.json)'));
 });
 
 const keyFile = async (content: string) => {
@@ -338,28 +340,32 @@ test('auth key rejects bad input without echoing content', async () => {
 	assert.deepEqual(printed, []);
 });
 
-test('auth logout removes only the stored credential', async () => {
+test('auth logout removes the stored credential, key or token', async () => {
 	const {command, ctx, printed, dataDir} = await setup({env: {}});
 	await command.run(['auth', 'logout'], ctx);
 	assert.deepEqual(printed, ['No stored credential.']);
 	printed.length = 0;
-	await writeFile(join(dataDir, '.token'), OAUTH, {mode: 0o600});
+	await storeOauthToken(dataDir, OAUTH);
+	await command.run(['auth', 'logout'], ctx);
+	assert.deepEqual(printed, ['Stored credential removed. Environment variables are not touched.']);
+	assert.ok(!(await readdir(dataDir)).includes('credentials.json'));
+	printed.length = 0;
 	const {file} = await keyFile(KEY);
 	await command.run(['auth', 'key', '--from-file', file], ctx);
 	printed.length = 0;
 	await command.run(['auth', 'logout'], ctx);
-	assert.equal(printed[0], 'Stored credential removed. Environment variables and the legacy file .token are not touched.');
-	assert.equal(printed[1], 'Active credential: subscription token (from legacy file .token)');
-	assert.equal(await readFile(join(dataDir, '.token'), 'utf8'), OAUTH);
+	assert.deepEqual(printed, ['Stored credential removed. Environment variables are not touched.']);
+	assert.ok(!(await readdir(dataDir)).includes('credentials.json'));
 });
 
-test('auth login needs a terminal handoff; the token goes to .token only when it looks right', async () => {
+test('auth login needs a terminal handoff; the token goes to credentials.json only when it looks right', async () => {
 	const {command, ctx, dataDir} = await setup();
 	await assert.rejects(async () => command.run(['auth', 'login'], ctx), /needs an interface that can hand over the terminal/);
 	await assert.rejects(storeOauthToken(dataDir, 'sk-ant-api03-notatoken'), /not a subscription token/);
 	await storeOauthToken(dataDir, `  ${OAUTH}\n`);
-	assert.equal(await readFile(join(dataDir, '.token'), 'utf8'), `${OAUTH}\n`);
-	assert.equal((await stat(join(dataDir, '.token'))).mode & 0o777, 0o600);
+	const file = join(dataDir, 'credentials.json');
+	assert.equal(JSON.parse(await readFile(file, 'utf8')).value, OAUTH);
+	assert.equal((await stat(file)).mode & 0o777, 0o600);
 });
 
 test('claude memory opens an md file through the terminal handoff', async () => {
@@ -378,7 +384,27 @@ test('auth without or with unknown subcommand fails with usage', async () => {
 	}
 });
 
-test('only credentials.ts reads credential env values or the token file', async () => {
+const listSources = async (dir: string): Promise<string[]> => {
+	const out: string[] = [];
+	for (const entry of await readdir(dir, {withFileTypes: true})) {
+		const full = join(dir, entry.name);
+		if (entry.isDirectory()) out.push(...(await listSources(full)));
+		else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) out.push(full);
+	}
+	return out;
+};
+
+test('no source file mentions the removed .token file', async () => {
+	const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
+	const offenders: string[] = [];
+	for (const file of await listSources(dir)) {
+		const text = await readFile(file, 'utf8');
+		if (/\.token\b|tokenFile|legacy-file/.test(text)) offenders.push(file.slice(dir.length + 1));
+	}
+	assert.deepEqual(offenders, []);
+});
+
+test('only credentials.ts reads credential env values or credential files', async () => {
 	const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 	const names = 'ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN';
 	const envReads = [
@@ -387,12 +413,13 @@ test('only credentials.ts reads credential env values or the token file', async 
 		new RegExp(`\\benv\\[\\s*['"\`](${names})`),
 	];
 	const fileReader = /\b(readFile|readFileSync|createReadStream|open|openSync)\b/;
-	const tokenRef = /\.token\b|tokenFile/;
+	const tokenRef = /credentials\.json|credentialsFile|storedFile/;
 	const allowed = [new RegExp(`delete\\s+\\w+\\.(${names})\\b`), new RegExp(`\\b\\w+\\.(${names})\\s*=[^=]`)];
 	const offenders: string[] = [];
-	for (const name of await readdir(dir)) {
-		if (!name.endsWith('.ts') || name.endsWith('.test.ts') || name === 'credentials.ts') continue;
-		const lines = (await readFile(join(dir, name), 'utf8')).split('\n');
+	for (const file of await listSources(dir)) {
+		const name = file.slice(dir.length + 1);
+		if (name === 'credentials.ts') continue;
+		const lines = (await readFile(file, 'utf8')).split('\n');
 		lines.forEach((line, i) => {
 			const code = line.replace(/\/\/.*$/, '');
 			if (allowed.some(re => re.test(code))) return;
@@ -413,6 +440,21 @@ test('ask output is sanitized and redacted before printing', async () => {
 	assert.equal(/\x1b|‮|\x07/.test(out), false);
 	assert.equal(out.includes(KEY), false);
 	assert.ok(out.includes('link'));
+});
+
+test('commands carry agent policies', async () => {
+	const {command} = await setup();
+	assert.equal(command.agent, 'deny');
+	const by = Object.fromEntries(command.subcommands!.map(s => [s.name, s.agent]));
+	for (const n of ['session', 'tasks', 'mcp']) assert.equal(by[n], 'safe', n);
+	for (const n of ['ping', 'rename', 'export', 'auth']) assert.equal(by[n], 'confirm', n);
+	for (const n of ['ask', 'chat', 'new', 'resume', 'rewind', 'fork', 'copy', 'memory']) assert.equal(by[n], 'deny', n);
+});
+
+test('the top-level chat command is denied to agents', async () => {
+	const {createClaudeCommands} = await import('../src/commands.js');
+	const cmds = createClaudeCommands({dataDir: '/tmp/x', env: {}, loadQuery: async () => (() => { throw new Error('unused'); }) as never});
+	assert.equal(cmds.find(c => c.name === 'chat')?.agent, 'deny');
 });
 
 test('chat is listed in the subcommands', async () => {
@@ -524,7 +566,7 @@ test('auth status, key and logout are logged with labels only', async () => {
 	await command.run(['auth', 'status'], ctx);
 	const status = log.records.find(r => r.msg === 'auth status')!;
 	assert.equal(status.level, 'info');
-	assert.deepEqual(status.fields, {kind: 'api-key', source: 'env', others: []});
+	assert.deepEqual(status.fields, {kind: 'api-key', source: 'env', others: [], login: undefined});
 
 	await command.run(['auth', 'logout'], ctx);
 	assert.deepEqual(log.records.find(r => r.msg === 'stored credential removed')!.fields, {removed: false});
@@ -549,4 +591,206 @@ test('ask limit failure logs the failure kind and no reason', async () => {
 	assert.equal(failed.fields.failure, 'usage-limit');
 	assert.equal('reason' in failed.fields, false);
 	assert.ok(!JSON.stringify(log.records).includes('hit your limit'));
+});
+
+const EMAIL = 'owner.person@example.com';
+
+const loginSetup = async (over: {env?: NodeJS.ProcessEnv; status?: LoginStatus; runOk?: boolean; afterRun?: LoginStatus; logoutOk?: boolean; token?: string; log?: ReturnType<typeof makeFakeLog>} = {}) => {
+	const moduleDir = await mkdtemp(join(tmpdir(), 'claude-mod-'));
+	const pkg = join(moduleDir, '.runtime', 'node_modules', '@anthropic-ai', 'claude-code');
+	await mkdir(pkg, {recursive: true});
+	await writeFile(join(pkg, 'package.json'), '{"version":"9.9.9"}');
+	const runs: Array<{bin: string; args: string[]; env: NodeJS.ProcessEnv}> = [];
+	const logouts: Array<{bin: string; env: Record<string, string | undefined>}> = [];
+	let status: LoginStatus | undefined = over.status;
+	let probes = 0;
+	const s = await setup({
+		env: over.env ?? {},
+		moduleDir,
+		...(over.log && {log: over.log}),
+		login: {
+			probe: async () => (probes++, status),
+			run: (bin, args, env) => {
+				runs.push({bin, args, env});
+				if (over.runOk !== false && over.afterRun) status = over.afterRun;
+				return over.runOk !== false;
+			},
+			wait: () => {},
+			readSecret: () => over.token ?? '',
+			logout: async (bin, env) => {
+				logouts.push({bin, env});
+				if (over.logoutOk !== false) status = {loggedIn: false};
+				return over.logoutOk !== false;
+			},
+		},
+	});
+	const suspended: string[] = [];
+	const ctx: CommandContext = {...s.ctx, suspend: async <T,>(fn: () => T | Promise<T>) => (suspended.push('s'), fn())};
+	return {...s, ctx, plain: s.ctx, runs, logouts, suspended, probes: () => probes, moduleDir};
+};
+
+const SIGNED_IN: LoginStatus = {loggedIn: true, method: 'claude.ai', subscriptionType: 'max', email: EMAIL};
+
+test('auth login argument errors show without a terminal handoff', async () => {
+	const s = await loginSetup();
+	await assert.rejects(async () => s.command.run(['auth', 'login', '--bogus'], s.plain), /Unknown option "--bogus"\. Usage: claude auth login/);
+	await assert.rejects(async () => s.command.run(['auth', 'login', '--token', '--sso'], s.plain), /cannot be combined/);
+	await assert.rejects(async () => s.command.run(['auth', 'login', '--sso'], s.plain), /needs an interface that can hand over the terminal/);
+	assert.equal(s.runs.length, 0);
+});
+
+test('auth login --token runs setup-token with the CLI env and keeps the old flow', async () => {
+	const s = await loginSetup({env: {ANTHROPIC_API_KEY: KEY, PATH: '/bin'}, runOk: false});
+	const printed = s.printed;
+	await s.command.run(['auth', 'login', '--token'], s.ctx);
+	assert.equal(s.runs.length, 1);
+	assert.deepEqual(s.runs[0]!.args, ['setup-token']);
+	assert.equal(s.runs[0]!.env.ANTHROPIC_API_KEY, undefined);
+	assert.equal(s.runs[0]!.env.CLAUDE_CONFIG_DIR, join(s.dataDir, 'config'));
+	assert.ok(printed.includes('Login cancelled; nothing was saved.'));
+	assert.ok(!(await readdir(s.dataDir)).includes('credentials.json'));
+});
+
+test('browser login success passes exact args and a credential-free env', async () => {
+	const log = makeFakeLog();
+	const s = await loginSetup({env: {ANTHROPIC_API_KEY: KEY, CLAUDE_CODE_OAUTH_TOKEN: OAUTH, PATH: '/bin'}, afterRun: SIGNED_IN, log});
+	await s.command.run(['auth', 'login', '--console', '--sso', '--email', EMAIL], s.ctx);
+	assert.equal(s.runs.length, 1);
+	assert.deepEqual(s.runs[0]!.args, ['auth', 'login', '--console', '--sso', '--email', EMAIL]);
+	assert.equal(s.runs[0]!.bin, join(s.moduleDir, '.runtime', 'node_modules', '.bin', 'claude'));
+	for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) assert.equal(s.runs[0]!.env[name], undefined);
+	assert.equal(s.runs[0]!.env.CLAUDE_CONFIG_DIR, join(s.dataDir, 'config'));
+	assert.equal(s.runs[0]!.env.DISABLE_AUTOUPDATER, '1');
+	const out = s.printed.join('\n');
+	assert.match(out, /Signed in with Claude Code \(claude\.ai\)/);
+	assert.ok(out.includes(join(s.dataDir, 'config', '.credentials.json')));
+	assert.match(out, /Note: the login is not used while another source has priority/);
+	assert.deepEqual(log.records.find(r => r.msg === 'claude login started')!.fields, {method: 'console', sso: true, email: true});
+	assert.deepEqual(log.records.find(r => r.msg === 'claude login finished')!.fields, {
+		exitOk: true,
+		loggedIn: true,
+		method: 'claude.ai',
+		subscriptionType: 'max',
+	});
+	assert.ok(!serialized(log).includes(EMAIL));
+	assert.ok(!serialized(log).includes(KEY));
+});
+
+test('browser login without an env source makes the login active and shows the notice', async () => {
+	const s = await loginSetup({afterRun: SIGNED_IN});
+	await s.command.run(['auth', 'login'], s.ctx);
+	assert.deepEqual(s.runs[0]!.args, ['auth', 'login']);
+	assert.ok(s.printed.includes('Active credential: Claude subscription (Claude Code login)'));
+	assert.ok(!s.printed.some(l => l.startsWith('Note:')));
+	assert.equal(s.printed.filter(l => l.startsWith('Notice:')).length, 1);
+});
+
+test('browser login that does not finish changes nothing', async () => {
+	const log = makeFakeLog();
+	const s = await loginSetup({runOk: false, log});
+	await s.command.run(['auth', 'login'], s.ctx);
+	assert.ok(s.printed.includes('Login did not complete; nothing was changed.'));
+	assert.deepEqual(log.records.find(r => r.msg === 'claude login finished')!.fields, {
+		exitOk: false,
+		loggedIn: false,
+		method: undefined,
+		subscriptionType: undefined,
+	});
+});
+
+test('auth logout runs the CLI logout only when a login exists', async () => {
+	const none = await loginSetup();
+	await none.command.run(['auth', 'logout'], none.ctx);
+	assert.equal(none.logouts.length, 0);
+
+	const s = await loginSetup({status: SIGNED_IN, env: {PATH: '/bin', ANTHROPIC_API_KEY: KEY}});
+	const {file} = await keyFile(KEY);
+	await s.command.run(['auth', 'key', '--from-file', file], s.ctx);
+	s.printed.length = 0;
+	await s.command.run(['auth', 'logout'], s.ctx);
+	assert.equal(s.logouts.length, 1);
+	assert.equal(s.logouts[0]!.env.ANTHROPIC_API_KEY, undefined);
+	assert.equal(s.logouts[0]!.env.CLAUDE_CONFIG_DIR, join(s.dataDir, 'config'));
+	await assert.rejects(readFile(join(s.dataDir, 'credentials.json'), 'utf8'));
+	assert.ok(s.printed.includes('Claude Code login removed.'));
+});
+
+test('auth logout warns when Claude Code still reports a login', async () => {
+	const s = await loginSetup({status: SIGNED_IN, logoutOk: false});
+	await s.command.run(['auth', 'logout'], s.ctx);
+	assert.ok(s.printed.some(l => l.startsWith('Warning: Claude Code still reports a login')));
+	assert.equal(s.logouts.length, 1);
+});
+
+test('auth logout with extra arguments is a usage error and changes nothing', async () => {
+	const s = await loginSetup({status: SIGNED_IN});
+	await assert.rejects(async () => s.command.run(['auth', 'logout', 'now'], s.ctx), {message: 'Usage: claude auth logout'});
+	assert.equal(s.logouts.length, 0);
+});
+
+test('auth status shows the login with subscription and email on screen only', async () => {
+	const log = makeFakeLog();
+	const s = await loginSetup({status: SIGNED_IN, log});
+	await storeOauthToken(s.dataDir, OAUTH);
+	await s.command.run(['auth', 'status'], s.ctx);
+	assert.equal(s.printed[0], 'Active credential: Claude subscription (Claude Code login)');
+	assert.ok(s.printed.includes(`Claude Code login: signed in (claude.ai, max, ${EMAIL})`));
+	assert.ok(s.printed.includes('Other available sources: stored credential (credentials.json)'));
+	assert.equal(s.probes(), 1);
+	const rec = log.records.find(r => r.msg === 'auth status')!;
+	assert.deepEqual(rec.fields, {kind: 'oauth', source: 'claude-login', others: ['stored credential (credentials.json)'], login: 'claude.ai'});
+	assert.ok(!serialized(log).includes(EMAIL));
+});
+
+test('auth status names the login among other sources when an env key has priority', async () => {
+	const s = await loginSetup({status: SIGNED_IN, env: {ANTHROPIC_API_KEY: KEY}});
+	await s.command.run(['auth', 'status'], s.ctx);
+	assert.ok(s.printed.includes('Other available sources: Claude Code login'));
+});
+
+test('auth key notes that a login shadows the stored key', async () => {
+	const s = await loginSetup({status: SIGNED_IN});
+	const {file} = await keyFile(KEY);
+	await s.command.run(['auth', 'key', '--from-file', file], s.ctx);
+	assert.ok(s.printed.some(l => l.startsWith('Note: the stored key is not used while another source has priority')));
+});
+
+test('ask with a login source: env without credentials, footer says subscription login', async () => {
+	const s = await loginSetup({status: SIGNED_IN, env: {PATH: '/bin'}});
+	await s.command.run(['ask', 'hi'], s.plain);
+	const env = s.q.calls[0]!.options.env as Record<string, string | undefined>;
+	assert.equal(env.ANTHROPIC_API_KEY, undefined);
+	assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+	assert.equal(s.printed.filter(l => l.startsWith('[session')).at(-1), '[session 11111111 · model claude-test-1 · subscription login]');
+});
+
+test('auth subcommand description lists the login options within the hint limit', () => {
+	const command = createClaudeCommand({dataDir: '/nonexistent', env: {}, loadQuery: async () => (() => []) as unknown as QueryFn});
+	const auth = command.subcommands!.find(x => x.name === 'auth')!;
+	assert.match(auth.description!, /login \[--console\|--sso\|--email <address>\|--token\]/);
+	assert.match(auth.description!, /key --from-file <path>/);
+	assert.ok(auth.description!.length <= 200);
+});
+
+test('auth login --token stores the pasted token in credentials.json at 0600', async () => {
+	const s = await loginSetup({token: OAUTH});
+	await s.command.run(['auth', 'login', '--token'], s.ctx);
+	const file = join(s.dataDir, 'credentials.json');
+	const body = JSON.parse(await readFile(file, 'utf8'));
+	assert.equal(body.kind, 'oauth');
+	assert.equal(body.value, OAUTH);
+	assert.equal((await stat(file)).mode & 0o777, 0o600);
+	assert.ok(!(await readdir(s.dataDir)).includes('.token'));
+	assert.ok(s.printed.includes(`Subscription token stored in ${file} (mode 0600), replacing any stored API key. New chats use it unless an environment variable or a Claude Code login takes priority.`));
+	assert.ok(!s.printed.join('\n').includes(OAUTH));
+});
+
+test('auth key with an OAuth token file points to "auth login --token" and does not echo it', async () => {
+	const s = await loginSetup();
+	const {file} = await keyFile(OAUTH);
+	await assert.rejects(
+		async () => s.command.run(['auth', 'key', '--from-file', file], s.ctx),
+		(e: Error) => e.message.includes('claude auth login --token') && !e.message.includes(OAUTH),
+	);
+	assert.ok(!(await readdir(s.dataDir)).includes('credentials.json'));
 });

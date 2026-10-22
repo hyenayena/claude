@@ -87,11 +87,9 @@ export function tuningFromState(state: ClaudeState): ChatTuning {
 
 export function applyTuning(options: Options, tuning: ChatTuning | undefined): Options {
 	const next: Options = {...options};
-	// MCP servers configured for Claude Code (user and project) load unless turned off.
-	if (!tuning?.noMcp) {
-		next.strictMcpConfig = false;
-		delete next.mcpServers;
-	}
+	// MCP servers configured for Claude Code (user and project) load unless turned off; the
+	// in-process servers passed in `mcpServers` (yena's console tools) stay either way.
+	if (!tuning?.noMcp) next.strictMcpConfig = false;
 	if (tuning?.hooks) {
 		const base = typeof next.settings === 'object' && next.settings !== null ? next.settings : {};
 		next.settings = {...base, disableAllHooks: false};

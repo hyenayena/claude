@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {runTurn, TurnFailure} from '../src/session.js';
+import {AUTH_MESSAGE, runTurn, TurnFailure} from '../src/session.js';
 import type {QueryFn} from '../src/types.js';
 
 const SECRET = 'sk-ant-api03-TESTVALUE0123456789abcdef';
@@ -71,7 +71,8 @@ test('is_error result followed by a throw keeps the mapped error', async () => {
 	const f = fake([init, {type: 'result', subtype: 'success', is_error: true, result: 'Not logged in', session_id: 's'}], {
 		throwAfter: new Error('process exited with code 1'),
 	});
-	await assert.rejects(run(f), /^Error: Not authenticated\. Run "claude auth status"/);
+	assert.equal(await run(f).then(() => "", (e: Error) => e.message), AUTH_MESSAGE);
+	assert.match(AUTH_MESSAGE, /"claude auth login"/);
 	assert.equal(f.closed(), 1);
 });
 
@@ -106,7 +107,7 @@ test('real SDK shapes: rejected credential is a success-subtype error result aft
 		{type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate. API Error: 401 OAuth access token is invalid.', terminal_reason: 'api_error'},
 	]);
 	await assert.rejects(run(f), {
-		message: 'Not authenticated. Run "claude auth status", set ANTHROPIC_API_KEY, or run "claude auth key --from-file <path>".',
+		message: AUTH_MESSAGE,
 	});
 });
 

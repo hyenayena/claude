@@ -114,7 +114,7 @@ const NAMED = [
 	'CLAUDE.local.md',
 	'.claude',
 	'.yena',
-	'.token',
+	'.claude.json',
 	'credentials',
 	'.env',
 	'.ssh',

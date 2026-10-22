@@ -10,6 +10,7 @@ import {
 	buildEnv,
 	buildHint,
 	buildOptions,
+	cliEnv,
 	ensureMdLinks,
 	GUARD_DENY,
 	resolvePaths,
@@ -45,7 +46,7 @@ describe('resolvePaths', () => {
 		assert.equal(p.hubDir, '/data/md');
 		assert.equal(p.configDir, '/data/claude/config');
 		assert.equal(p.runtimeBin, '/app/modules/claude/.runtime/node_modules/.bin/claude');
-		assert.equal(p.tokenFile, '/data/claude/.token');
+		assert.ok(!('tokenFile' in p));
 		assert.equal(p.stateFile, '/data/claude/state.json');
 		assert.equal(p.credentialsFile, '/data/claude/credentials.json');
 	});
@@ -278,10 +279,17 @@ describe('buildChatOptions', () => {
 		// The chat loads MCP servers from the Claude Code config; ask never does.
 		assert.equal(a.strictMcpConfig, true);
 		assert.equal(o.strictMcpConfig, false);
-		assert.equal('mcpServers' in o, false);
+		assert.deepEqual(o.mcpServers, {});
 		const off = buildChatOptions({...base, tuning: {noMcp: true}});
 		assert.equal(off.strictMcpConfig, true);
 		assert.deepEqual(off.mcpServers, {});
+		const server = {type: 'sdk', name: 'yena', instance: {}} as never;
+		const on = buildChatOptions({...base, consoleServer: server});
+		assert.equal(on.strictMcpConfig, false);
+		assert.equal(on.mcpServers?.['yena'], server);
+		const offWith = buildChatOptions({...base, tuning: {noMcp: true}, consoleServer: server});
+		assert.equal(offWith.strictMcpConfig, true);
+		assert.deepEqual(Object.keys(offWith.mcpServers ?? {}), ['yena']);
 		const hooks = buildChatOptions({...base, tuning: {hooks: true}}).settings as {disableAllHooks: boolean};
 		assert.equal(hooks.disableAllHooks, false);
 		assert.equal((o.settings as {disableAllHooks: boolean}).disableAllHooks, true);
@@ -430,5 +438,40 @@ describe('ensureMdLinks', () => {
 		assert.ok(!lstatSync(path.join(paths.configDir, 'skills')).isSymbolicLink());
 		assert.equal(readFileSync(path.join(paths.configDir, 'skills', 'mine'), 'utf8'), 'c');
 		assert.ok(lstatSync(path.join(paths.configDir, 'agents')).isSymbolicLink());
+	});
+});
+
+describe('claude login environment', () => {
+	const paths = resolvePaths('/data/claude', '/app/modules/claude');
+	const login: Credential = {kind: 'oauth', source: 'claude-login', value: ''};
+	const consoleLogin: Credential = {kind: 'api-key', source: 'claude-login', value: ''};
+	const base = {PATH: '/bin', ANTHROPIC_API_KEY: 'x', CLAUDE_CODE_OAUTH_TOKEN: ' ', ANTHROPIC_AUTH_TOKEN: 'y'};
+
+	it('loginFile lives in the config dir', () => {
+		assert.equal(paths.loginFile, '/data/claude/config/.credentials.json');
+	});
+
+	it('buildEnv strips all credential variables for a login', () => {
+		for (const cred of [login, consoleLogin]) {
+			const env = buildEnv(base, paths, cred);
+			for (const n of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN']) assert.equal(env[n], undefined, n);
+			assert.equal(env.CLAUDE_CONFIG_DIR, paths.configDir);
+		}
+	});
+
+	it('buildChatOptions env has no credential variables for a login', () => {
+		const env = buildChatOptions({
+			paths,
+			cred: login,
+			abortController: new AbortController(),
+			canUseTool: async () => ({behavior: 'deny', message: 'n'}),
+			env: buildEnv(base, paths, login),
+		}).env!;
+		for (const n of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN']) assert.ok(!(n in env), n);
+	});
+
+	it('cliEnv scrubs secrets and pins the config dir', () => {
+		const env = cliEnv({...base, HOME: '/root', GITHUB_TOKEN: 'g'}, paths);
+		assert.deepEqual(env, {PATH: '/bin', HOME: '/root', CLAUDE_CONFIG_DIR: paths.configDir, DISABLE_AUTOUPDATER: '1'});
 	});
 });

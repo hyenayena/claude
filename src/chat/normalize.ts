@@ -58,6 +58,8 @@ const fromSystem = (msg: Loose): UiEvent[] => {
 			if (status !== 'running' && status !== 'completed' && status !== 'failed' && status !== 'stopped') return [];
 			const description = str(msg['description']);
 			const summary = str(msg['summary']);
+			const toolUseId = str(msg['tool_use_id']);
+			const taskType = str(msg['task_type']);
 			return [
 				{
 					kind: 'task',
@@ -66,6 +68,8 @@ const fromSystem = (msg: Loose): UiEvent[] => {
 					...(description !== undefined && {description}),
 					...(msg['is_backgrounded'] === true && {background: true}),
 					...(summary !== undefined && {summary}),
+					...(toolUseId !== undefined && {toolUseId}),
+					...(taskType !== undefined && {taskType}),
 				},
 			];
 		}

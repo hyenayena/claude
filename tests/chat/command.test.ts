@@ -78,6 +78,7 @@ const setup = async (opts: {mount?: boolean; failFirst?: boolean; failMessage?: 
 			aborts.push(c);
 			return () => void unregistered++;
 		},
+		login: {probe: async () => undefined},
 		...opts.deps,
 	});
 	const command = {run: async (args: string[], c: CommandContext) => real.run(args, c)};
@@ -1071,4 +1072,66 @@ test('claude tasks lists the chat tasks and stops the picked running one; claude
 	assert.ok(s.printed.includes('db: failed (no socket)'));
 	release();
 	await running;
+});
+
+test('chat with a Claude Code login: no credentials in the child env, login label', async () => {
+	const labels: string[] = [];
+	const s = await setup({
+		deps: {env: {PATH: '/bin'}, login: {probe: async () => ({loggedIn: true, method: 'claude.ai', subscriptionType: 'max'})}},
+		run: async p => {
+			labels.push(p.credentialLabel);
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	assert.deepEqual(labels, ['subscription login']);
+	const env = s.q.calls[0]!.options.env as Record<string, string | undefined>;
+	assert.equal(env.ANTHROPIC_API_KEY, undefined);
+	assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+});
+
+const consoleSdkFake = {
+	tool: ((name: string) => ({name})) as never,
+	createSdkMcpServer: ((o: {name: string}) => ({type: 'sdk', name: o.name})) as never,
+	z: {string: () => ({})} as never,
+};
+
+for (const withBridge of [true, false]) {
+	test(`chat ${withBridge ? 'registers' : 'omits'} the yena console server ${withBridge ? 'when' : 'without'} a command bridge`, async () => {
+		const s = await setup({
+			deps: {loadConsoleSdk: async () => consoleSdkFake},
+			run: async p => {
+				const done = turnDone(p);
+				p.controller.send('hi');
+				await done;
+			},
+		});
+		if (withBridge) s.ctx.commandBridge = {list: () => [], run: async () => ({status: 'ok', output: '', truncated: false, ms: 0})};
+		await s.command.run(['chat'], s.ctx);
+		const servers = s.q.calls[0]!.options['mcpServers'] as Record<string, unknown>;
+		assert.equal('yena' in servers, withBridge);
+	});
+}
+
+test('the chat child gets the private shell tmp root, and a failure only logs', async () => {
+	const log = makeFakeLog();
+	const ok = await setup({deps: {shellTmp: () => '/tmp/yena-claude-test', log}, run: async p => {
+		const done = turnDone(p);
+		p.controller.send('hello');
+		await done;
+	}});
+	await ok.command.run(['chat'], ok.ctx);
+	assert.equal((ok.q.calls[0]!.options.env as Record<string, string>).CLAUDE_CODE_TMPDIR, '/tmp/yena-claude-test');
+
+	const bad = await setup({deps: {shellTmp: () => { throw new Error('nope /private/path'); }, log}, run: async p => {
+		const done = turnDone(p);
+		p.controller.send('hello');
+		await done;
+	}});
+	await bad.command.run(['chat'], bad.ctx);
+	assert.notEqual((bad.q.calls[0]!.options.env as Record<string, string>).CLAUDE_CODE_TMPDIR, '/tmp/yena-claude-test');
+	const rec = log.records.find(r => r.msg === 'shell tmp unavailable');
+	assert.deepEqual(rec?.fields, {error: 'Error'});
 });

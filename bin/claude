@@ -82,14 +82,6 @@ export CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1
 # Updates are handled above, not by Claude Code itself
 export DISABLE_AUTOUPDATER=1
 
-# Token from `claude setup-token` on the host. The browser login doesn't work well
-# from the container: the long URL breaks when copied out of the terminal.
-TOKEN_FILE="$DATA_DIR/.token"
-if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] && [ -s "$TOKEN_FILE" ]; then
-	CLAUDE_CODE_OAUTH_TOKEN=$(tr -d ' \n\r' <"$TOKEN_FILE")
-	export CLAUDE_CODE_OAUTH_TOKEN
-fi
-
 # Keep Claude from writing its files into the project (e.g. via /init or memory edits)
 GUARD='{"permissions":{"deny":["Edit(./CLAUDE.md)","Edit(./CLAUDE.local.md)","Edit(./.claude/**)"]}}'
 HINT="This project's Claude files live outside the project, in $DATA_DIR: \

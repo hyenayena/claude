@@ -29,7 +29,6 @@ const paths = {
 	projectDir,
 	mdDir: path.join(dataDir, 'md'),
 	configDir: path.join(dataDir, 'config'),
-	tokenFile: path.join(dataDir, '.token'),
 	stateFile: path.join(dataDir, 'state.json'),
 	credentialsFile: path.join(dataDir, 'credentials.json'),
 };
@@ -39,7 +38,8 @@ for (const d of [paths.mdDir, paths.configDir, outside, path.join(home, '.ssh')]
 writeFileSync(path.join(projectDir, 'a.txt'), 'a');
 writeFileSync(path.join(projectDir, '.env'), 'SECRET=1');
 writeFileSync(path.join(paths.mdDir, 'CLAUDE.md'), 'hi');
-writeFileSync(paths.tokenFile, 'sk-ant-oat-TESTVALUE0123456789abcdef');
+const staleToken = path.join(dataDir, '.token');
+writeFileSync(staleToken,'sk-ant-oat-TESTVALUE0123456789abcdef');
 writeFileSync(paths.credentialsFile, '{}');
 writeFileSync(path.join(outside, 'x.txt'), 'x');
 writeFileSync(path.join(home, '.ssh', 'id_rsa'), 'k');
@@ -70,7 +70,7 @@ describe('isPathAllowed', () => {
 
 	it('denies secrets', async () => {
 		for (const p of [
-			paths.tokenFile,
+			staleToken,
 			paths.credentialsFile,
 			paths.stateFile,
 			path.join(projectDir, '.env'),
@@ -82,6 +82,26 @@ describe('isPathAllowed', () => {
 		]) {
 			assert.ok(!(await isPathAllowed(p, scope)), p);
 		}
+	});
+
+	it('denies the auth files of the config dir, also through a symlink', async () => {
+		mkdirSync(path.join(paths.configDir, 'backups'), {recursive: true});
+		mkdirSync(path.join(paths.configDir, 'projects'), {recursive: true});
+		writeFileSync(path.join(paths.configDir, '.claude.json'), '{}');
+		symlinkSync(path.join(paths.configDir, '.claude.json'), path.join(paths.mdDir, 'claude-link'));
+		symlinkSync(path.join(paths.configDir, 'backups'), path.join(paths.mdDir, 'backups-link'));
+		for (const p of [
+			path.join(paths.configDir, '.credentials.json'),
+			path.join(paths.configDir, '.claude.json'),
+			path.join(paths.configDir, 'backups', 'x'),
+			path.join(paths.configDir, 'backups', '.claude.json.backup.1'),
+			path.join(paths.mdDir, 'claude-link'),
+			path.join(paths.mdDir, 'backups-link', 'x'),
+		]) {
+			assert.ok(!(await isPathAllowed(p, scope)), p);
+		}
+		assert.ok(await isPathAllowed(path.join(paths.configDir, 'projects', 'p', 's.jsonl'), scope));
+		assert.ok(await isPathAllowed(path.join(paths.configDir, 'settings.json'), scope));
 	});
 
 	it('rejects empty and NUL paths', async () => {
@@ -105,7 +125,7 @@ describe('canUseTool', () => {
 			['Read', {file_path: '/etc/passwd'}],
 			['Read', {file_path: '../outside/x.txt'}],
 			['Read', {file_path: path.join(projectDir, 'link', 'x.txt')}],
-			['Read', {file_path: paths.tokenFile}],
+			['Read', {file_path: staleToken}],
 			['Read', {file_path: '/proc/self/environ'}],
 			['Read', {file_path: path.join(home, '.ssh', 'id_rsa')}],
 			['Read', {file_path: path.join(projectDir, '.env')}],
@@ -146,7 +166,7 @@ describe('static policy', () => {
 		const s = buildAskSettings(paths);
 		assert.equal(s.disableAllHooks, true);
 		for (const rule of GUARD_DENY) assert.ok(s.permissions.deny.includes(rule));
-		assert.ok(s.permissions.deny.includes(`Read(/${paths.tokenFile})`));
+		assert.ok(s.permissions.deny.includes(`Read(/${paths.credentialsFile})`));
 		assert.ok(s.permissions.deny.includes('Read(//proc/**)'));
 		assert.ok(s.permissions.deny.includes('Read(**/.env*)'));
 	});
@@ -165,9 +185,11 @@ describe('ask policy snapshot', () => {
 					'Edit(./CLAUDE.md)',
 					'Edit(./CLAUDE.local.md)',
 					'Edit(./.claude/**)',
-					`Read(/${paths.tokenFile})`,
 					`Read(/${paths.credentialsFile})`,
 					`Read(/${paths.stateFile})`,
+					`Read(/${paths.configDir}/.credentials.json)`,
+					`Read(/${paths.configDir}/.claude.json)`,
+					`Read(/${paths.configDir}/backups/**)`,
 					'Read(//proc/**)',
 					'Read(~/.ssh/**)',
 					'Read(**/.env*)',
@@ -216,11 +238,12 @@ describe('chat static policy', () => {
 		for (const rule of buildAskSettings(paths).permissions.deny) assert.ok(s.permissions.deny.includes(rule), rule);
 		for (const rule of GUARD_DENY) assert.ok(s.permissions.deny.includes(rule));
 		for (const rule of [
-			`Edit(/${paths.tokenFile})`,
 			`Edit(/${paths.credentialsFile})`,
 			`Edit(/${paths.stateFile})`,
 			`Edit(/${paths.configDir}/settings.json)`.replace('settings.json', '*.json'),
 			`Edit(/${paths.configDir}/projects/**)`,
+			`Edit(/${paths.configDir}/.credentials.json)`,
+			`Edit(/${paths.configDir}/.claude.json)`,
 			'Edit(//proc/**)',
 			'Edit(~/.ssh/**)',
 			'Edit(**/.env*)',
@@ -289,7 +312,7 @@ describe('classifyEditTarget', () => {
 	it('denies secrets', async () => {
 		assert.equal(await cls(f('.env')), 'deny-secret');
 		assert.equal(await cls(f('k.pem')), 'deny-secret');
-		assert.equal(await cls(paths.tokenFile), 'deny-secret');
+		assert.equal(await cls(staleToken), 'deny-secret');
 		assert.equal(await cls(f('.yena/other')), 'deny-secret');
 	});
 

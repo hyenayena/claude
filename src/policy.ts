@@ -83,10 +83,12 @@ export type PolicyPaths = {
 	/** yena's Claude data dir; closed for writes when given. */
 	dataDir?: string;
 	configDir: string;
-	tokenFile: string;
 	stateFile: string;
 	credentialsFile: string;
 };
+
+// `auth login --console` writes primaryApiKey into .claude.json and its backups.
+export const CONFIG_SECRET = ['.credentials.json', '.claude.json', 'backups'];
 
 const SECRET_BASENAMES = [/^\.env/, /\.pem$/, /^id_rsa/];
 
@@ -100,12 +102,12 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 		locked: paths.dataDir ? [paths.dataDir] : [],
 		lockedExcept: [path.join(paths.configDir, PLANS_DIR)],
 		denied: [
-			paths.tokenFile,
 			paths.credentialsFile,
 			paths.stateFile,
 			path.join(paths.projectDir, '.yena'),
 			'/proc',
 			path.join(home, '.ssh'),
+			...CONFIG_SECRET.map(x => path.join(paths.configDir, x)),
 		],
 	};
 }
@@ -118,9 +120,11 @@ export function buildAskSettings(paths: PolicyPaths): {
 		permissions: {
 			deny: [
 				...GUARD_DENY,
-				`Read(${absRule(paths.tokenFile)})`,
 				`Read(${absRule(paths.credentialsFile)})`,
 				`Read(${absRule(paths.stateFile)})`,
+				`Read(${absRule(paths.configDir)}/.credentials.json)`,
+				`Read(${absRule(paths.configDir)}/.claude.json)`,
+				`Read(${absRule(paths.configDir)}/backups/**)`,
 				'Read(//proc/**)',
 				'Read(~/.ssh/**)',
 				'Read(**/.env*)',
@@ -168,10 +172,11 @@ export function buildChatSettings(paths: PolicyPaths): {
 	disableAllHooks: true;
 } {
 	const editDeny = [
-		`Edit(${absRule(paths.tokenFile)})`,
 		`Edit(${absRule(paths.credentialsFile)})`,
 		`Edit(${absRule(paths.stateFile)})`,
 		...CONFIG_EDIT_DENY.map(p => `Edit(${absRule(paths.configDir)}/${p})`),
+		`Edit(${absRule(paths.configDir)}/.credentials.json)`,
+		`Edit(${absRule(paths.configDir)}/.claude.json)`,
 		'Edit(//proc/**)',
 		'Edit(~/.ssh/**)',
 		'Edit(**/.env*)',

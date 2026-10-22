@@ -4,6 +4,9 @@ import {classifyEditTarget, createCanUseTool, PLANS_DIR, resolveReal, type Scope
 import {agentDenial} from './agent-policy.js';
 import {POLICY_DENY} from './permission.js';
 
+// Heuristic that over-denies on purpose: a shell command naming an auth file is refused in every mode.
+const AUTH_FILE = /credentials\.json|\.claude\.json|config\/backups/;
+
 const allow: HookJSONOutput = {continue: true};
 
 const denyWith = (reason: string): HookJSONOutput => ({
@@ -50,7 +53,8 @@ export function createPolicyHook(scope: Scope, configDir?: string): HookCallback
 				return allow;
 			}
 			case 'Bash':
-				return args.dangerouslyDisableSandbox ? denyWith(POLICY_DENY.background) : allow;
+				if (args.dangerouslyDisableSandbox) return denyWith(POLICY_DENY.background);
+				return typeof args.command === 'string' && AUTH_FILE.test(args.command) ? denyWith(POLICY_DENY.authFiles) : allow;
 			default: {
 				const denial = agentDenial(tool, args);
 				return denial ? denyWith(denial) : allow;

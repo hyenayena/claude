@@ -32,7 +32,6 @@ const scope = buildScope({
 	projectDir,
 	mdDir,
 	configDir: path.join(tmp, 'config'),
-	tokenFile: path.join(tmp, 'config', '.token'),
 	stateFile: path.join(projectDir, '.yena', 'claude', 'state.json'),
 	credentialsFile: path.join(tmp, 'creds'),
 }, path.join(tmp, 'home'));
@@ -543,6 +542,21 @@ test('MCP tools ask, show the tool and its arguments, and "always" covers that t
 	assert.ok(prompter.approved.has('mcp:mcp__github__create_issue'));
 	assert.equal((await call('mcp__github__create_issue', {title: 'Again'}))?.behavior, 'allow');
 	assert.equal(prompter.requests.length, 1);
+});
+
+test('the yena console tools are allowed without a prompt in every mode, other MCP tools still ask', async () => {
+	for (const mode of ['default', 'acceptEdits', 'plan', 'auto'] as const) {
+		const {call, prompter} = setup();
+		prompter.mode = mode;
+		for (const name of ['mcp__yena__list_commands', 'mcp__yena__run_command']) {
+			assert.equal((await call(name, {command: 'mod install x'}))?.behavior, 'allow', `${mode} ${name}`);
+		}
+		assert.equal(prompter.requests.length, 0);
+		prompter.next = {kind: 'deny'};
+		assert.equal((await call('mcp__yena__other', {}))?.behavior, 'deny');
+		assert.equal((await call('mcp__yenax__run_command', {}))?.behavior, 'deny');
+		assert.equal(prompter.requests.length, 2);
+	}
 });
 
 test('reading and stopping own background tasks runs without asking', async () => {

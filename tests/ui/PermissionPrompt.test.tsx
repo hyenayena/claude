@@ -186,3 +186,12 @@ test('a symlink target shows the resolved path in the prompt, the tiny form and 
 	assert.match(await show(tool(req, {state: full})), /resolves to: \/app\/package\.json/);
 	assert.doesNotMatch(await show(tool(toolReq({toolName: 'Write', path: '/app/a', input: {}}))), /resolves to/);
 });
+
+test('Command prompt: header shows the console line and there is no always option', async () => {
+	const req = toolReq({toolName: 'Command', input: {command: 'mod remove x'}, always: false});
+	assert.equal(toolHeader(req, reveal), 'Run console command: mod remove x?');
+	const frame = await show(tool(req));
+	assert.ok(frame.includes('Run console command: mod remove x?'));
+	assert.ok(frame.includes('mod remove x'));
+	assert.equal(/a always/.test(frame), false);
+});

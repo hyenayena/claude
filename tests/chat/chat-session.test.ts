@@ -453,6 +453,71 @@ test('the remaining turn time is preserved across a pause', async () => {
 	assert.equal(ends().length, 1);
 });
 
+const wait = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+test('holds nest: the turn timer stays paused until the last release, which is idempotent', async () => {
+	const {session, ends} = setup({timeoutMs: 80, graceMs: 10});
+	session.send('x');
+	const a = session.holdTurnTimer();
+	const b = session.holdTurnTimer();
+	await wait(200);
+	assert.equal(ends().length, 0);
+	a();
+	a();
+	await wait(200);
+	assert.equal(ends().length, 0);
+	b();
+	await wait(200);
+	const e = ends()[0];
+	assert.equal(e?.type === 'turn-end' && e.outcome, 'timeout');
+});
+
+test('a permission prompt answered inside a hold does not restart the timer', async () => {
+	const {session, ends} = setup({timeoutMs: 80, graceMs: 10});
+	session.send('x');
+	const release = session.holdTurnTimer();
+	const r = (session as unknown as PermissionPrompter).request(toolReq('a'), never());
+	session.answerPermission('a', {kind: 'allow'});
+	await r;
+	await wait(200);
+	assert.equal(ends().length, 0);
+	release();
+	await wait(200);
+	assert.equal(ends().length, 1);
+});
+
+test('a hold released while a prompt is pending keeps the timer paused', async () => {
+	const {session, ends} = setup({timeoutMs: 80, graceMs: 10});
+	session.send('x');
+	const release = session.holdTurnTimer();
+	const r = (session as unknown as PermissionPrompter).request(toolReq('a'), never());
+	release();
+	await wait(200);
+	assert.equal(ends().length, 0);
+	session.answerPermission('a', {kind: 'allow'});
+	await r;
+	await wait(200);
+	assert.equal(ends().length, 1);
+});
+
+test('a stale release after the turn ended does not affect the next turn', async () => {
+	const {session, queries, ends} = setup({timeoutMs: 80, graceMs: 10});
+	session.send('x');
+	const stale = session.holdTurnTimer();
+	queries[0]!.emit(ok());
+	await tick();
+	assert.equal(session.state, 'idle');
+	session.send('y');
+	stale();
+	const live = session.holdTurnTimer();
+	stale();
+	await wait(200);
+	assert.equal(ends().length, 1);
+	live();
+	await wait(200);
+	assert.equal(ends().length, 2);
+});
+
 test('interrupt resolves every pending prompt as cancelled and the query stays reusable', async () => {
 	const {session, queries, ends, events} = setup();
 	session.send('x');

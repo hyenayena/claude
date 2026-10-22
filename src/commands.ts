@@ -8,11 +8,13 @@ import {diskCommands} from './disk-commands.js';
 import {listPrompts, listSessions, readHistory} from './chat/history.js';
 import {readSessionTitle, transcriptFile} from './chat/title.js';
 import {ago, type PickerItem} from './ui/picker-model.js';
-import {buildEnv, buildOptions, ensureMdLinks, resolvePaths, runtimeInfo} from './config.js';
+import {buildEnv, buildOptions, cliEnv, ensureMdLinks, resolvePaths, runtimeInfo} from './config.js';
+import {LOGIN_USAGE, parseLoginArgs, probeLogin, runLogout, type LoginProbe, type LoginRequest, type LoginStatus} from './claude-login.js';
 import {
 	describeCredential,
 	inspectFileMode,
 	isSubscription,
+	listCredentialSources,
 	makeRedactor,
 	registerLogRedaction,
 	removeStored,
@@ -38,11 +40,22 @@ export type ClaudeDeps = {
 	env: NodeJS.ProcessEnv;
 	loadQuery: () => Promise<QueryFn>;
 	loadChatQuery?: () => Promise<ChatQueryFn>;
+	loadConsoleSdk?: ChatRunDeps['loadConsoleSdk'];
+	shellTmp?: ChatRunDeps['shellTmp'];
 	loadUi?: () => Promise<ChatUi>;
 	moduleDir?: string;
 	log?: Logger;
 	timeoutMs?: number;
 	registerAbort?: (c: AbortController) => () => void;
+	// Claude Code's own login: status probe, interactive run and non-interactive logout.
+	login?: {
+		probe?: LoginProbe;
+		run?: (bin: string, args: string[], env: NodeJS.ProcessEnv) => boolean;
+		logout?: (bin: string, env: Record<string, string | undefined>) => Promise<boolean>;
+		// Terminal prompts, replaceable so tests never read the real terminal.
+		wait?: (message: string) => void;
+		readSecret?: (prompt: string) => string;
+	};
 };
 
 const USAGE = 'Usage: claude <ping|ask|chat|new|resume|rewind|fork|rename|export|copy|memory|tasks|mcp|session|auth|<Claude Code command>>';
@@ -58,9 +71,20 @@ export {MODEL_OPTIONS} from './chat-prefs.js';
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 const SUBSCRIPTION_NOTICE =
-	"Notice: you are using a Claude subscription token (OAuth). Anthropic's terms say third-party products built on the Agent SDK may not offer claude.ai login. This is a personal tool and use of your own subscription was approved by you; see README \"Policy caveat\". Prefer ANTHROPIC_API_KEY.";
+	"Notice: you are using your Claude subscription (OAuth), through Claude Code's own claude.ai login or a setup-token. Anthropic's terms say third-party products built on the Agent SDK may not offer claude.ai login; yena runs that login for your own personal use only, as you approved. Do not share or redistribute this setup; see README \"Policy caveat\". Prefer ANTHROPIC_API_KEY.";
 
-const kindLabel = (info: CredentialInfo): string => (isSubscription(info) ? 'subscription token' : 'API key');
+const kindLabel = (info: CredentialInfo): string => {
+	if (info.source === 'claude-login') return isSubscription(info) ? 'subscription login' : 'API key (login)';
+	return isSubscription(info) ? 'subscription token' : 'API key';
+};
+
+const SOURCE_LABELS: Record<CredentialInfo['source'], string> = {
+	env: 'environment variable',
+	'claude-login': 'Claude Code login',
+	stored: 'stored credential (credentials.json)',
+};
+
+const LOGOUT_USAGE = 'Usage: claude auth logout';
 
 const isMissingModule = (err: unknown): boolean => {
 	const code = (err as {code?: unknown} | null)?.code;
@@ -104,6 +128,21 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const {dataDir, env} = deps;
 	const log = deps.log ?? noopLog;
 	const store = createStore(dataDir, log);
+	const loginPaths = () => resolvePaths(dataDir, deps.moduleDir);
+	const cliBin = (): string | undefined => {
+		const paths = loginPaths();
+		return runtimeInfo(paths).cli ? paths.runtimeBin : undefined;
+	};
+	const probe: LoginProbe =
+		deps.login?.probe ??
+		(async () => {
+			const bin = cliBin();
+			return bin ? probeLogin({bin, env: cliEnv(env, loginPaths())}) : undefined;
+		});
+	const runCli = deps.login?.run ?? ((bin, args, e) => runInteractive(bin, args, e));
+	const wait = deps.login?.wait ?? waitForEnter;
+	const readSecret = deps.login?.readSecret ?? readHidden;
+	const logoutCli = deps.login?.logout ?? ((bin, e) => runLogout({bin, env: e}));
 	let busy: 'ask' | 'chat' | undefined;
 
 	const showNoticeOnce = async (cred: CredentialInfo, ctx: CommandContext): Promise<void> => {
@@ -142,7 +181,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const runAsk = async (text: string, fresh: boolean, ctx: CommandContext): Promise<void> => {
 		let cred: Credential;
 		try {
-			cred = await requireCredential({env, dataDir});
+			cred = await requireCredential({env, dataDir, probeLogin: probe});
 		} catch (err) {
 			log.warn('no credential');
 			throw err;
@@ -234,11 +273,14 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		moduleDir: deps.moduleDir,
 		log,
 		loadChatQuery: deps.loadChatQuery ?? unavailable,
+		...(deps.loadConsoleSdk && {loadConsoleSdk: deps.loadConsoleSdk}),
+		...(deps.shellTmp && {shellTmp: deps.shellTmp}),
 		loadUi: deps.loadUi ?? unavailable,
 		registerAbort: deps.registerAbort,
 		store,
 		showNoticeOnce,
 		kindLabel,
+		probeLogin: probe,
 		isMissingModule,
 		onMount,
 		onSession: s => {
@@ -532,25 +574,27 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	const authStatus = async (ctx: CommandContext): Promise<void> => {
-		const active = await resolveCredential({env, dataDir});
+		let memo: Promise<LoginStatus | undefined> | undefined;
+		const once: LoginProbe = () => (memo ??= probe());
+		const sources = await listCredentialSources({env, dataDir, probeLogin: once});
+		const active = sources[0];
+		const login = await once().catch(() => undefined);
 		if (!active) {
 			try {
-				await requireCredential({env, dataDir});
+				await requireCredential({env, dataDir, probeLogin: once});
 			} catch (err) {
 				ctx.print(err instanceof Error ? err.message : String(err));
 			}
 		} else {
 			ctx.print(`Active credential: ${describeCredential(active)}`);
 		}
-		// Probes isolate one source group at a time so no credential name is read here.
-		const envOnly = await resolveCredential({env, dataDir: join(dataDir, '.absent')});
-		const filesOnly = await resolveCredential({env: {}, dataDir});
-		const others: string[] = [];
-		if (envOnly && active?.source !== 'env') others.push('environment variable');
-		if (filesOnly && filesOnly.source !== active?.source) {
-			others.push(filesOnly.source === 'stored' ? 'stored key (credentials.json)' : 'legacy file (.token)');
+		if (login?.loggedIn && login.method) {
+			const scrub = makeScrub(active ? makeRedactor(active) : s => s);
+			const detail = [login.method, login.subscriptionType, login.email].filter(Boolean).join(', ');
+			ctx.print(scrub(`Claude Code login: signed in (${detail})`));
 		}
-		log.info('auth status', {kind: active?.kind, source: active?.source, others});
+		const others = [...new Set(sources.filter(c => c.source !== active?.source).map(c => SOURCE_LABELS[c.source]))];
+		log.info('auth status', {kind: active?.kind, source: active?.source, others, login: login?.loggedIn ? login.method : undefined});
 		if (others.length > 0) ctx.print(`Other available sources: ${others.join(', ')}`);
 		for (const warning of await inspectFileMode(dataDir)) ctx.print(`Warning: ${warning}`);
 		if (active) await showNoticeOnce(active, ctx);
@@ -580,37 +624,60 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		ctx.print(
 			`API key stored in ${join(dataDir, 'credentials.json')} (mode 0600). Source file left untouched; delete it yourself.`,
 		);
-		const active = await resolveCredential({env, dataDir});
+		const active = await resolveCredential({env, dataDir, probeLogin: probe});
 		if (active && active.source !== 'stored') {
 			ctx.print(`Note: the stored key is not used while another source has priority (${describeCredential(active)}).`);
 		}
 	};
 
-	const authLogout = async (ctx: CommandContext): Promise<void> => {
+	// A login counts as present when Claude Code reports one, or, if it cannot be asked, its file exists.
+	const loginPresent = async (): Promise<boolean> =>
+		(await listCredentialSources({env: {}, dataDir, probeLogin: probe})).some(c => c.source === 'claude-login');
+
+	const authLogout = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length > 0) throw new Error(LOGOUT_USAGE);
 		const removed = await removeStored(dataDir);
 		log.info('stored credential removed', {removed});
 		ctx.print(
 			removed
-				? 'Stored credential removed. Environment variables and the legacy file .token are not touched.'
+				? 'Stored credential removed. Environment variables are not touched.'
 				: 'No stored credential.',
 		);
+		if (await loginPresent()) {
+			const bin = cliBin();
+			const ok = bin ? await logoutCli(bin, cliEnv(env, loginPaths())) : false;
+			const still = await loginPresent();
+			log.info('claude logout', {ok, stillLoggedIn: still});
+			if (still) {
+				ctx.print('Warning: Claude Code still reports a login. Run "claude auth logout" in the Claude Code CLI, or remove it from the Claude Code config directory.');
+			} else {
+				ctx.print('Claude Code login removed.');
+				if (busy === 'chat') ctx.print('The open chat keeps running with its credentials until you close it.');
+			}
+		}
 		await printActive(ctx);
 	};
 
-	// Runs Claude Code's "setup-token" on the terminal, then asks for the token it printed (hidden input)
-	// and saves it to .token; the token never passes through arguments, history or logs.
-	const authLogin = async (ctx: CommandContext): Promise<void> => {
+	const authLogin = async (args: string[], ctx: CommandContext): Promise<void> => {
+		const request = parseLoginArgs(args);
 		if (!ctx.suspend) throw new Error('"claude auth login" needs an interface that can hand over the terminal');
-		const paths = resolvePaths(dataDir, deps.moduleDir);
-		const bin = runtimeInfo(paths).cli ? paths.runtimeBin : undefined;
+		const bin = cliBin();
 		if (!bin) throw new Error('Claude Code is not installed for this module. Run modules/claude/bin/install.');
-		const token = await ctx.suspend(() => {
-			const ok = runInteractive(bin, ['setup-token'], {...process.env, CLAUDE_CONFIG_DIR: paths.configDir});
+		if (request.kind === 'token') return authLoginToken(bin, ctx);
+		return authLoginBrowser(bin, request, ctx);
+	};
+
+	// Runs Claude Code's "setup-token" on the terminal, then asks for the token it printed (hidden input)
+	// and saves it to credentials.json; the token never passes through arguments, history or logs.
+	const authLoginToken = async (bin: string, ctx: CommandContext): Promise<void> => {
+		const paths = loginPaths();
+		const token = await ctx.suspend!(() => {
+			const ok = runCli(bin, ['setup-token'], cliEnv(env, paths) as NodeJS.ProcessEnv);
 			if (!ok) {
-				waitForEnter('\n"claude setup-token" did not finish. Press Enter to return to yena. ');
+				wait('\n"claude setup-token" did not finish. Press Enter to return to yena. ');
 				return '';
 			}
-			return readHidden('\nPaste the token printed above (input hidden) and press Enter: ');
+			return readSecret('\nPaste the token printed above (input hidden) and press Enter: ');
 		});
 		if (token.trim() === '') {
 			ctx.print('Login cancelled; nothing was saved.');
@@ -618,8 +685,46 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 		await storeOauthToken(dataDir, token);
 		log.info('subscription token stored');
-		ctx.print(`Subscription token saved to ${join(dataDir, '.token')} (mode 0600). New chats use it unless an environment variable takes priority.`);
+		ctx.print(`Subscription token stored in ${join(dataDir, 'credentials.json')} (mode 0600), replacing any stored API key. New chats use it unless an environment variable or a Claude Code login takes priority.`);
 		await printActive(ctx);
+	};
+
+	// Claude Code's own browser login; yena never sees the tokens, it only asks the CLI afterwards.
+	const authLoginBrowser = async (
+		bin: string,
+		request: Extract<LoginRequest, {kind: 'browser'}>,
+		ctx: CommandContext,
+	): Promise<void> => {
+		const paths = loginPaths();
+		const {meta} = request;
+		log.info('claude login started', {method: meta.console ? 'console' : 'claude.ai', sso: meta.sso, email: meta.email});
+		const ok = await ctx.suspend!(() => {
+			const done = runCli(bin, ['auth', 'login', ...request.cliArgs], cliEnv(env, paths) as NodeJS.ProcessEnv);
+			if (!done) wait('\n"claude auth login" did not finish. Press Enter to return to yena. ');
+			return done;
+		});
+		const status = await probe().catch(() => undefined);
+		log.info('claude login finished', {
+			exitOk: ok,
+			loggedIn: status?.loggedIn === true,
+			method: status?.method,
+			subscriptionType: status?.subscriptionType,
+		});
+		if (!status?.loggedIn || !status.method) {
+			ctx.print('Login did not complete; nothing was changed.');
+			return;
+		}
+		ctx.print(
+			status.method === 'claude.ai'
+				? `Signed in with Claude Code (claude.ai). The login is kept in ${paths.loginFile} (mode 0600) and refreshed automatically.`
+				: `Signed in with Claude Code (Console account). Claude Code keeps the key in ${join(paths.configDir, '.claude.json')}.`,
+		);
+		const active = await resolveCredential({env, dataDir, probeLogin: async () => status});
+		if (active) ctx.print(`Active credential: ${describeCredential(active)}`);
+		if (active && active.source !== 'claude-login') {
+			ctx.print(`Note: the login is not used while another source has priority (${describeCredential(active)}).`);
+		}
+		await showNoticeOnce({kind: status.method === 'claude.ai' ? 'oauth' : 'api-key', source: 'claude-login'}, ctx);
 	};
 
 	// Lists the chat's tasks (background Bash, subagents); picking a running one stops it.
@@ -693,33 +798,34 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			case 'key':
 				return authKey(rest, ctx);
 			case 'logout':
-				return authLogout(ctx);
+				return authLogout(rest, ctx);
 			case 'login':
-				return authLogin(ctx);
+				return authLogin(rest, ctx);
 			default:
 				throw new Error(AUTH_USAGE);
 		}
 	};
 
 	const OWN_SUBCOMMANDS: Subcommand[] = [
-		{name: 'ping', usage: 'claude ping', description: 'Check that the claude module is loaded'},
-		{name: 'ask', usage: 'claude ask [--new] <text>', description: 'Ask Claude a question (continues the last session)'},
-		{name: 'chat', usage: 'claude chat [--new]', description: 'Open an interactive chat (continues the last session)'},
-		{name: 'new', usage: 'claude new [model]', description: 'Start a new chat'},
-		{name: 'resume', usage: 'claude resume [session]', description: 'Continue an earlier chat (pick from a list, or give an id prefix)'},
-		{name: 'rewind', usage: 'claude rewind', description: 'Go back to before one of your messages (files and conversation)'},
-		{name: 'fork', usage: 'claude fork', description: 'Continue the current chat on a new branch'},
-		{name: 'rename', usage: 'claude rename <name>', description: 'Name the current chat'},
-		{name: 'export', usage: 'claude export [file]', description: 'Save the current chat as Markdown'},
-		{name: 'copy', usage: 'claude copy [N]', description: "Copy Claude's last (or Nth last) answer to the clipboard"},
-		{name: 'memory', usage: 'claude memory [file]', description: 'Edit CLAUDE.md (or another md instruction file) in your editor'},
-		{name: 'tasks', usage: 'claude tasks', description: 'Background tasks and subagents of the chat; pick one to stop it'},
-		{name: 'mcp', usage: 'claude mcp [reconnect <server>]', description: 'MCP servers of the chat and their status'},
-		{name: 'session', usage: 'claude session', description: 'Show the current session, model and runtime'},
+		{name: 'ping', usage: 'claude ping', description: 'Check that the claude module is loaded', agent: 'confirm'},
+		{name: 'ask', usage: 'claude ask [--new] <text>', description: 'Ask Claude a question (continues the last session)', agent: 'deny'},
+		{name: 'chat', usage: 'claude chat [--new]', description: 'Open an interactive chat (continues the last session)', agent: 'deny'},
+		{name: 'new', usage: 'claude new [model]', description: 'Start a new chat', agent: 'deny'},
+		{name: 'resume', usage: 'claude resume [session]', description: 'Continue an earlier chat (pick from a list, or give an id prefix)', agent: 'deny'},
+		{name: 'rewind', usage: 'claude rewind', description: 'Go back to before one of your messages (files and conversation)', agent: 'deny'},
+		{name: 'fork', usage: 'claude fork', description: 'Continue the current chat on a new branch', agent: 'deny'},
+		{name: 'rename', usage: 'claude rename <name>', description: 'Name the current chat', agent: 'confirm'},
+		{name: 'export', usage: 'claude export [file]', description: 'Save the current chat as Markdown', agent: 'confirm'},
+		{name: 'copy', usage: 'claude copy [N]', description: "Copy Claude's last (or Nth last) answer to the clipboard", agent: 'deny'},
+		{name: 'memory', usage: 'claude memory [file]', description: 'Edit CLAUDE.md (or another md instruction file) in your editor', agent: 'deny'},
+		{name: 'tasks', usage: 'claude tasks', description: 'Background tasks and subagents of the chat; pick one to stop it', agent: 'safe'},
+		{name: 'mcp', usage: 'claude mcp [reconnect <server>]', description: 'MCP servers of the chat and their status', agent: 'safe'},
+		{name: 'session', usage: 'claude session', description: 'Show the current session, model and runtime', agent: 'safe'},
 		{
 			name: 'auth',
 			usage: 'claude auth <status|key|logout|login>',
-			description: 'Manage credentials (key takes --from-file <path>)',
+			description: 'Manage credentials: login [--console|--sso|--email <address>|--token], key --from-file <path>, status, logout',
+			agent: 'confirm',
 		},
 	];
 	const ownNames = new Set(OWN_SUBCOMMANDS.map(s => s.name));
@@ -757,6 +863,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		name: 'claude',
 		description: 'Claude Code integration',
 		usage: 'claude <command> [args…]',
+		agent: 'deny',
 		get subcommands() {
 			return [...OWN_SUBCOMMANDS, ...claudeCodeSubcommands()];
 		},
@@ -808,6 +915,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		name: 'chat',
 		description: 'Start a new chat with the assistant',
 		usage: 'chat [model]',
+		agent: 'deny',
 		autostart: true,
 		settings: {
 			title: 'Claude',

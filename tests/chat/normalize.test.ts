@@ -125,3 +125,10 @@ test('rate_limit_event validates resetsAt against the injected clock', () => {
 	assert.deepEqual(normalize(raw as SDKMessage, clock), [{kind: 'rate-limit', info: {status: 'rejected', resetsAt: FAR + 600}}]);
 	assert.deepEqual(n(raw), [{kind: 'rate-limit', info: {status: 'rejected'}}]);
 });
+
+test('task_started carries tool_use_id and task_type', () => {
+	assert.deepEqual(
+		n({type: 'system', subtype: 'task_started', task_id: 'bx1', tool_use_id: 'tu1', task_type: 'local_bash', is_backgrounded: false, description: 'sleep'}),
+		[{kind: 'task', id: 'bx1', status: 'running', description: 'sleep', toolUseId: 'tu1', taskType: 'local_bash'}],
+	);
+});

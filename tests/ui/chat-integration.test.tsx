@@ -48,7 +48,6 @@ function build(script: Script) {
 		projectDir: proj,
 		mdDir: md,
 		configDir: join(data, 'config'),
-		tokenFile: join(data, '.token'),
 		stateFile: join(data, 'state.json'),
 		credentialsFile: join(data, 'credentials.json'),
 	});

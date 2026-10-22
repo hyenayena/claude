@@ -7,7 +7,7 @@ export type UiEvent =
 	| {kind: 'text'; messageId: string; text: string; aborted?: boolean}
 	| {kind: 'thinking'}
 	// A background or subagent task started, progressed or settled.
-	| {kind: 'task'; id: string; status: 'running' | 'completed' | 'failed' | 'stopped'; description?: string; background?: boolean; summary?: string}
+	| {kind: 'task'; id: string; status: 'running' | 'completed' | 'failed' | 'stopped'; description?: string; background?: boolean; summary?: string; toolUseId?: string; taskType?: string}
 	// The text of a finished thinking block (empty when the API omits it).
 	| {kind: 'thinking-text'; text: string}
 	| {kind: 'tool-use'; toolUseId: string; name: string; input: unknown}

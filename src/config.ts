@@ -1,7 +1,7 @@
 import {accessSync, constants, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, symlinkSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import type {CanUseTool, Options} from '@anthropic-ai/claude-agent-sdk';
+import type {CanUseTool, McpServerConfig, Options} from '@anthropic-ai/claude-agent-sdk';
 import {
 	ALLOWED_TOOLS,
 	buildAskSettings,
@@ -14,6 +14,7 @@ import {
 	GUARD_DENY,
 	MAX_TURNS,
 } from './policy.js';
+import {CONSOLE_SERVER_NAME} from './chat/console-tools.js';
 import {applyTuning, type ChatTuning} from './chat-prefs.js';
 import type {Credential} from './types.js';
 
@@ -28,9 +29,10 @@ export type ClaudePaths = {
 	mdDir: string;
 	configDir: string;
 	runtimeBin: string;
-	tokenFile: string;
 	stateFile: string;
 	credentialsFile: string;
+	/** Written by Claude Code's own login; only its metadata is ever inspected. */
+	loginFile: string;
 };
 
 export type RuntimeInfo = {
@@ -49,9 +51,9 @@ export function resolvePaths(dataDir: string, moduleDir?: string): ClaudePaths {
 		mdDir: path.join(dataDir, 'md'),
 		configDir: path.join(dataDir, 'config'),
 		runtimeBin: path.join(mod, '.runtime', 'node_modules', '.bin', 'claude'),
-		tokenFile: path.join(dataDir, '.token'),
 		stateFile: path.join(dataDir, 'state.json'),
 		credentialsFile: path.join(dataDir, 'credentials.json'),
+		loginFile: path.join(dataDir, 'config', '.credentials.json'),
 	};
 }
 
@@ -157,6 +159,7 @@ export function buildEnv(
 	base: NodeJS.ProcessEnv,
 	paths: ClaudePaths,
 	cred: Credential,
+	shellTmp?: string,
 ): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {...base};
 	env.CLAUDE_CONFIG_DIR = paths.configDir;
@@ -166,7 +169,12 @@ export function buildEnv(
 		env.USE_BUILTIN_RIPGREP = '0';
 	}
 	delete env.ANTHROPIC_AUTH_TOKEN;
-	if (cred.kind === 'api-key') {
+	if (shellTmp !== undefined) env.CLAUDE_CODE_TMPDIR = shellTmp;
+	if (cred.source === 'claude-login') {
+		// The CLI must use its own login, which credentials from the environment would override.
+		delete env.ANTHROPIC_API_KEY;
+		delete env.CLAUDE_CODE_OAUTH_TOKEN;
+	} else if (cred.kind === 'api-key') {
 		env.ANTHROPIC_API_KEY = cred.value;
 		delete env.CLAUDE_CODE_OAUTH_TOKEN;
 	} else {
@@ -278,12 +286,21 @@ export function scrubChatEnv(
 	return out;
 }
 
+/** Environment for Claude Code CLI subprocesses (auth status/login/logout): no credentials from the environment. */
+export function cliEnv(
+	base: NodeJS.ProcessEnv,
+	paths: Pick<ClaudePaths, 'configDir'>,
+): Record<string, string | undefined> {
+	return {...scrubChatEnv(base), CLAUDE_CONFIG_DIR: paths.configDir, DISABLE_AUTOUPDATER: '1'};
+}
+
 export function buildChatHint(paths: ClaudePaths): string {
 	return (
 		buildHint(paths) +
 		" Tool calls that run commands or change files (Bash, Edit, Write) need the user's approval in this interface." +
 		' Bash runs as root in the project directory.' +
-		' If the user denies a call, do not retry it or work around the denial; explain what you needed and ask.'
+		' If the user denies a call, do not retry it or work around the denial; explain what you needed and ask.' +
+		' The tools mcp__yena__list_commands and mcp__yena__run_command inspect and run yena console commands; commands that change state ask the user first.'
 	);
 }
 
@@ -292,13 +309,15 @@ export function buildChatOptions(p: {
 	cred: Credential;
 	abortController: AbortController;
 	canUseTool: CanUseTool;
+	// In-process MCP server with yena's console tools; kept even when MCP servers are turned off.
+	consoleServer?: McpServerConfig;
 	resume?: string;
 	model?: string;
 	tuning?: ChatTuning;
 	env?: Record<string, string | undefined>;
 	runtimeBin?: string;
 }): Options {
-	const {canUseTool, tuning, ...rest} = p;
+	const {canUseTool, tuning, consoleServer, ...rest} = p;
 	const base = buildOptions(rest);
 	const full = base.env ?? {};
 	// The credential is found by value, so no variable names are read here.
@@ -313,6 +332,7 @@ export function buildChatOptions(p: {
 			disallowedTools: [...CHAT_DISALLOWED_TOOLS],
 			permissionMode: 'default',
 			canUseTool,
+			...(consoleServer && {mcpServers: {...base.mcpServers, [CONSOLE_SERVER_NAME]: consoleServer}}),
 			// Lets "claude rewind" restore files to their state at an earlier prompt.
 			enableFileCheckpointing: true,
 		},

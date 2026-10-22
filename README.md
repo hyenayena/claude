@@ -1,7 +1,7 @@
 # claude
 Claude Code integration for yena.
 
-It is a yena plugin (`runtime: "node"`, `entry: src/index.ts`, version 0.5.0): the host loads it at startup and adds the `claude` command. It requires core 0.2.0+ (declared in `yena.json`): text helpers and UI pieces come from core's public kit, imported only through `src/kit.ts` and `src/ui/kit.ts`; `ping` and `ask` never load React, Ink or the kit UI. `claude ask` and `claude chat` run the Claude Agent SDK in a read-only mode.
+It is a yena plugin (`runtime: "node"`, `entry: src/index.ts`, version 0.6.0): the host loads it at startup and adds the `claude` command. It requires core 0.4.0+ for the console tools and core 0.5.0+ for the live Bash panel (`MountOptions.activity`, kit `OutputTail`); older cores work without them (core is declared in `yena.json`, without a version): text helpers and UI pieces come from core's public kit, imported only through `src/kit.ts` and `src/ui/kit.ts`; `ping` and `ask` never load React, Ink or the kit UI. `claude ask` and `claude chat` run the Claude Agent SDK in a read-only mode.
 
 ## Commands
 - `claude ping` — prints `pong`; confirms the module is loaded.
@@ -25,16 +25,17 @@ It is a yena plugin (`runtime: "node"`, `entry: src/index.ts`, version 0.5.0): t
 - `claude mcp [reconnect <server>]` — status of the chat's MCP servers (after its first message), or reconnects one.
 - A new chat starts on a clean screen (core clears its transcript when a chat view mounts).
 - `claude session` — prints `Session`, `Model`, `Chat model`, `Claude Code runtime`, `Agent SDK` and `Binary in use` (`runtime` or `bundled`).
-- `claude auth status` — active credential (for example `Active credential: subscription token (from environment)`), other available sources, file-mode warnings, and the one-time subscription notice.
-- `claude auth key --from-file <path>` — stores an API key from a file in `<dataDir>/credentials.json` (mode 0600). The source file is left untouched; delete it yourself.
-- `claude auth logout` — removes only `credentials.json`. Environment variables and `.token` are untouched.
-- `claude auth login` — hands the terminal over (core `ctx.suspend`), runs Claude Code's `setup-token`, then asks for the printed token with hidden input and saves it to `<dataDir>/.token` (0600); the token never goes through arguments, history or logs.
+- `claude auth status` — active credential (for example `Active credential: subscription token (from environment)`), a `Claude Code login: signed in (<claude.ai|console>[, <subscription>][, <email>])` line when Claude Code reports a login (the email is shown on screen only, never logged), other available sources, file-mode warnings, and the one-time subscription notice.
+- `claude auth key --from-file <path>` — stores an API key from a file in `<dataDir>/credentials.json` (mode 0600, `{kind:'api-key',…}`). The file is one slot shared with `auth login --token`: a later write replaces the other kind. The source file is left untouched; delete it yourself.
+- `claude auth logout` — takes no arguments. Removes `credentials.json`; when a Claude Code login is detected it also runs the CLI's `auth logout` non-interactively (30 s, output discarded), then asks again and warns if Claude Code still reports a login. Prints `Stored credential removed. Environment variables are not touched.` for either stored kind. Environment variables are untouched. Allowed while a chat is open; that chat keeps running until it is closed.
+- `claude auth login [--console|--claudeai] [--sso] [--email <address>]` — hands the terminal over (core `ctx.suspend`) and runs Claude Code's own browser login (`<runtime> auth login …`) with the module's config dir and without credentials from the environment; yena never sees the tokens. Afterwards it asks Claude Code for the status, says where the credential is kept (`config/.credentials.json` for claude.ai, refreshed automatically; `config/.claude.json` for a Console account) and notes when an environment source still has priority. Argument errors show even without a UI.
+- `claude auth login --token` — the earlier flow: runs `setup-token`, asks for the printed token with hidden input and saves it to `<dataDir>/credentials.json` as `{kind:'oauth', value, savedAt}` (0600); the token never goes through arguments, history or logs. Use it when the long login URL breaks when copied out of the terminal.
 
 - `claude <command> [args…]` — any other name is a Claude Code command (built-in such as `compact` or `context`, a custom command from `config/commands`, a skill): it is sent to the open chat as `/<command> args` and runs there, its output appears in the chat. Without an open chat it fails with `No chat is open…`; while Claude is answering it is refused; once the session has reported its command list, names outside it are refused. Hints after `claude ` list the session's commands (with descriptions and argument hints from `supportedCommands()`), or, before the first message, the custom commands and skills found in `config/`.
 
 Without a subcommand the command fails with `Usage: claude <ping|ask|chat|new|session|auth|<Claude Code command>>`.
 
-`<dataDir>` is `<YENA_DATA>/claude` (`/data/claude` in the container). It holds `md/`, `config/`, `state.json`, `credentials.json` and `.token`. `md/` is a symlink to the shared hub of the `md` module, `<YENA_DATA>/md` (a dependency in `yena.json`), so instructions and Claude Code config folders are shared with other agents. The hub holds `agents/`, `skills/`, `commands/` and `output-styles/`; `config/<folder>` is a symlink to `../md/<folder>` so Claude Code finds them (`MD_LINKED_DIRS`; settings and hooks stay in `config/`, since they can run code and change permissions). The links are created when missing at the start of a chat or ask (and by `bin/claude`): an old real `md/` moves into the hub while the hub is blank, a real `config/<folder>` moves into the hub while the hub's folder is empty; otherwise they are left alone (`ensureMdLinks` in `src/config.ts`). Claude is pointed at the hub's own path (system prompt hint, `additionalDirectories`).
+`<dataDir>` is `<YENA_DATA>/claude` (`/data/claude` in the container). It holds `md/`, `config/` (including Claude Code's own login files `config/.credentials.json` and `config/.claude.json`, plus `config/backups/`), `state.json` and `credentials.json`. `md/` is a symlink to the shared hub of the `md` module, `<YENA_DATA>/md` (a dependency in `yena.json`), so instructions and Claude Code config folders are shared with other agents. The hub holds `agents/`, `skills/`, `commands/` and `output-styles/`; `config/<folder>` is a symlink to `../md/<folder>` so Claude Code finds them (`MD_LINKED_DIRS`; settings and hooks stay in `config/`, since they can run code and change permissions). The links are created when missing at the start of a chat or ask (and by `bin/claude`): an old real `md/` moves into the hub while the hub is blank, a real `config/<folder>` moves into the hub while the hub's folder is empty; otherwise they are left alone (`ensureMdLinks` in `src/config.ts`). Claude is pointed at the hub's own path (system prompt hint, `additionalDirectories`).
 
 ## Chat
 `chat` and `claude chat [--new]` show the chat as core's main view (needs a core that provides `ctx.mount`; otherwise it fails with `"claude chat" needs an interface that can show views`). Opening a chat closes the open one first; a chat cannot run together with an ask (`A chat is already open`, `An ask is already running`). Unknown arguments give `Usage: claude chat [--new]` / `Usage: chat [model]`.
@@ -67,6 +68,7 @@ Behaviour and limits:
 - Vim mode (`Input mode` setting): Esc enters NORMAL (`-- NORMAL --` under the input), `i a I A o O s S C` and `:` go back to INSERT; `h l 0 ^ $ w e b` move, `x X D dd dw de db d$ cc cw yy p u` edit, `j k` walk the history, Enter sends. Esc in NORMAL, or while Claude answers, does what Esc does in the chat.
 - Ctrl+O opens the whole transcript of the chat (prompts, answers, thinking, every tool call with its input and up to 400 lines of its result), read from the session file; ↑↓ or j k scroll, space/b by a page, g/G to the ends, Esc, q or Ctrl+O close.
 - Mouse (needs a core whose `ViewHost` provides `subscribeMouse`; feature-detected, older cores lack it, `src/ui/view-mouse.ts`): a left click in the input moves the cursor, only while it is editable (not during permission or question prompts, the Ctrl+O viewer, Ctrl+R search, a pending mode switch or the Waiting row; in Vim NORMAL it lands on a character). The wheel scrolls the Ctrl+O viewer by 1 line while it is open; otherwise core scrolls the transcript. A click can land on the wrong row if a key that changes the input's line count has not been rendered yet.
+- Live Bash output (needs core 0.5.0+): while a foreground Bash call runs for 500 ms or more and the chat has focus, the console panel opens (without taking focus) and shows `$ <command> · Ns` plus the tail of the command's output as it is written (polled every 200 ms); it closes when the call ends and core's 3 s grace then applies. Only one panel attempt is made per Bash call, and only when the chat has focus and the panel is free. The SDK sends no start or progress events for a foreground Bash call, so the chat watches Claude Code's own output file (`<tmp>/claude-<uid>/<project>/<session>/tasks/<task>.output`, an undocumented layout) and binds it to a call only when exactly one candidate matches. For that, chats start Claude Code with `CLAUDE_CODE_TMPDIR=/tmp/yena-claude-<uid>` (created 0700, must be owned by you and closed to others, else live output is off and `shell tmp unavailable` is logged). This also moves Claude Code's other temp files, such as background task output, there; `ask` and `bin/claude` are unchanged. Output lines are scrubbed like all other text (at most 200 lines / 32 KiB kept, lines cut at 1024 characters, the last line shown once its newline arrives). Not shown: parallel Bash calls (ambiguous), background Bash, more than 4 simultaneous calls, subagent Bash.
 - Ctrl+B moves the running Bash commands and subagents to the background (`Query.backgroundTasks`); the bar then counts `N in background`, and a settled background task prints `⚙ Background task completed: …`.
 - Display: answers are rendered as Markdown (headings, bold, italic, code spans, links, lists, task lists, quotes, rules) and fenced code is framed and highlighted (keywords, strings, numbers, comments; `src/ui/markdown.ts`), always after scrubbing, so only constant SGR codes are added. Finished thinking blocks print dim before the answer (`✻ Thinking`, first 6 lines) when the API returns their text.
 - The turn timeout counts silence: 5 minutes without any SDK message (subagent messages included) ends the turn (`Request timed out: no activity for 300 seconds`). At most 20 turns per user message (reaching it ends the turn with an error and the next message resumes).
@@ -82,6 +84,7 @@ Residual risks:
 - A view that ignores Ctrl+C cannot be interrupted; the chat handles it.
 - If yena is killed by SIGTERM/SIGKILL, the `claude` child lingers until its stdin closes (a few seconds; a turn in progress may keep running until then). Closing the chat on unmount is a mitigation, not a guarantee.
 - Sub-agent messages are not shown.
+- Live Bash output depends on Claude Code's undocumented tasks directory layout: a CLI update can silently disable it (Bash itself is unaffected). Another process running as your uid could plant a file during the short window before a call is bound; the effect is limited to the panel text, which is scrubbed. The uid check and the panel's mouse/TTY behaviour are verified only with tests and fake streams (as root).
 - Limit handling rests on reading the Claude Code 2.1.302 binary, not on a recorded session (no fixture): that a `rejected` event may precede the 429 and that `utilization` is a fraction. A usage limit is told from a temporary 429 only by a rejected event or the text `hit your limit|usage limit`, so changed CLI wording degrades to the rate-limit message.
 - The container timezone is UTC, so reset times read in UTC unless `TZ` is set (forwarding `TZ` in `compose.yaml` and `tzdata` in the image is a host follow-up, not done).
 - A new chat view shows the early warning only after its first `rate_limit_event` (the info is not shared between views).
@@ -95,19 +98,34 @@ claude chat --new
 ```
 Then: send `hello`; ask it to read a file; press Esc mid-answer and send another message; paste several lines; try `/foo` (refused), `/help`, `/new`, `/exit`; run `claude chat` again (resumes); resize the terminal during streaming; press Ctrl+C when idle, then Ctrl+C at the main prompt (yena exits). Check the cursor is visible and typing echoes afterwards, and that `ps` shows no leftover `claude` process.
 
+## Console tools
+
+When core provides a command bridge (`ctx.commandBridge`, core 0.4.0+), the chat registers an in-process MCP server named `yena` with two tools: `list_commands` (read-only) and `run_command({command})`. They let Claude inspect and run yena console commands, subject to each command's `agent` policy (`safe`, `confirm`, `deny`). Code: `src/chat/console-tools.ts`.
+- Confirmation lives inside the tool handler, not in `canUseTool`: in auto mode the classifier can skip `canUseTool`, so the handler asks (`Run console command: <line>?`, no "always" option) whenever core requires confirmation. `canUseTool` allows the two `mcp__yena__*` tools without a prompt, so there is no double prompt and the rule holds in every mode.
+- Output goes through `formatRunResult`, then the chat scrub (sanitiser and credential redaction). Non-ok statuses are returned as tool errors. Logs carry only tool, status and duration.
+- Timeouts: `run_command` asks the bridge for 10 minutes (`timeoutMs` 600000) and the MCP server's own tool timeout is 610000 ms, so the bridge times out first. While a command runs the chat's 5-minute silence timer is paused (it shares a hold counter with permission prompts); Esc interrupts. The command keeps the bridge busy until it settles, and a timed-out command keeps running if it ignores `ctx.signal`. The 600 s real round trip has not been run.
+- The server stays when `MCP servers` is Off (that setting only controls servers from the Claude Code config). A user MCP server also named `yena` is shadowed by this one.
+- Own metadata: `chat` and the `claude` command are `deny`; `claude session|tasks|mcp` are `safe`; `ping|rename|export|auth` are `confirm`; `ask|chat|new|resume|rewind|fork|copy|memory` are `deny`.
+- Residual risks: a confirmed command runs with the console's rights; the confirmation shows the line as typed by the model, and a command can still do more than its name suggests; the list of commands and their output go to the Anthropic API.
+
 ## Credentials
-Precedence: environment `ANTHROPIC_API_KEY`, then environment `CLAUDE_CODE_OAUTH_TOKEN`, then the stored `credentials.json`, then the legacy `<dataDir>/.token` (the file `bin/claude` also uses). `src/credentials.ts` is the only code that reads these.
+Precedence: environment `ANTHROPIC_API_KEY`, then environment `CLAUDE_CODE_OAUTH_TOKEN`, then a Claude Code login (`auth login`), then the stored `credentials.json` (an API key from `auth key` or a subscription token from `auth login --token`; shown as `stored credential (credentials.json)`, a token as `subscription token (stored by yena)`, and passed to the child as `CLAUDE_CODE_OAUTH_TOKEN`). `src/credentials.ts` is the only code that reads these.
+
+Migration: the legacy `<dataDir>/.token` file is no longer read and is not migrated. If it was your only credential, run `claude auth login --token` again, then delete the old `<dataDir>/.token` yourself. A stale file stays unreadable to the model (the data dir is outside its roots).
+
+- Login detection: when no environment credential is set, each chat or ask start runs `<runtime> auth status --json` (10 s, no cache; `auth status` runs it once per call). If it cannot run, the existence of a non-empty `config/.credentials.json` (metadata only, never opened) counts as a claude.ai login; `claude session` and the active-credential lines use only that file check. A login is shown as `subscription login` (claude.ai) or `API key (login)` (Console). With a login active, the credential variables are removed from the child environment so Claude Code uses its own login.
+- `bin/claude` reads no credential files: it authenticates only through the environment variables or the Claude Code login. A token stored in `credentials.json` is not picked up there.
 
 - An API key is never accepted as a command argument: it would stay in the scrollback and history. `auth key` takes a file.
 - Paths with spaces are not supported, because core splits the command line on whitespace.
-- A subscription token (`sk-ant-oat…`) is rejected by `auth key`; use the environment or `.token`.
+- A subscription token (`sk-ant-oat…`) is rejected by `auth key` (`Run "claude auth login --token" or set CLAUDE_CODE_OAUTH_TOKEN instead.`); use the environment, `auth login` or `auth login --token`.
+- `auth key` prints a note when another source (including a login) has priority over the stored key; a key stored after a login stays shadowed until you log out.
 - Without any credential, `ask` fails with `No credentials found. Set ANTHROPIC_API_KEY, …`.
-- Keep secret files private: `chmod 600 <dataDir>/.token` (`auth status` warns when a credential file is readable by others).
+- Keep secret files private: `chmod 600 <dataDir>/credentials.json` (`auth status` warns when a credential file is readable by others).
 - If `ANTHROPIC_BASE_URL` is set in your environment, the credential is sent there. It is your own environment; this is accepted.
-- `auth status` does not list a legacy `.token` as an "other source" while a stored key is active.
 
 ## Policy caveat
-Anthropic's documentation says that, unless previously approved, third-party developers may not offer claude.ai login or its rate limits in products built on the Agent SDK. This is a personal tool and the owner approved using their own subscription token. Prefer `ANTHROPIC_API_KEY`. A one-time notice is printed by `auth status` / `ask` when a subscription token is in use.
+Anthropic's documentation says that, unless previously approved, third-party developers may not offer claude.ai login or its rate limits in products built on the Agent SDK. yena now explicitly runs Claude Code's own claude.ai login (`auth login`), and also accepts a setup-token, for the owner's personal use of their own subscription; this rests on the owner's approval and the tool must not be shared or redistributed with that setup. Prefer `ANTHROPIC_API_KEY`. A one-time notice is printed by `auth status` / `ask` / `chat` when a subscription login or token is in use (`subscriptionNoticeShown` in `state.json`).
 
 ## Tool-use policy of `ask`
 Layers:
@@ -115,11 +133,16 @@ Layers:
 - `disableAllHooks`.
 - Permission deny rules: the credential and state files under `<dataDir>`, edits (not reads) of the `config/` directory, `.yena`, `/proc`, `~/.ssh`, `.env*`, `*.pem`, `id_rsa*`, and edits of `CLAUDE.md`, `CLAUDE.local.md` and `.claude/` in the project. `md/` and `config/` stay readable in `<dataDir>`.
 - `canUseTool`: every path is resolved with realpath and must be inside the project (`/app`) or the md dir; symlinks leaving them are refused.
+- Claude Code's login files are denied for Read, Grep and Glob: `config/.credentials.json`, `config/.claude.json` and `config/backups/**`; in the chat the `PreToolUse` hook also denies Bash commands that reference these auth files.
 - At most 20 turns and a 5-minute timeout. `bypassPermissions` is never used.
 
 Residual risks:
 - The model can read any non-denied file in `/app`, the md dir and the config dir (including agents, commands, settings, history and transcripts). Its content goes to the Anthropic API and into session transcripts under `<dataDir>/config/projects`.
 - Hiding of hidden/secret files from Grep and Glob rests partly on ripgrep and Claude Code behaviour plus best-effort deny rules.
+- Bash reads of the login files cannot be fully prevented: the Bash check is a regex on the command text (credentials.json, .claude.json, config/backups) and globbing or obfuscation (`cat .cred*`, quoting tricks, backticks) bypasses it; closing that needs an allowlist or a sandbox.
+- A claude.ai login leaves a long-lived refresh token on disk (`config/.credentials.json`, mode 0600); a Console login stores its API key in plain text in `config/.claude.json` and in `config/backups/`.
+- The login probe relies on the undocumented shape of `auth status --json` and may write into the config dir; a revoked login still reads as signed in until Claude Code notices.
+- The config dir is shared with `./yena claude`, so a login made in either place is used by both. The email is printed on screen by `auth status` and never logged.
 - A `.env` in `/app` is readable unless the deny rules match it (they deny `**/.env*`).
 
 Process lifetime (also for `chat`): a normal exit, timeout or cancel stops the `claude` child process. After SIGTERM or SIGKILL of the yena process the `claude` child can outlive it for a few seconds and exits when its stdin closes; it is not guaranteed, and a generation in progress may keep running until then (no signal handlers on purpose, so the host's signal behaviour is unchanged).
@@ -129,13 +152,14 @@ The module logs through the host logger (`host.log`, scope `claude`) into `<YENA
 
 Records (level, message, fields):
 - info `plugin loaded`.
-- info `auth status` {kind, source, others}; info `api key stored`; info `stored credential removed` {removed}.
+- info `auth status` {kind, source, others, login}; info `claude login started` {method, sso, email (boolean)}; info `claude login finished` {exitOk, loggedIn, method, subscriptionType}; info `claude logout` {ok, stillLoggedIn}; info `api key stored`; info `stored credential removed` {removed}.
 - warn `no credential` (ask and chat); info `credential resolved` {kind, source} (ask).
 - info `ask started` {fresh, promptChars}; info `ask finished` {outcome, ms, model, numTurns, session8}; warn `ask failed` {outcome (`timeout`|`error`), ms, errClass, reason}; warn `ask timed out` {timeoutMs}; error `sdk load failed` {missingModule, err}.
 - warn `result error` {subtype, authFailed}; warn `query threw` {errClass, aborted}.
 - info `chat starting` {fresh, kind, source, resuming, model} (`model` is the chosen id or `default`); info `chat setting set` {key, value}; error `chat dependencies failed to load` {missingModule, err}; info `chat closed` {ms, session8, model}.
 - info `sdk session spawned` {resuming}; info `turn started` {chars}; info `turn aborting` {outcome}; info `turn ended` {outcome, ms, reason?}; warn `sdk stream threw` {errClass}; warn `sdk stream ended unexpectedly` {authFailed}; warn `authentication failed`; warn `interrupt grace expired; recycling` {graceMs}; warn `session recycled`.
 - warn `state write failed` {code}; warn `exit hook aborting requests` {count}.
+- warn `shell tmp unavailable` {error class}; debug `shell view` {shown, calls, ms, outputBytes, bound (`file`|`task`), fallback (`busy`|`focus`|`ambiguous`|`nofile`|`tmp`)}: metadata only.
 
 `reason`/`err` values are scrubbed with the credential redactor and clipped to 300 characters.
 
@@ -144,7 +168,7 @@ Never logged: the prompt (only its length), assistant text, tool arguments and r
 `registerLogRedaction` (`src/credentials.ts`) adds an exact-value redactor for the resolved credential to the logger (once per credential, keyed by a SHA-256 digest) before `credential resolved` and every later record, in addition to the host's built-in patterns. `credentials.ts` stays the only code that reads credential names and files.
 
 ## Claude Code wrapper
-`./yena claude` (from the host repo) runs `bin/claude`, unchanged by the `ask` work. Its `GUARD` and `HINT` strings are kept in sync with `src/config.ts` by a test. `bin/install` refreshes Claude Code in `.runtime/`, and installs the module dependencies (the Agent SDK pinned to 0.3.302, matching the runtime) when the installed SDK version differs from the pin.
+`./yena claude` (from the host repo) runs `bin/claude`, unchanged by the `ask` work; it reads no credential files (see Credentials). Its `GUARD` and `HINT` strings are kept in sync with `src/config.ts` by a test. `bin/install` refreshes Claude Code in `.runtime/`, and installs the module dependencies (the Agent SDK pinned to 0.3.302, matching the runtime) when the installed SDK version differs from the pin.
 
 ## Development
 From `modules/claude`: `npm install && npm run typecheck && npm test` (`npm test` runs the `.ts` and `.tsx` tests under `tests/`; `typecheck` also checks them via `tests/tsconfig.json`). `tsc` and `tsx` still come from the host's `node_modules` and types are imported from the host's `src/api.ts`, so this only works inside the host tree. The SDK and its peers are installed in the module's own `node_modules`. Tests fake the SDK. `ink` and `react` come from the host (`/app/node_modules`) and must not be added to this module's dependencies. Every `.tsx` file must start with `import React from 'react'`: yena runs tsx from `/app`, where the module's JSX settings do not apply, and `npm test` (cwd = the module) would not notice. `tests/ui/runtime.test.ts` renders the UI components in a subprocess started from the host root to catch this (on failure it reports a missing frame text, not the `ReferenceError`). From the host root, `npm run typecheck:modules` and `npm run test:modules` run these for every module.
@@ -158,7 +182,7 @@ claude new
 ```
 
 ## Host-side steps
-- `./yena rebuild` (or recreate the container) so the image has `ripgrep` and the container gets `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` from the host environment. These variables also reach `./yena claude`, where the API key takes precedence over `.token`.
+- `./yena rebuild` (or recreate the container) so the image has `ripgrep` and the container gets `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` from the host environment. These variables also reach `./yena claude`, where they are the only credential besides a Claude Code login.
 - Commit the module changes in this repo, and `Dockerfile` / `compose.yaml` in the host repo.
 - `npm install --prefix` on a completely fresh clone through `bin/install` has not been tested end to end.
 

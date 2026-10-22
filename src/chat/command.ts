@@ -1,8 +1,9 @@
-import type {CommandContext, Logger, UiElement} from '../../../../src/api.js';
+import type {CommandContext, Logger, UiElement, ViewHost} from '../../../../src/api.js';
 import {tuningFromState, withPatch, type ChatTuning, type LivePatch} from '../chat-prefs.js';
 import {buildChatOptions, buildEnv, ensureMdLinks, resolvePaths} from '../config.js';
+import type {LoginProbe} from '../claude-login.js';
 import {makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
-import {clip, noopLog} from '../log.js';
+import {clip, errClass, noopLog} from '../log.js';
 import type {ClaudeState, ChatQueryFn, Credential, CredentialInfo} from '../types.js';
 import type {ChatViewProps, ListPickerProps} from '../ui/mount.js';
 import {formatAssistantBlock, formatNotice, formatUserLine} from '../ui/present.js';
@@ -11,6 +12,7 @@ import {listProjectFiles} from './files.js';
 import {editInEditor} from '../terminal.js';
 import {buildScope} from '../policy.js';
 import {ChatSession} from './chat-session.js';
+import {createConsoleServer, type ConsoleSdk} from './console-tools.js';
 import {createChatCanUseTool} from './permission-bridge.js';
 import {sdkPermissionMode} from './permission.js';
 import {policyHooks} from './policy-hook.js';
@@ -19,6 +21,9 @@ import {buildPreview} from './preview.js';
 import {makeReveal} from './reveal.js';
 import {bashHighlights} from './risk.js';
 import {makeScrub} from './scrub.js';
+import {createShellPanel} from './shell-panel.js';
+import {ensureShellTmp} from './shell-tmp.js';
+import {createShellWatch, type ShellWatch} from './shell-watch.js';
 
 export const CHAT_USAGE = 'Usage: claude chat [--new]';
 const TITLE_RETRY_MS = [3_000, 10_000];
@@ -27,6 +32,8 @@ export const NEEDS_MOUNT_MESSAGE = '"claude chat" needs an interface that can sh
 export type ChatUi = {
 	createChatElement: (props: ChatViewProps) => UiElement;
 	createPickerElement?: (props: ListPickerProps) => UiElement;
+	// Live Bash output in the console panel; without it the panel is never shown.
+	createShellElement?: (watch: ShellWatch, host?: ViewHost) => UiElement;
 };
 
 export type ChatRunDeps = {
@@ -35,11 +42,15 @@ export type ChatRunDeps = {
 	moduleDir?: string;
 	log?: Logger;
 	loadChatQuery: () => Promise<ChatQueryFn>;
+	// SDK helpers for the in-process console tools; without it (or without a command bridge) the tools are not offered.
+	loadConsoleSdk?: () => Promise<ConsoleSdk>;
 	loadUi: () => Promise<ChatUi>;
 	registerAbort?: (c: AbortController) => () => void;
 	store: {read: () => Promise<ClaudeState>; update: (patch: Partial<ClaudeState>) => Promise<unknown>};
 	showNoticeOnce: (cred: CredentialInfo, ctx: CommandContext) => Promise<void>;
 	kindLabel: (cred: CredentialInfo) => string;
+	// Detects a Claude Code login; only consulted when no environment credential is set.
+	probeLogin?: LoginProbe;
 	isMissingModule: (err: unknown) => boolean;
 	acquire: () => () => void;
 	// Receives the view's close function once the chat is shown.
@@ -49,6 +60,8 @@ export type ChatRunDeps = {
 	// Receives the function that applies a settings change to this chat (undefined once it closes).
 	onLive?: (apply: ((patch: LivePatch) => void) | undefined) => void;
 	onRulesChanged?: () => void;
+	// Private directory for Claude Code's shell output (CLAUDE_CODE_TMPDIR); throws when unusable.
+	shellTmp?: () => string;
 	// 'vim' or 'normal' editing for the chat input, read on every key.
 	inputMode?: () => 'normal' | 'vim';
 };
@@ -102,7 +115,7 @@ const runLocked = async (
 	const log = deps.log ?? noopLog;
 	let cred: Credential;
 	try {
-		cred = await requireCredential({env, dataDir});
+		cred = await requireCredential({env, dataDir, probeLogin: deps.probeLogin});
 	} catch (err) {
 		log.warn('no credential');
 		throw err;
@@ -115,8 +128,15 @@ const runLocked = async (
 
 	let query: ChatQueryFn;
 	let ui: ChatUi;
+	let consoleSdk: ConsoleSdk | undefined;
 	try {
 		query = await deps.loadChatQuery();
+		if (ctx.commandBridge && deps.loadConsoleSdk) {
+			consoleSdk = await deps.loadConsoleSdk().catch(err => {
+				log.warn('console tools unavailable', {err});
+				return undefined;
+			});
+		}
 		ui = await deps.loadUi();
 	} catch (err) {
 		const missingModule = deps.isMissingModule(err);
@@ -147,6 +167,12 @@ const runLocked = async (
 		model: model ?? 'default',
 	});
 	const startedAt = Date.now();
+	let shellRoot: string | undefined;
+	try {
+		shellRoot = (deps.shellTmp ?? ensureShellTmp)();
+	} catch (err) {
+		log.warn('shell tmp unavailable', {error: errClass(err)});
+	}
 	let saving: Promise<void> = Promise.resolve();
 	// Branching and rewinding apply to the query that opens the chat, not to later respawns.
 	let spawned = false;
@@ -203,7 +229,18 @@ const runLocked = async (
 				resume: id,
 				...(live.model !== undefined && {model: live.model}),
 				tuning: live.tuning,
-				env: buildEnv(env, paths, cred),
+				env: buildEnv(env, paths, cred, shellRoot),
+				...(consoleSdk && ctx.commandBridge && {
+					consoleServer: createConsoleServer({
+						bridge: ctx.commandBridge,
+						sdk: consoleSdk,
+						prompter,
+						redact,
+						cwd: paths.projectDir,
+						log,
+						holdTurn: () => session.holdTurnTimer(),
+					}),
+				}),
 				canUseTool: createChatCanUseTool({
 					scope,
 					projectDir: paths.projectDir,
@@ -219,6 +256,21 @@ const runLocked = async (
 			hooks: policyHooks(scope, paths.configDir),
 		}),
 	});
+
+	const shellWatch = createShellWatch({root: shellRoot, sessionId: () => session.sessionId, scrub, log});
+	const unfeed = session.subscribe(e => shellWatch.feed(e));
+	let chatHost: ViewHost | undefined;
+	const shellPanel =
+		ctx.mount && ui.createShellElement
+			? createShellPanel({
+					watch: shellWatch,
+					mount: ctx.mount,
+					isFocused: () => chatHost?.isFocused() ?? false,
+					build: (w, control) => ui.createShellElement!(w, control.host),
+					hasTmp: shellRoot !== undefined,
+					log,
+				})
+			: undefined;
 
 	const lifetime = new AbortController();
 	const unregister = deps.registerAbort?.(lifetime);
@@ -272,6 +324,7 @@ const runLocked = async (
 		let printHistory: ((text: string) => void) | undefined;
 		const mounted = mount(control => {
 			printHistory = control.print ?? ctx.print;
+			chatHost = control.host;
 			deps.onMount?.(control.close);
 			return ui.createChatElement({
 				controller: session,
@@ -311,6 +364,9 @@ const runLocked = async (
 		const model = session.model;
 		deps.onSession?.(undefined);
 		deps.onLive?.(undefined);
+		shellPanel?.dispose();
+		unfeed();
+		shellWatch.close();
 		for (const timer of titleTimers) clearTimeout(timer);
 		titleTimers.clear();
 		session.close();

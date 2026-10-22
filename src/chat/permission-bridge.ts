@@ -4,6 +4,7 @@ import path from 'node:path';
 import type {CanUseTool, PermissionResult} from '@anthropic-ai/claude-agent-sdk';
 import {classifyEditTarget, createCanUseTool, type Scope} from '../policy.js';
 import {agentDenial} from './agent-policy.js';
+import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from './console-tools.js';
 import {
 	BASH_REVIEW_MAX,
 	CANCEL_MESSAGE,
@@ -439,6 +440,10 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 			case 'Edit':
 			case 'Write':
 				return handleEdit(toolName, input, opts);
+			// The console tools confirm inside their handler, which holds in every mode, so they never prompt here.
+			case LIST_COMMANDS_TOOL:
+			case RUN_COMMAND_TOOL:
+				return {behavior: 'allow', updatedInput: input, toolUseID: opts.toolUseID};
 			default:
 				if (toolName.startsWith('mcp__')) return handleMcp(toolName, input, opts);
 				return policyDeny(toolName, toolUnavailableMessage(toolName), 'unknown tool', opts.toolUseID);

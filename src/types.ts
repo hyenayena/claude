@@ -1,7 +1,7 @@
 import type {Options, SDKMessage, SDKUserMessage} from '@anthropic-ai/claude-agent-sdk';
 
 export type CredentialKind = 'api-key' | 'oauth';
-export type CredentialSource = 'env' | 'stored' | 'legacy-file';
+export type CredentialSource = 'env' | 'claude-login' | 'stored';
 
 export type CredentialInfo = {
 	readonly kind: CredentialKind;

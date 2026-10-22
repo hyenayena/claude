@@ -1,8 +1,9 @@
 import {createHash} from 'node:crypto';
 import {inspect} from 'node:util';
-import {readFile, rm, stat} from 'node:fs/promises';
+import {lstat, readFile, rm, stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {Logger} from '../../../src/api.js';
+import type {LoginProbe} from './claude-login.js';
 import {atomicWriteFile} from './fsutil.js';
 import type {Credential, CredentialInfo, CredentialKind, CredentialSource} from './types.js';
 
@@ -31,6 +32,8 @@ const readText = async (file: string): Promise<string | undefined> => {
 	}
 };
 
+const OAUTH_TOKEN = /^sk-ant-oat[0-9A-Za-z_-]{20,}$/;
+
 const storedFile = (dataDir: string) => join(dataDir, 'credentials.json');
 
 const readStored = async (dataDir: string): Promise<Credential | undefined> => {
@@ -40,58 +43,94 @@ const readStored = async (dataDir: string): Promise<Credential | undefined> => {
 		const raw = JSON.parse(text) as unknown;
 		if (typeof raw !== 'object' || raw === null) return undefined;
 		const r = raw as Record<string, unknown>;
-		if (r.kind !== 'api-key' || typeof r.value !== 'string' || !API_KEY.test(r.value)) return undefined;
-		return makeCredential('api-key', 'stored', r.value);
+		if (typeof r.value !== 'string') return undefined;
+		if (r.kind === 'api-key' && API_KEY.test(r.value)) return makeCredential('api-key', 'stored', r.value);
+		if (r.kind === 'oauth' && OAUTH_TOKEN.test(r.value)) return makeCredential('oauth', 'stored', r.value);
+		return undefined;
 	} catch {
 		return undefined;
 	}
 };
 
-export const resolveCredential = async (opts: {
+export type CredentialOpts = {
 	env: NodeJS.ProcessEnv;
 	dataDir: string;
-}): Promise<Credential | undefined> => {
+	probeLogin?: LoginProbe;
+};
+
+const loginFile = (dataDir: string) => join(dataDir, 'config', '.credentials.json');
+
+// Metadata only: the file holds the login tokens and is never opened.
+const loginFileExists = async (dataDir: string): Promise<boolean> => {
+	try {
+		const st = await lstat(loginFile(dataDir));
+		return st.isFile() && st.size > 0;
+	} catch {
+		return false;
+	}
+};
+
+const readLogin = async (opts: CredentialOpts): Promise<Credential | undefined> => {
+	const status = opts.probeLogin ? await opts.probeLogin().catch(() => undefined) : undefined;
+	if (status) {
+		if (!status.loggedIn || !status.method) return undefined;
+		return makeCredential(status.method === 'console' ? 'api-key' : 'oauth', 'claude-login', '');
+	}
+	return (await loginFileExists(opts.dataDir)) ? makeCredential('oauth', 'claude-login', '') : undefined;
+};
+
+/** Every available credential, in precedence order; resolveCredential returns the first. */
+export const listCredentialSources = async (opts: CredentialOpts): Promise<Credential[]> => {
+	const out: Credential[] = [];
+	const apiKey = nonEmpty(opts.env.ANTHROPIC_API_KEY);
+	if (apiKey) out.push(makeCredential('api-key', 'env', apiKey));
+	const oauth = nonEmpty(opts.env.CLAUDE_CODE_OAUTH_TOKEN);
+	if (oauth) out.push(makeCredential('oauth', 'env', oauth));
+	for (const found of [await readLogin(opts), await readStored(opts.dataDir)]) {
+		if (found) out.push(found);
+	}
+	return out;
+};
+
+export const resolveCredential = async (opts: CredentialOpts): Promise<Credential | undefined> => {
 	const apiKey = nonEmpty(opts.env.ANTHROPIC_API_KEY);
 	if (apiKey) return makeCredential('api-key', 'env', apiKey);
 	const oauth = nonEmpty(opts.env.CLAUDE_CODE_OAUTH_TOKEN);
 	if (oauth) return makeCredential('oauth', 'env', oauth);
-	const stored = await readStored(opts.dataDir);
-	if (stored) return stored;
-	// Same parsing as bin/claude: every space, newline and CR is dropped.
-	const legacy = (await readText(join(opts.dataDir, '.token')))?.replace(/[ \n\r]/g, '');
-	if (legacy) return makeCredential('oauth', 'legacy-file', legacy);
-	return undefined;
+	return (await readLogin(opts)) ?? (await readStored(opts.dataDir));
 };
 
-export const requireCredential = async (opts: {env: NodeJS.ProcessEnv; dataDir: string}): Promise<Credential> => {
+export const requireCredential = async (opts: CredentialOpts): Promise<Credential> => {
 	const cred = await resolveCredential(opts);
 	if (!cred) {
 		throw new Error(
-			'No credentials found. Set ANTHROPIC_API_KEY, or run "claude auth key --from-file <path>" to store an API key. See "claude auth status".',
+			'No credentials found. Set ANTHROPIC_API_KEY, run "claude auth login", or run "claude auth key --from-file <path>" to store an API key. See "claude auth status".',
 		);
 	}
 	return cred;
+};
+
+const writeStored = async (dataDir: string, kind: 'api-key' | 'oauth', value: string): Promise<void> => {
+	const body = {kind, value, savedAt: new Date().toISOString()};
+	await atomicWriteFile(storedFile(dataDir), JSON.stringify(body, null, '\t') + '\n', 0o600);
 };
 
 export const storeApiKey = async (dataDir: string, value: string): Promise<void> => {
 	const key = value.trim();
 	if (key.startsWith('sk-ant-oat')) {
 		throw new Error(
-			'This looks like a subscription (OAuth) token, not an API key. Put it in <data dir>/.token or set CLAUDE_CODE_OAUTH_TOKEN instead.',
+			'This looks like a subscription (OAuth) token, not an API key. Run "claude auth login --token" or set CLAUDE_CODE_OAUTH_TOKEN instead.',
 		);
 	}
 	if (!API_KEY.test(key)) throw new Error('Invalid API key format. Expected a key starting with "sk-ant-".');
-	const body = {kind: 'api-key', value: key, savedAt: new Date().toISOString()};
-	await atomicWriteFile(storedFile(dataDir), JSON.stringify(body, null, '\t') + '\n', 0o600);
+	await writeStored(dataDir, 'api-key', key);
 };
 
-const OAUTH_TOKEN = /^sk-ant-oat[0-9A-Za-z_-]{20,}$/;
-
-/** Saves a subscription (OAuth) token, as from "claude setup-token", to the legacy file .token (0600). */
+/** Saves a subscription (OAuth) token, as from "claude setup-token", to credentials.json (0600), replacing a stored key. */
 export const storeOauthToken = async (dataDir: string, value: string): Promise<void> => {
 	const token = value.trim();
 	if (!OAUTH_TOKEN.test(token)) throw new Error('That is not a subscription token (it should start with "sk-ant-oat").');
-	await atomicWriteFile(join(dataDir, '.token'), `${token}\n`, 0o600);
+	await writeStored(dataDir, 'oauth', token);
 };
 
 export const removeStored = async (dataDir: string): Promise<boolean> => {
@@ -108,15 +147,17 @@ export const removeStored = async (dataDir: string): Promise<boolean> => {
 export const isSubscription = (info: CredentialInfo): boolean => info.kind === 'oauth';
 
 export const describeCredential = (info: CredentialInfo): string => {
+	if (info.source === 'claude-login') {
+		return info.kind === 'api-key' ? 'Console API key (Claude Code login)' : 'Claude subscription (Claude Code login)';
+	}
 	const what = info.kind === 'api-key' ? 'API key' : 'subscription token';
-	const where =
-		info.source === 'env' ? 'from environment' : info.source === 'stored' ? 'stored by yena' : 'from legacy file .token';
+	const where = info.source === 'env' ? 'from environment' : 'stored by yena';
 	return `${what} (${where})`;
 };
 
 export const inspectFileMode = async (dataDir: string): Promise<string[]> => {
 	const warnings: string[] = [];
-	for (const name of ['.token', 'credentials.json']) {
+	for (const name of ['credentials.json', join('config', '.credentials.json')]) {
 		try {
 			const {mode} = await stat(join(dataDir, name));
 			if (mode & 0o077) {
@@ -143,6 +184,7 @@ export const makeRedactor = (cred?: Credential): ((text: string) => string) => {
 const registered = new WeakMap<Logger, Set<string>>();
 
 export const registerLogRedaction = (log: Logger, cred: Credential): void => {
+	if (cred.value === '') return;
 	const digest = createHash('sha256').update(cred.value).digest('hex');
 	let seen = registered.get(log);
 	if (!seen) registered.set(log, (seen = new Set()));
