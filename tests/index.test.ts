@@ -30,7 +30,7 @@ test('ping prints pong', async () => {
 test('no subcommand throws the usage error', async () => {
 	const {command, ctx} = await setup();
 	await assert.rejects(async () => command.run([], ctx), {
-		message: 'Usage: claude <ping|ask|chat|new|resume|rewind|fork|rename|export|copy|memory|tasks|mcp|session|auth|<Claude Code command>>',
+		message: 'Usage: claude <ping|ask|chat|new|resume|rewind|fork|rename|export|copy|memory|tasks|mcp|session|sessions|stop|auth|<Claude Code command>>',
 	});
 });
 

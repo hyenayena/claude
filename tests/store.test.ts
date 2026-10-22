@@ -108,3 +108,14 @@ test('chat tuning fields keep only known values', async () => {
 	);
 	assert.deepEqual(await createStore(dir).read(), {});
 });
+
+test('chatKeepRunning keeps only "on" and survives a round trip', async () => {
+	const dir = await mkdtemp(join(tmpdir(), 'claude-store-keep-'));
+	for (const bad of ['off', true, 1, 'ON', ' on', null, {}, ['on']]) {
+		await writeFile(join(dir, 'state.json'), JSON.stringify({chatKeepRunning: bad}));
+		assert.deepEqual(await createStore(dir).read(), {}, JSON.stringify(bad));
+	}
+	const store = createStore(dir);
+	await store.update({chatKeepRunning: 'on'});
+	assert.deepEqual(await createStore(dir).read(), {chatKeepRunning: 'on'});
+});

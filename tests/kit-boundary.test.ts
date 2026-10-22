@@ -47,24 +47,26 @@ function resolveLocal(from: string, spec: string): string | undefined {
 	return undefined;
 }
 
-test('the static import graph of index.ts never reaches react, ink or the core UI kit', () => {
-	const seen = new Set<string>();
-	const queue = [path.join(srcDir, 'index.ts')];
-	const bad: string[] = [];
-	while (queue.length > 0) {
-		const file = queue.pop() as string;
-		if (seen.has(file)) continue;
-		seen.add(file);
-		for (const spec of staticSpecifiers(readFileSync(file, 'utf8'))) {
-			if (/^(react|ink)(\/|$)/.test(spec) || /kit\/ui(\.js)?$/.test(spec)) {
-				bad.push(`${path.relative(srcDir, file)} -> ${spec}`);
-				continue;
+for (const entry of ['index.ts', path.join('runner', 'main.ts')]) {
+	test(`the static import graph of ${entry} never reaches react, ink or the core UI kit`, () => {
+		const seen = new Set<string>();
+		const queue = [path.join(srcDir, entry)];
+		const bad: string[] = [];
+		while (queue.length > 0) {
+			const file = queue.pop() as string;
+			if (seen.has(file)) continue;
+			seen.add(file);
+			for (const spec of staticSpecifiers(readFileSync(file, 'utf8'))) {
+				if (/^(react|ink)(\/|$)/.test(spec) || /kit\/ui(\.js)?$/.test(spec)) {
+					bad.push(`${path.relative(srcDir, file)} -> ${spec}`);
+					continue;
+				}
+				if (file === path.join(srcDir, 'ui', 'kit.ts')) continue;
+				const next = resolveLocal(file, spec);
+				if (next) queue.push(next);
 			}
-			if (file === path.join(srcDir, 'ui', 'kit.ts')) continue;
-			const next = resolveLocal(file, spec);
-			if (next) queue.push(next);
 		}
-	}
-	assert.ok(seen.size > 5, 'the walk found the module graph');
-	assert.deepEqual(bad, []);
-});
+		assert.ok(seen.size > 5, 'the walk found the module graph');
+		assert.deepEqual(bad, []);
+	});
+}

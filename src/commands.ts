@@ -3,7 +3,10 @@ import {appendFile, lstat, mkdir, open, realpath, stat, writeFile} from 'node:fs
 import path, {join, resolve} from 'node:path';
 import type {Command, CommandContext, Logger, SettingsTab, Subcommand} from '../../../src/api.js';
 import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
-import {isCommandName, type ChatSession, type SlashCommandInfo} from './chat/chat-session.js';
+import {isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
+import type {ChatHandle} from './chat/handle.js';
+import {clockTime} from './clock-time.js';
+import {runnerSocketPath} from './runner/spawn.js';
 import {diskCommands} from './disk-commands.js';
 import {listPrompts, listSessions, readHistory} from './chat/history.js';
 import {readSessionTitle, transcriptFile} from './chat/title.js';
@@ -25,9 +28,12 @@ import {
 } from './credentials.js';
 import {editFile, readHidden, runInteractive, waitForEnter} from './terminal.js';
 import {clip, errClass, noopLog} from './log.js';
-import {openChat, runChat, type ChatOpen, type ChatRunDeps, type ChatUi} from './chat/command.js';
+import {openChat, runChat, type ChatOpen, type ChatRoute, type ChatRouteRequest, type ChatRunDeps, type ChatUi} from './chat/command.js';
 import {makeScrub} from './chat/scrub.js';
 import {runTurn, TurnFailure} from './session.js';
+import {queryStatus, serveControl, type ControlServer, type ControlStatus} from './sessions/control.js';
+import {acquireLock, isSessionId, readHolder, type LockInfo, type LockKind, type SessionLock} from './sessions/lock.js';
+import {stopHolder} from './sessions/stop.js';
 import {createStore, isModelId} from './store.js';
 import type {ChatQueryFn, Credential, CredentialInfo, QueryFn} from './types.js';
 
@@ -42,8 +48,14 @@ export type ClaudeDeps = {
 	loadChatQuery?: () => Promise<ChatQueryFn>;
 	loadConsoleSdk?: ChatRunDeps['loadConsoleSdk'];
 	shellTmp?: ChatRunDeps['shellTmp'];
+	// Starts the background runner for a chat; without it the chat always runs in this process.
+	spawnRunner?: ChatRunDeps['spawnRunner'];
+	// Timing overrides for waiting on another session and for the runner connection (tests).
+	chatTiming?: Pick<ChatRunDeps, 'waitPollMs' | 'remote'>;
 	loadUi?: () => Promise<ChatUi>;
 	moduleDir?: string;
+	// Private directory for the single-session lock and control socket; absent or throwing means no global lock.
+	sessionDir?: () => string;
 	log?: Logger;
 	timeoutMs?: number;
 	registerAbort?: (c: AbortController) => () => void;
@@ -58,7 +70,7 @@ export type ClaudeDeps = {
 	};
 };
 
-const USAGE = 'Usage: claude <ping|ask|chat|new|resume|rewind|fork|rename|export|copy|memory|tasks|mcp|session|auth|<Claude Code command>>';
+const USAGE = 'Usage: claude <ping|ask|chat|new|resume|rewind|fork|rename|export|copy|memory|tasks|mcp|session|sessions|stop|auth|<Claude Code command>>';
 const RESUME_USAGE = 'Usage: claude resume [session]';
 const NO_CHAT = 'No chat is open. Claude Code commands run in the open chat; start one with "chat".';
 const ASK_USAGE = 'Usage: claude ask [--new] <text>';
@@ -66,6 +78,7 @@ const AUTH_USAGE = 'Usage: claude auth <status|key|logout|login>';
 const KEY_USAGE = 'Usage: claude auth key --from-file <path>';
 const CHAT_NEW_USAGE = 'Usage: chat [model]';
 const MAX_KEY_FILE_BYTES = 4096;
+const STOP_USAGE = 'Usage: claude stop [session]';
 
 export {MODEL_OPTIONS} from './chat-prefs.js';
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -144,6 +157,173 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const readSecret = deps.login?.readSecret ?? readHidden;
 	const logoutCli = deps.login?.logout ?? ((bin, e) => runLogout({bin, env: e}));
 	let busy: 'ask' | 'chat' | undefined;
+	let askAbort: (() => void) | undefined;
+
+	const sessionsDir = (): string | undefined => {
+		if (!deps.sessionDir) return undefined;
+		try {
+			return deps.sessionDir();
+		} catch (err) {
+			log.warn('session directory unavailable', {error: errClass(err)});
+			return undefined;
+		}
+	};
+
+	const busyMessage = (holder: LockInfo | undefined): string => {
+		if (!holder) return 'A session is starting. Wait a moment or run "claude sessions".';
+		const what = holder.sessionId ? `${holder.kind} ${holder.sessionId.slice(0, 8)}` : holder.kind;
+		return `A session is running (${what} since ${clockTime(holder.startedAt)}). Wait for it or run "claude stop".`;
+	};
+
+	// What the control socket reports for the chat or ask that lives in this process.
+	const localStatus = (kind: LockKind, startedAt: number): ControlStatus => {
+		const s = kind === 'chat' && openSession && openSession.state !== 'closed' ? openSession : undefined;
+		const pending = s?.pendingPermissions.length ?? 0;
+		const id = s?.sessionId;
+		return {
+			kind,
+			where: 'local',
+			state: pending > 0 ? 'waiting-permission' : kind === 'ask' || s?.state === 'running' ? 'running' : 'idle',
+			startedAt,
+			pending,
+			queued: 0,
+			attached: true,
+			...(s?.title && {title: s.title}),
+			...(id && {sessionId8: id.slice(0, 8)}),
+		};
+	};
+
+	const claimBusy = (kind: LockKind): (() => void) => {
+		busy = kind;
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			if (busy === kind) busy = undefined;
+		};
+	};
+
+	type Acquired = {ok: true; release: () => void} | {ok: false; holder?: LockInfo; unknown?: true};
+
+	// One chat or ask at a time across every yena on this machine; the in-process flag stays the fast path.
+	const tryAcquire = (kind: LockKind): Acquired => {
+		if (busy === 'ask') throw new Error('An ask is already running');
+		if (busy === 'chat') throw new Error('A chat is already open');
+		const dir = sessionsDir();
+		let lock: SessionLock | undefined;
+		if (dir) {
+			try {
+				const got = acquireLock({dir, kind, where: 'local', log});
+				if (!got.ok) return {ok: false, ...(got.holder && {holder: got.holder}), ...(got.unknown && {unknown: true as const})};
+				lock = got.lock;
+			} catch (err) {
+				log.warn('session lock unavailable', {error: errClass(err)});
+			}
+		}
+		const unbusy = claimBusy(kind);
+		let released = false;
+		let server: ControlServer | undefined;
+		if (dir && lock) {
+			const held = lock;
+			const syncId = (): void => {
+				const id = kind === 'chat' ? openSession?.sessionId : undefined;
+				if (id && isSessionId(id) && id !== held.info.sessionId) held.update({sessionId: id});
+			};
+			void serveControl({
+				dir,
+				log,
+				handlers: {
+					status: () => {
+						syncId();
+						return localStatus(kind, held.info.startedAt);
+					},
+					stop: async () => {
+						if (kind === 'ask') return askAbort?.();
+						await openSession?.interrupt().catch(() => {});
+						openHandle?.close();
+					},
+				},
+			}).then(
+				s => {
+					if (released) void s.close();
+					else {
+						server = s;
+						held.update({socket: s.path});
+					}
+				},
+				err => log.warn('control socket unavailable', {error: errClass(err)}),
+			);
+		}
+		return {
+			ok: true,
+			release: () => {
+				if (released) return;
+				released = true;
+				unbusy();
+				void server?.close();
+				lock?.release();
+			},
+		};
+	};
+
+	const acquireShared = (kind: LockKind): (() => void) => {
+		const got = tryAcquire(kind);
+		if (!got.ok) throw new Error(busyMessage(got.holder));
+		return got.release;
+	};
+
+	// Like acquireShared, but a refusal names the session by its title when it answers on its control socket.
+	const acquireAsk = async (): Promise<() => void> => {
+		const got = tryAcquire('ask');
+		if (got.ok) return got.release;
+		const dir = sessionsDir();
+		const status = dir && got.holder ? await queryStatus(dir, 500).catch(() => undefined) : undefined;
+		const title = status?.title ? makeScrub(s => s)(status.title).slice(0, 80) : '';
+		throw new Error(title ? `A session is running (${title}). Wait for it or run "claude stop".` : busyMessage(got.holder));
+	};
+
+	// Where the next chat runs, given who holds the one-session lock.
+	const routeChat = (req: ChatRouteRequest): ChatRoute => {
+		if (busy === 'ask') throw new Error('An ask is already running');
+		if (busy === 'chat') throw new Error('A chat is already open');
+		const dir = sessionsDir();
+		if (dir) {
+			let seen: ReturnType<typeof readHolder> = {};
+			try {
+				seen = readHolder(dir);
+			} catch (err) {
+				log.warn('session lock unreadable', {error: errClass(err)});
+			}
+			const h = seen.holder;
+			if (h) {
+				if (req.attach && h.where === 'runner' && h.kind === 'chat' && h.socket) {
+					return {kind: 'attach', socketPath: runnerSocketPath(dir), release: claimBusy('chat')};
+				}
+				return {kind: 'wait', message: busyMessage(h)};
+			}
+			if (seen.unknown) return {kind: 'wait', message: busyMessage(undefined)};
+			if (req.keep && deps.spawnRunner) return {kind: 'spawn', sessionDir: dir, release: claimBusy('chat')};
+		}
+		const got = tryAcquire('chat');
+		return got.ok ? {kind: 'local', release: got.release} : {kind: 'wait', message: busyMessage(got.holder)};
+	};
+
+	// One look at the lock while an open waits for it.
+	const peekLock = async (): Promise<{free: boolean; title?: string}> => {
+		const dir = sessionsDir();
+		if (!dir) return {free: true};
+		let seen: ReturnType<typeof readHolder>;
+		try {
+			seen = readHolder(dir);
+		} catch {
+			return {free: false};
+		}
+		const h = seen.holder;
+		if (!h) return seen.unknown ? {free: false} : {free: true};
+		const status = await queryStatus(dir, 500).catch(() => undefined);
+		const title = status?.title ?? (h.sessionId ? `${h.kind} ${h.sessionId.slice(0, 8)}` : h.kind);
+		return {free: false, title: makeScrub(s => s)(title).slice(0, 80)};
+	};
 
 	const showNoticeOnce = async (cred: CredentialInfo, ctx: CommandContext): Promise<void> => {
 		if (!isSubscription(cred)) return;
@@ -168,13 +348,11 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const text = args.slice(i).join(' ').trim();
 		if (!text) throw new Error(ASK_USAGE);
 		if (text.startsWith('/')) throw new Error('Slash commands are not supported in "claude ask"');
-		if (busy === 'ask') throw new Error('An ask is already running');
-		if (busy === 'chat') throw new Error('A chat is already open');
-		busy = 'ask';
+		const release = await acquireAsk();
 		try {
 			await runAsk(text, fresh, ctx);
 		} finally {
-			busy = undefined;
+			release();
 		}
 	};
 
@@ -212,6 +390,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const unregister = deps.registerAbort?.(controller);
 		const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		let timedOut = false;
+		askAbort = () => controller.abort();
 		const timer = setTimeout(() => {
 			timedOut = true;
 			log.warn('ask timed out', {timeoutMs});
@@ -258,6 +437,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				session8: result.sessionId.slice(0, 8),
 			});
 		} finally {
+			askAbort = undefined;
 			clearTimeout(timer);
 			unregister?.();
 		}
@@ -286,23 +466,20 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		onSession: s => {
 			openSession = s;
 		},
+		route: routeChat,
+		peek: peekLock,
+		...(deps.spawnRunner && {spawnRunner: deps.spawnRunner}),
+		...deps.chatTiming,
 		onLive: apply => {
 			applyOpenChat = apply;
 		},
 		onRulesChanged: () => void refreshRules(),
 		inputMode: () => inputMode,
-		acquire: () => {
-			if (busy === 'ask') throw new Error('An ask is already running');
-			if (busy === 'chat') throw new Error('A chat is already open');
-			busy = 'chat';
-			return () => {
-				busy = undefined;
-			};
-		},
+		acquire: () => acquireShared('chat'),
 	});
 
 	let openHandle: {close: () => void; done: Promise<void>} | undefined;
-	let openSession: ChatSession | undefined;
+	let openSession: ChatHandle | undefined;
 	let applyOpenChat: ((patch: LivePatch) => void) | undefined;
 
 	// Chat input editing, cached so every key can read it.
@@ -351,8 +528,10 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	// Opening a chat replaces the one that is open.
-	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>): Promise<void> => {
+	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>, endIdleRemote = true): Promise<void> => {
 		if (busy === 'ask') throw new Error('An ask is already running');
+		// Opening a different chat ends an idle background chat; a busy one is waited for.
+		if (endIdleRemote && openSession?.state === 'idle') openSession.end?.();
 		const previous = openHandle;
 		if (previous) {
 			previous.close();
@@ -382,9 +561,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 
-	const chat = (args: string[], ctx: CommandContext): Promise<void> => replaceChat(d => runChat(args, ctx, d));
+	const chat = (args: string[], ctx: CommandContext): Promise<void> => replaceChat(d => runChat(args, ctx, d), args.includes('--new'));
 
-	const newChat = async (args: string[], ctx: CommandContext): Promise<void> => {
+	const newChat = async (args: string[], ctx: CommandContext, attach = false): Promise<void> => {
 		if (args.length > 1) throw new Error(CHAT_NEW_USAGE);
 		const requested = args[0];
 		if (requested !== undefined && !isModelId(requested)) {
@@ -392,7 +571,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 		const state = await store.read();
 		const model = requested ?? state.chatModel;
-		await replaceChat(d => openChat({fresh: true, ...(model && {model}), tuning: tuningFromState(state)}, ctx, d));
+		await replaceChat(d => openChat({fresh: true, attach, ...(model && {model}), tuning: tuningFromState(state)}, ctx, d), !attach);
 	};
 
 	// Shows a list in the console panel and resolves with the picked id (undefined on Esc).
@@ -806,6 +985,52 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 
+	// Lists the session that holds the global lock (at most one), asking it over its control socket.
+	const sessionsCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length > 0) throw new Error('Usage: claude sessions');
+		const dir = sessionsDir();
+		if (!dir) throw new Error('Session control is not available (no private run directory)');
+		const {holder, unknown} = readHolder(dir);
+		if (!holder) {
+			ctx.print(unknown ? 'A session is starting.' : 'No session is running.');
+			return;
+		}
+		const scrub = makeScrub(s => s);
+		const status = await queryStatus(dir).catch(() => undefined);
+		const id8 = status?.sessionId8 ?? holder.sessionId?.slice(0, 8);
+		const parts = [
+			`${holder.kind} (${holder.where === 'runner' ? 'background' : 'in yena'})`,
+			status ? status.state : 'unresponsive',
+			...(status?.title ? [`"${scrub(status.title).slice(0, 80)}"`] : []),
+			...(id8 ? [`session ${id8}`] : []),
+			`since ${clockTime(holder.startedAt)}`,
+			`pid ${holder.pid}`,
+		];
+		if (status && status.pending > 0) parts.push(`${status.pending} permission${status.pending === 1 ? '' : 's'} waiting`);
+		if (status && status.queued > 0) parts.push(`${status.queued} queued`);
+		if (status && holder.where === 'runner') parts.push(status.attached ? 'attached' : 'detached');
+		ctx.print(parts.join(' · '));
+	};
+
+	const stopCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length > 1) throw new Error(STOP_USAGE);
+		const dir = sessionsDir();
+		if (!dir) throw new Error('Session control is not available (no private run directory)');
+		const {holder} = readHolder(dir);
+		if (!holder) {
+			ctx.print('No session is running.');
+			return;
+		}
+		const wanted = args[0]?.toLowerCase();
+		if (wanted !== undefined && !(holder.sessionId ?? '').startsWith(wanted)) {
+			throw new Error(`No running session matches "${makeScrub(s => s)(args[0]!).slice(0, 40)}". ${STOP_USAGE}`);
+		}
+		const result = await stopHolder(dir, holder, {log});
+		if (result.ok) ctx.print(`Stopped the ${holder.kind} (${result.via === 'socket' ? 'asked to stop' : 'process ended'}).`);
+		else if (holder.where === 'local') throw new Error(`The ${holder.kind} runs in another yena (pid ${holder.pid}) and did not stop; close that yena.`);
+		else throw new Error(`The background ${holder.kind} (pid ${holder.pid}) did not stop.`);
+	};
+
 	const OWN_SUBCOMMANDS: Subcommand[] = [
 		{name: 'ping', usage: 'claude ping', description: 'Check that the claude module is loaded', agent: 'confirm'},
 		{name: 'ask', usage: 'claude ask [--new] <text>', description: 'Ask Claude a question (continues the last session)', agent: 'deny'},
@@ -821,6 +1046,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		{name: 'tasks', usage: 'claude tasks', description: 'Background tasks and subagents of the chat; pick one to stop it', agent: 'safe'},
 		{name: 'mcp', usage: 'claude mcp [reconnect <server>]', description: 'MCP servers of the chat and their status', agent: 'safe'},
 		{name: 'session', usage: 'claude session', description: 'Show the current session, model and runtime', agent: 'safe'},
+		{name: 'sessions', usage: 'claude sessions', description: 'Show the running chat or ask, in any yena or in the background', agent: 'safe'},
+		{name: 'stop', usage: 'claude stop [session]', description: 'Stop the running chat or ask', agent: 'confirm'},
 		{
 			name: 'auth',
 			usage: 'claude auth <status|key|logout|login>',
@@ -903,6 +1130,10 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 					return mcpCmd(args, ctx);
 				case 'session':
 					return session(ctx);
+				case 'sessions':
+					return sessionsCmd(args, ctx);
+				case 'stop':
+					return stopCmd(args, ctx);
 				case 'auth':
 					return auth(args, ctx);
 				default:
@@ -924,12 +1155,13 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 					if (openSession && openSession.state !== 'closed') openSession.setMode(mode);
 				},
 				applyLive: patch => applyOpenChat?.(patch),
+				applyKeep: keep => openSession?.setKeep?.(keep),
 				applyInputMode: mode => {
 					inputMode = mode;
 				},
 			}),
 		},
-		run: newChat,
+		run: (args, ctx) => newChat(args, ctx, args.length === 0),
 	};
 
 	// `chat` first: its Claude tab leads the settings screen, before claude's Permissions tab.

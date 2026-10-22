@@ -33,6 +33,7 @@ const sanitize = (raw: unknown): ClaudeState => {
 	if (r.chatInputMode === 'vim') state.chatInputMode = 'vim';
 	if (r.chatMcp === 'off') state.chatMcp = 'off';
 	if (r.chatHooks === 'on') state.chatHooks = 'on';
+	if (r.chatKeepRunning === 'on') state.chatKeepRunning = 'on';
 	if (Array.isArray(r.allowedCommands)) {
 		const list = r.allowedCommands.filter(
 			(c): c is string => typeof c === 'string' && c.trim() !== '' && c.length <= MAX_RULE && !/[\n\0]/.test(c),

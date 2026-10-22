@@ -56,6 +56,12 @@ export interface ChatController {
 	readonly tasks?: readonly {status: string; background: boolean}[];
 	backgroundTasks?(): Promise<boolean>;
 	readonly pendingPermissions: readonly PermissionRequest[];
+	// Closing only leaves a chat that lives in another process: its pending permissions stay pending.
+	readonly detachesOnClose?: boolean;
+	// Messages that were queued in the chat's process before this view attached.
+	readonly queued?: readonly string[];
+	// Called whenever the view's message queue changes, so a detached chat does not lose it.
+	setQueued?(lines: readonly string[]): void;
 	setMode(mode: ChatMode): void;
 	answerPermission(id: string, decision: PermissionDecision): boolean;
 	// `command: true` lets Claude Code run a leading /command; otherwise the text is delivered as written.

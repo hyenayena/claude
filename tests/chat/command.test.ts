@@ -605,7 +605,7 @@ test('the Claude tab offers permission mode, model, effort, thinking, fast mode 
 	const s = await setupChat();
 	assert.deepEqual(
 		s.chat.settings!.settings.map(x => x.key),
-		['chatPermissionMode', 'chatModel', 'chatEffort', 'chatThinking', 'chatFastMode', 'chatOutputStyle', 'chatMcp', 'chatHooks', 'chatInputMode'],
+		['chatPermissionMode', 'chatModel', 'chatEffort', 'chatThinking', 'chatFastMode', 'chatOutputStyle', 'chatMcp', 'chatHooks', 'chatKeepRunning', 'chatInputMode'],
 	);
 });
 

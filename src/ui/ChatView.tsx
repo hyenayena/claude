@@ -146,12 +146,20 @@ export function ChatView(props: ChatViewProps) {
 	const promptRef = useRef<PromptEntry | null>(null);
 	const batchRef = useRef(0);
 	const pendingModeRef = useRef<{mode: ChatMode; armedAt: number} | undefined>(undefined);
-	const edRef = useRef<EditorState>(
-		props.initialDraft ? editorReduce(emptyEditor, {type: 'insert', text: props.initialDraft}) : emptyEditor,
-	);
+	// Messages queued while detached, with no turn left to send them, come back as draft text.
+	const strandedRef = useRef(controller.state === 'running' ? '' : (controller.queued ?? []).join('\n\n'));
+	const initialText = [props.initialDraft ?? '', strandedRef.current].filter(Boolean).join('\n');
+	const edRef = useRef<EditorState>(initialText ? editorReduce(emptyEditor, {type: 'insert', text: initialText}) : emptyEditor);
 	const closedRef = useRef(false);
 	// Messages typed while Claude answers; sent together when the turn ends.
-	const queueRef = useRef<string[]>([]);
+	const queueRef = useRef<string[]>(controller.state === 'running' ? [...(controller.queued ?? [])] : []);
+	const setQueue = useCallback(
+		(next: string[]) => {
+			queueRef.current = next;
+			controller.setQueued?.(next);
+		},
+		[controller],
+	);
 	// Position while browsing the history with ↑/↓ (-1: not browsing) and the draft it replaced.
 	const historyRef = useRef<{index: number; draft: EditorState}>({index: -1, draft: emptyEditor});
 	// Ctrl+R: the query, the history index it matched, and the draft to restore on Esc.
@@ -218,7 +226,7 @@ export function ChatView(props: ChatViewProps) {
 				// After an interrupt, limit or context failure the queued text comes back to the draft instead of being sent.
 				if (event.outcome === 'interrupted' || event.outcome === 'limit' || event.outcome === 'context') {
 					const back = queueRef.current.join('\n\n');
-					queueRef.current = [];
+					setQueue([]);
 					const draft = edRef.current.text;
 					edRef.current = editorReduce(emptyEditor, {type: 'insert', text: draft ? `${back}\n${draft}` : back});
 					render();
@@ -227,13 +235,13 @@ export function ChatView(props: ChatViewProps) {
 				}
 			}
 		},
-		[print, scrub, reveal, setT, render],
+		[print, scrub, reveal, setT, render, setQueue],
 	);
 
 	const flushQueue = useCallback(() => {
 		if (closedRef.current || queueRef.current.length === 0 || controller.state !== 'idle') return;
 		const text = queueRef.current.join('\n\n');
-		queueRef.current = [];
+		setQueue([]);
 		render();
 		try {
 			controller.send(text);
@@ -242,12 +250,19 @@ export function ChatView(props: ChatViewProps) {
 			return;
 		}
 		if ((controller.state as string) === 'running') feed({type: 'state', state: 'running'});
-	}, [controller, print, render, scrub]);
+	}, [controller, print, render, scrub, setQueue]);
 
 	const cancelPending = useCallback(() => {
+		// A chat in another process keeps its pending permissions for the next attach.
+		if (controller.detachesOnClose) return;
 		for (const req of [...controller.pendingPermissions]) {
 			controller.answerPermission(req.id, {kind: 'cancel', cause: 'closed'});
 		}
+	}, [controller]);
+
+	useLayoutEffect(() => {
+		// The stranded queue now lives in the draft; the chat's process must not keep a copy.
+		if (strandedRef.current) controller.setQueued?.([]);
 	}, [controller]);
 
 	useLayoutEffect(() => {
@@ -331,7 +346,7 @@ export function ChatView(props: ChatViewProps) {
 				setT(setNotice(t, BUSY_HINT));
 				return;
 			}
-			queueRef.current = [...queueRef.current, text];
+			setQueue([...queueRef.current, text]);
 			edRef.current = emptyEditor;
 			setT(setNotice(t, undefined));
 			return;

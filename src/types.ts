@@ -36,6 +36,8 @@ export type ClaudeState = {
 	chatInputMode?: 'vim';
 	chatMcp?: 'off';
 	chatHooks?: 'on';
+	// The chat finishes its work in a background process after yena exits.
+	chatKeepRunning?: 'on';
 	// Bash commands allowed with "always"; they stay allowed in later chats.
 	allowedCommands?: string[];
 	subscriptionNoticeShown?: boolean;

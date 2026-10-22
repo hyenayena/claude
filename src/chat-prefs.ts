@@ -125,7 +125,8 @@ type PrefKey =
 	| 'chatPermissionMode'
 	| 'chatInputMode'
 	| 'chatMcp'
-	| 'chatHooks';
+	| 'chatHooks'
+	| 'chatKeepRunning';
 
 type Store = {read: () => Promise<ClaudeState>; update: (patch: Partial<ClaudeState>) => Promise<unknown>};
 
@@ -177,6 +178,10 @@ const HOOK_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Off'},
 	{value: 'on', label: 'On', description: 'hooks from settings files run (yena\'s path policy stays)'},
 ];
+const KEEP_OPTIONS: SettingOption[] = [
+	{value: '', label: 'Off'},
+	{value: 'on', label: 'On', description: 'the chat finishes its work after you leave yena'},
+];
 const STYLE_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Default'},
 	{value: 'Explanatory', label: 'Explanatory', description: 'explains its choices'},
@@ -190,6 +195,8 @@ export type ChatSettingsHooks = {
 	applyInputMode?: (mode: 'normal' | 'vim') => void;
 	// Applies model, effort, thinking, fast mode or output style to the open chat, if any.
 	applyLive?: (patch: LivePatch) => void;
+	// Tells a chat running in the background whether to keep working after yena exits.
+	applyKeep?: (keep: boolean) => void;
 };
 
 export function chatSettings(
@@ -268,6 +275,15 @@ export function chatSettings(
 			options: HOOK_OPTIONS,
 			parse: v => fromOptions<'on'>(HOOK_OPTIONS, v),
 			show: s => s.chatHooks ?? '',
+		},
+		{
+			key: 'chatKeepRunning',
+			label: 'Keep working after exit',
+			description: 'Let the chat finish its work in the background when you leave yena',
+			options: KEEP_OPTIONS,
+			parse: v => fromOptions<'on'>(KEEP_OPTIONS, v),
+			show: s => s.chatKeepRunning ?? '',
+			onSet: v => hooks.applyKeep?.(v === 'on'),
 		},
 		{
 			key: 'chatInputMode',
