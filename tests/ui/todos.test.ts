@@ -27,7 +27,7 @@ test('parseTodos keeps well-formed items and defaults unknown statuses to pendin
 test('a TodoWrite call becomes the checklist; it is shown while something is open', () => {
 	let s = initialTranscript();
 	s = reduceTranscript(s, {type: 'ui', event: {kind: 'tool-use', toolUseId: 't1', name: 'TodoWrite', input: {todos}}}).state;
-	assert.deepEqual(todoLines(s.todos, id, 10).map(plain), ['☑ Plan', '◐ Writing code', '☐ Test']);
+	assert.deepEqual(todoLines(s.todos, id, 10).map(plain), ['  ⎿  ☒ Plan', '     ☐ Writing code', '     ☐ Test']);
 	const done = parseTodos({todos: [{content: 'a', status: 'completed'}]});
 	assert.deepEqual(todoLines(done, id, 10), []);
 	assert.deepEqual(todoLines(s.todos, id, 0), []);
@@ -39,8 +39,8 @@ test('a long checklist keeps the current item and counts the rest', () => {
 	});
 	const lines = todoLines(many, id, 4).map(plain);
 	assert.equal(lines.length, 4);
-	assert.ok(lines.some(l => l.startsWith('◐ item 6')));
-	assert.match(lines.at(-1)!, /… 7 more/);
+	assert.ok(lines.some(l => l.trimStart().replace(/^⎿\s+/, '').startsWith('☐ item 6')));
+	assert.match(lines.at(-1)!, /^ {5}… \+7 more$/);
 });
 
 test('the TodoWrite tool block is one short line', () => {

@@ -6,7 +6,6 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
 import {pidAlive} from '../../src/sessions/proc.js';
-import {queryStatus, requestStop} from '../../src/sessions/control.js';
 import {readHolder} from '../../src/sessions/lock.js';
 import {RUNNER_ENTRY_TAIL} from '../../src/sessions/stop.js';
 import {createDecoder, encodeFrame, type RunnerFrame} from '../../src/runner/protocol.js';
@@ -30,7 +29,7 @@ const waitGone = async (pid: number): Promise<void> => {
 	assert.equal(pidAlive(pid), false, 'runner process exited');
 };
 
-test('the real entry starts, reports status and stops over the control socket', async () => {
+test('the real entry starts idle without the session lock, reports status and stops over its socket', async () => {
 	const sb = sandbox();
 	mkdirSync(sb.dir, {mode: 0o700});
 	let pid = 0;
@@ -38,15 +37,29 @@ test('the real entry starts, reports status and stops over the control socket', 
 		const started = await spawnRunner({moduleDir, sessionDir: sb.dir, env: sb.env, timeoutMs: 20_000});
 		pid = started.pid;
 		assert.equal(started.socketPath, runnerSocketPath(sb.dir));
-		const holder = readHolder(sb.dir).holder;
-		assert.equal(holder?.where, 'runner');
-		assert.equal(holder?.kind, 'chat');
-		assert.equal(holder?.socket, started.socketPath);
-		const st = await queryStatus(sb.dir, 3000);
-		assert.equal(st.where, 'runner');
-		assert.equal(st.attached, false);
-		await requestStop(sb.dir, 3000);
+		assert.equal(readHolder(sb.dir).holder, undefined, 'an idle runner holds no lock');
+		const socket = net.createConnection(started.socketPath);
+		const dec = createDecoder('toClient');
+		const frames: RunnerFrame[] = [];
+		socket.on('data', c => frames.push(...(dec.push(c) as RunnerFrame[])));
+		socket.on('error', () => undefined);
+		await new Promise<void>(r => socket.once('connect', () => r()));
+		socket.write(encodeFrame({v: 1, type: 'hello', role: 'control'}));
+		socket.write(encodeFrame({v: 1, type: 'status'}));
+		for (let i = 0; i < 100 && !frames.some(f => f.type === 'statusReply'); i++) await new Promise(r => setTimeout(r, 30));
+		const reply = frames.find(f => f.type === 'statusReply') as Extract<RunnerFrame, {type: 'statusReply'}> | undefined;
+		assert.equal(reply?.status.where, 'runner');
+		assert.equal(reply?.status.attached, false);
+		await assert.rejects(spawnRunner({moduleDir, sessionDir: sb.dir, env: sb.env, timeoutMs: 5_000}), /Could not start the background chat/, 'a second runner is refused while one owns the socket');
+		// The runner ends a control connection after its status reply; stop takes a new one.
+		socket.destroy();
+		const stopper = net.createConnection(started.socketPath);
+		stopper.on('error', () => undefined);
+		await new Promise<void>(r => stopper.once('connect', () => r()));
+		stopper.write(encodeFrame({v: 1, type: 'hello', role: 'control'}));
+		stopper.write(encodeFrame({v: 1, type: 'stop'}));
 		await waitGone(pid);
+		stopper.destroy();
 		assert.equal(readHolder(sb.dir).holder, undefined);
 	} finally {
 		if (pid && pidAlive(pid)) process.kill(pid, 'SIGKILL');

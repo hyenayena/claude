@@ -4,7 +4,6 @@ import net from 'node:net';
 import path from 'node:path';
 import type {Logger} from '../../../../src/api.js';
 import {noopLog} from '../log.js';
-import {readHolder} from '../sessions/lock.js';
 import {RUNNER_ENTRY_TAIL} from '../sessions/stop.js';
 
 export const RUNNER_SOCKET = 'runner.sock';
@@ -29,7 +28,7 @@ const entryPath = (moduleDir: string): string => {
 	return entry;
 };
 
-const accepts = (file: string): Promise<boolean> =>
+export const accepts = (file: string): Promise<boolean> =>
 	new Promise(resolve => {
 		const s = net.createConnection(file);
 		s.once('connect', () => {
@@ -39,11 +38,16 @@ const accepts = (file: string): Promise<boolean> =>
 		s.once('error', () => resolve(false));
 	});
 
-/** Starts a detached runner for the chat and resolves once it listens and holds the session lock. */
+/** Starts a detached runner for the chat and resolves once it listens on its socket. */
 export async function spawnRunner(opts: SpawnRunnerOptions): Promise<{socketPath: string; pid: number}> {
 	const log = opts.log ?? noopLog;
 	const started = Date.now();
 	const socketPath = runnerSocketPath(opts.sessionDir);
+	// An idle runner of another yena still owns the socket (it holds no lock while idle).
+	if (await accepts(socketPath)) {
+		log.warn('runner spawn failed', {reason: 'busy'});
+		throw new Error(START_ERROR);
+	}
 	let entry: string;
 	try {
 		entry = entryPath(opts.moduleDir);
@@ -85,11 +89,8 @@ export async function spawnRunner(opts: SpawnRunnerOptions): Promise<{socketPath
 		if (exited) throw fail('exited');
 		const pid = child.pid;
 		if (pid !== undefined && (await accepts(socketPath))) {
-			const holder = readHolder(opts.sessionDir).holder;
-			if (holder && holder.pid === pid && holder.where === 'runner') {
-				log.info('runner spawned', {ms: Date.now() - started});
-				return {socketPath, pid};
-			}
+			log.info('runner spawned', {ms: Date.now() - started});
+			return {socketPath, pid};
 		}
 		if (Date.now() >= deadline) throw fail('timeout');
 		await new Promise(r => setTimeout(r, POLL_MS));

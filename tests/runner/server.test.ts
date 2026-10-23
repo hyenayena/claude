@@ -9,8 +9,7 @@ import type {ChatEvent} from '../../src/chat/events.js';
 import type {EngineIo, EngineOpen} from '../../src/chat/engine.js';
 import type {PermissionRequest} from '../../src/chat/permission.js';
 import {createDecoder, encodeFrame, type ClientFrame, type RunnerFrame} from '../../src/runner/protocol.js';
-import {runRunner, type RunnerEngine, type RunnerHandle, type RunnerOptions, type RunnerSession} from '../../src/runner/server.js';
-import {queryStatus, requestStop} from '../../src/sessions/control.js';
+import {runRunner, type RunnerControl, type RunnerEngine, type RunnerHandle, type RunnerOptions, type RunnerSession} from '../../src/runner/server.js';
 
 const SID = '11111111-2222-3333-4444-555555555555';
 const tick = (ms = 20): Promise<void> => new Promise(r => setTimeout(r, ms));
@@ -122,8 +121,10 @@ type Rig = {
 	io: () => EngineIo;
 	log: () => Logger;
 	updates: unknown[];
-	lockUpdates: unknown[];
+	/** The runner finished (its turn lock, if any, goes with the engine). */
 	released: () => boolean;
+	/** What the runner gives the engine for "claude stop" and status while a turn holds the lock. */
+	control: () => RunnerControl;
 	handle: RunnerHandle;
 };
 
@@ -142,23 +143,24 @@ const rig = async (extra: Partial<RunnerOptions> = {}, fail?: Error): Promise<Ri
 	let io: EngineIo | undefined;
 	let log: Logger | undefined;
 	const updates: unknown[] = [];
-	const lockUpdates: unknown[] = [];
 	let released = false;
+	let control: RunnerControl | undefined;
 	const handle = await runRunner({
 		dir,
 		store: {update: async p => void updates.push(p)},
-		lock: {update: p => void lockUpdates.push(p), release: () => (released = true)},
-		createEngine: async (open, i, l) => {
+		createEngine: async (open, i, l, ctl) => {
 			opens.push(open);
 			io = i;
 			log = l;
+			control = ctl;
 			if (fail) throw fail;
 			return {session: session as unknown as RunnerSession, applyLive: () => undefined, close: () => session.close(), flush: async () => undefined};
 		},
 		...extra,
 	});
 	handles.push(handle);
-	return {dir, session, opens, io: () => io!, log: () => log!, updates, lockUpdates, released: () => released, handle};
+	void handle.done.then(() => (released = true));
+	return {dir, session, opens, io: () => io!, log: () => log!, updates, released: () => released, control: () => control!, handle};
 };
 
 const OPEN = {type: 'open', open: {fresh: true}, tuning: {}, keep: false} as const;
@@ -420,7 +422,7 @@ test('a failing engine reports the reason to the client and exits', async () => 
 	assert.equal((await r.handle.done).reason, 'open-failed');
 });
 
-test('the control socket reports status and stop closes the chat', async () => {
+test('the control handlers report status and stop closes the chat', async () => {
 	const r = await rig();
 	const c = await attach(r, {keep: true});
 	r.session.sessionId = SID;
@@ -428,12 +430,12 @@ test('the control socket reports status and stop closes the chat', async () => {
 	r.session.send('x');
 	c.send({type: 'queue', lines: ['q']});
 	await tick(30);
-	const st = await queryStatus(r.dir);
+	const st = r.control().status();
 	assert.deepEqual(
 		{...st, startedAt: 0},
 		{kind: 'chat', where: 'runner', state: 'running', title: 'My chat', sessionId8: '11111111', startedAt: 0, pending: 0, queued: 1, attached: true},
 	);
-	await requestStop(r.dir);
+	r.control().stop();
 	const exit = await r.handle.done;
 	assert.equal(exit.reason, 'stopped');
 	assert.ok(r.session.closed);
@@ -455,12 +457,10 @@ test('hello control answers status over the runner socket and stop ends the runn
 	assert.equal((await r.handle.done).reason, 'stopped');
 });
 
-test('the lock follows the session id', async () => {
+test('a second runner does not start while one owns the socket', async () => {
 	const r = await rig();
-	await attach(r);
-	r.session.sessionId = SID;
-	r.session.emit({type: 'state', state: 'idle'});
-	assert.deepEqual(r.lockUpdates, [{sessionId: SID}]);
+	await assert.rejects(runRunner({dir: r.dir, store: {update: async () => undefined}, createEngine: async () => ({}) as never}), /already running/);
+	assert.equal(r.released(), false);
 });
 
 test('rpc results and errors come back by id', async () => {
@@ -508,7 +508,7 @@ test('keep on: a pending permission is never answered while detached, the runner
 	void r.handle.done.then(() => (finished = true));
 	await tick(40);
 	assert.equal(finished, false, 'the runner waits for the user');
-	assert.equal((await queryStatus(r.dir)).state, 'idle');
+	assert.equal(r.control().status().state, 'idle');
 	const again = await connect(r.handle.socketPath);
 	again.send({type: 'hello', role: 'attach'});
 	const snap = await again.waitFor('snapshot');
@@ -521,7 +521,7 @@ test('keep on: a running turn with a pending permission reports waiting-permissi
 	await attach(r, {keep: true});
 	r.session.send('x');
 	r.session.pendingPermissions.push(pendingTool('p1'));
-	const st = await queryStatus(r.dir);
+	const st = r.control().status();
 	assert.equal(st.state, 'waiting-permission');
 	assert.equal(st.pending, 1);
 });

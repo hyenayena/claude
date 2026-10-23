@@ -1,6 +1,6 @@
 import type {CommandBridge, Logger} from '../../../../src/api.js';
 import {withPatch, type ChatTuning, type LivePatch} from '../chat-prefs.js';
-import {buildChatOptions, buildEnv, ensureMdLinks, resolvePaths, type ClaudePaths} from '../config.js';
+import {buildChatOptions, buildEnv, ensureMdLinks, resolvePaths, withProjects, type ClaudePaths} from '../config.js';
 import type {LoginProbe} from '../claude-login.js';
 import {makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
 import {clip, errClass, noopLog} from '../log.js';
@@ -46,7 +46,14 @@ export type EngineDeps = {
 	onCredential?: (cred: Credential) => Promise<void>;
 	// Loaded together with the SDK so one failure mapping covers them (e.g. the chat UI).
 	preload?: () => Promise<void>;
+	// The one-session lock for each turn (local yena or runner); see sessions/turn-lock.ts.
+	turnLock?: (session: () => ChatSession | undefined) => {acquire(): void; release(): void};
+	// An idle chat ends its Claude Code process after this long (IDLE_CLOSE_MS by default).
+	idleCloseMs?: number;
 };
+
+/** How long an idle chat keeps its Claude Code process (it may still write the title into the transcript). */
+export const IDLE_CLOSE_MS = 15_000;
 
 export type EngineIo = {
 	// The real bridge or a proxy to one; without it the console tools are not offered.
@@ -118,7 +125,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	}
 
 	const state = await store.read();
-	const paths = resolvePaths(dataDir, deps.moduleDir);
+	const paths = await withProjects(resolvePaths(dataDir, deps.moduleDir));
 	ensureMdLinks(paths);
 	const scope = buildScope(paths);
 	const resume = chosen ?? (fresh ? undefined : state.lastSessionId);
@@ -151,10 +158,14 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		session.applyLive(patch);
 	};
 
+	let created: ChatSession | undefined;
+	const turnLock = deps.turnLock?.(() => created);
 	const session = new ChatSession({
 		query,
 		redact,
 		log,
+		...(turnLock && {turnLock}),
+		idleCloseMs: deps.idleCloseMs ?? IDLE_CLOSE_MS,
 		initialResume: resume,
 		...(state.allowedCommands && {savedApprovals: state.allowedCommands}),
 		onRemember: key => {
@@ -202,6 +213,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			hooks: policyHooks(scope, paths.configDir),
 		}),
 	});
+	created = session;
 
 	// The chat's name: Claude Code writes a generated title into the transcript some time after a
 	// turn, so it is read after each turn (and again a little later); the first message stands in.

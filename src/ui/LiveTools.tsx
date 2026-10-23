@@ -6,7 +6,7 @@ import {LIVE, type RunningTool} from './transcript.js';
 
 export function LiveTools({tools, scrub, maxRows}: {tools: RunningTool[]; scrub: Scrub; maxRows: number}) {
 	const active = tools.length > 0;
-	const frame = useSpinnerFrame(SPINNERS.braille, 120, active);
+	const frame = useSpinnerFrame(SPINNERS.blink, 500, active);
 
 	const {shown, more} = toolLayout(tools.length, maxRows);
 	if (!active || maxRows <= 0) return null;

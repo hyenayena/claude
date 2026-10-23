@@ -14,7 +14,7 @@ import {readHistory, readTranscriptDetail} from './history.js';
 import {listProjectFiles} from './files.js';
 import {editInEditor} from '../terminal.js';
 import type {ConsoleSdk} from './console-tools.js';
-import {createChatEngine} from './engine.js';
+import {createChatEngine, type EngineDeps} from './engine.js';
 import type {ChatHandle} from './handle.js';
 import {RemoteChatSession} from './remote-session.js';
 import {makeReveal} from './reveal.js';
@@ -78,6 +78,8 @@ export type ChatRunDeps = {
 	shellTmp?: () => string;
 	// 'vim' or 'normal' editing for the chat input, read on every key.
 	inputMode?: () => 'normal' | 'vim';
+	// The one-session lock for each turn of a chat in this process (with `route`).
+	turnLock?: EngineDeps['turnLock'];
 	// With `route` the single-session lock is handled there instead of `acquire`.
 	route?: (req: ChatRouteRequest) => ChatRoute;
 	// One look at the lock while waiting; the title is of whatever holds it.
@@ -459,7 +461,11 @@ const runLocked = async (
 		if (resume && printHistory) {
 			const print = printHistory;
 			const earlier = await readHistory(transcriptFile(paths.configDir, paths.projectDir, resume), 40, historyUntil).catch(() => []);
-			for (const m of earlier) print(m.role === 'user' ? formatUserLine(m.text, scrub) : formatAssistantBlock(m.text, scrub, false, chatHost?.columns() || undefined));
+			for (const m of earlier) {
+				// One empty line before each message, as in the live chat.
+				print(' ');
+				print(m.role === 'user' ? formatUserLine(m.text, scrub) : formatAssistantBlock(m.text, scrub, false, chatHost?.columns() || undefined));
+			}
 			if (earlier.length > 0) print(formatNotice('Resumed — earlier messages above.', scrub));
 		}
 		if (source.remote?.reattached && printHistory) {

@@ -301,7 +301,7 @@ test('aborting the lifetime controller closes the session', async () => {
 	await s.command.run(['chat'], s.ctx);
 });
 
-test('an open chat blocks ask, and opening another chat replaces it', async () => {
+test('an idle open chat does not block ask, and opening another chat replaces it', async () => {
 	let release!: () => void;
 	const gate = new Promise<void>(r => (release = r));
 	let closes = 0;
@@ -317,7 +317,8 @@ test('an open chat blocks ask, and opening another chat replaces it', async () =
 	};
 	const running = s.command.run(['chat'], s.ctx);
 	await new Promise(r => setTimeout(r, 20));
-	await assert.rejects(s.command.run(['ask', 'x'], s.ctx), {message: 'A chat is already open'});
+	// Not refused: the ask gets as far as the (unused) SDK of this fixture.
+	await assert.rejects(s.command.run(['ask', 'x'], s.ctx), (err: Error) => err.message !== 'A chat is already open' && /unused/.test(err.message));
 	const second = s.command.run(['chat'], s.ctx);
 	await running;
 	await second;

@@ -38,7 +38,7 @@ test('assistant blocks are rendered after scrubbing, so only constant codes appe
 test('a thinking block is dim, labelled and cut to six lines', () => {
 	const text = Array.from({length: 9}, (_v, i) => `step ${i}`).join('\n');
 	const lines = plain(formatThinking(text, scrub)).split('\n');
-	assert.equal(lines[0], '✻ Thinking');
+	assert.equal(lines[0], '✻ Thinking…');
 	assert.equal(lines.length, 8);
-	assert.equal(lines.at(-1), '  … 3 more lines');
+	assert.equal(lines.at(-1), '  … +3 lines (ctrl+o to expand)');
 });

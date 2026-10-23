@@ -5,7 +5,7 @@ import type {ConsoleSdk} from '../chat/console-tools.js';
 import {ensureShellTmp} from '../chat/shell-tmp.js';
 import {probeLogin, type LoginProbe} from '../claude-login.js';
 import {cliEnv, resolvePaths, runtimeInfo} from '../config.js';
-import {acquireLock} from '../sessions/lock.js';
+import {createTurnLock} from '../sessions/turn-lock.js';
 import {createStore} from '../store.js';
 import type {ChatQueryFn} from '../types.js';
 import {runnerSocketPath} from './spawn.js';
@@ -36,10 +36,6 @@ const main = async (): Promise<number> => {
 	const home = env.YENA_HOME ?? process.cwd();
 	const dataDir = path.join(env.YENA_DATA ?? path.join(home, '.yena'), 'claude');
 
-	const got = acquireLock({dir, kind: 'chat', where: 'runner', socket: runnerSocketPath(dir)});
-	if (!got.ok) return 1;
-	const {lock} = got;
-
 	try {
 		const store = createStore(dataDir);
 		const probe: LoginProbe = async () => {
@@ -48,19 +44,41 @@ const main = async (): Promise<number> => {
 		};
 		const runner = await runRunner({
 			dir,
-			lock,
 			store,
-			createEngine: (open, io, log) =>
+			createEngine: (open, io, log, control) =>
 				createChatEngine(
 					open,
-					{dataDir, env, moduleDir, log, loadChatQuery, loadConsoleSdk, store, probeLogin: probe, isMissingModule, shellTmp: ensureShellTmp},
+					{
+						dataDir,
+						env,
+						moduleDir,
+						log,
+						loadChatQuery,
+						loadConsoleSdk,
+						store,
+						probeLogin: probe,
+						isMissingModule,
+						shellTmp: ensureShellTmp,
+						// The session lock is held per turn, like a chat in yena: an idle runner blocks nobody.
+						turnLock: session =>
+							createTurnLock({
+								dir,
+								kind: 'chat',
+								where: 'runner',
+								socket: runnerSocketPath(dir),
+								sessionId: () => session()?.sessionId,
+								status: () => control.status(),
+								stop: control.stop,
+								busy: () => 'Another session is working right now; send the message when it is done.',
+								log,
+							}),
+					},
 					io,
 				),
 		});
 		await runner.done;
 		return 0;
 	} catch {
-		lock.release();
 		return 1;
 	}
 };

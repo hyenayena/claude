@@ -7,6 +7,7 @@ import {
 } from '../chat/truncate.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
 import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
+import {wrapRows} from '../kit.js';
 import {renderMarkdown} from './markdown.js';
 import {LIVE, parseTodos, type Out, type Phase, type RunningTool, type StatusLine, type Todo} from './transcript.js';
 
@@ -30,6 +31,7 @@ export const SGR = {
 	underlineOff: '\u001b[24m',
 	fgOff: '\u001b[39m',
 	userBg: '\u001b[48;5;237m',
+	strike: '\u001b[9m',
 } as const;
 
 const paint = (style: string, text: string): string =>
@@ -54,14 +56,24 @@ export function formatThinking(text: string, scrub: Scrub): string {
 	const lines = scrub(clampChars(text, BLOCK_DISPLAY_CAP)).trim().split('\n');
 	const shown = lines.slice(0, THINKING_LINES);
 	const more = lines.length - shown.length;
-	const body = [`✻ Thinking`, ...shown.map(l => `  ${l}`), ...(more > 0 ? [`  … ${more} more line${more === 1 ? '' : 's'}`] : [])];
+	const body = [`✻ Thinking…`, ...shown.map(l => `  ${l}`), ...(more > 0 ? [`  … +${more} line${more === 1 ? '' : 's'} (ctrl+o to expand)`] : [])];
 	return paint(SGR.dim + SGR.italic, body.join('\n'));
 }
 
+/** Claude Code's block shape: a marker on the first line, every other line under the text. */
+const hang = (marker: string, lines: string[]): string =>
+	lines.map((l, i) => (i === 0 ? `${marker} ${l}` : l === '' ? '' : `${' '.repeat(BLOCK_INDENT)}${l}`)).join('\n');
+
+const BLOCK_INDENT = 2;
+
 export function formatAssistantBlock(text: string, scrub: Scrub, interrupted = false, width?: number): string {
 	// Markdown styling is applied to the scrubbed text, so it only adds the constant SGR codes.
-	const body = renderMarkdown(scrub(clampChars(text, BLOCK_DISPLAY_CAP)), {width});
-	return interrupted ? `${body}\n${paint(SGR.dim, '(interrupted)')}` : body;
+	const inner = width === undefined ? undefined : Math.max(10, width - BLOCK_INDENT);
+	const body = renderMarkdown(scrub(clampChars(text, BLOCK_DISPLAY_CAP)), {width: inner}).replace(/^\n+/, '');
+	// Wrapped here, not by the terminal, so continuation rows keep the indent under the dot.
+	const lines = inner === undefined ? body.split('\n') : body.split('\n').flatMap(l => wrapRows(l, inner, {mode: 'word'}));
+	if (interrupted) lines.push(paint(SGR.dim, '(interrupted)'));
+	return hang('●', lines);
 }
 
 type ArgsSummary = (input: unknown) => string;
@@ -120,6 +132,12 @@ export function toolHeader(name: string, input: unknown, scrub: Scrub): string {
 	return `${scrub(name)}${args ? `(${args})` : ''}`;
 }
 
+/** The tool name bold, the arguments plain, as Claude Code shows them. */
+export function styledToolHeader(name: string, input: unknown, scrub: Scrub): string {
+	const args = toolArgs(name, input, scrub);
+	return `${SGR.bold}${scrub(name)}${SGR.boldOff}${args ? `(${args})` : ''}`;
+}
+
 type ToolResult = {name: string; input: unknown; isError: boolean; text: string};
 type ResultSummary = (t: ToolResult, scrub: Scrub) => string | undefined;
 
@@ -133,17 +151,36 @@ const refusalSummary = (t: ToolResult): string | undefined => {
 	return undefined;
 };
 
-const fileResult =
-	(verb: string): ResultSummary =>
-	(t, scrub) => {
-		const path = field('file_path')(t.input);
-		return path === '' ? undefined : `${verb} ${clampChars(scrub(path), ARGS_MAX)}`;
-	};
+const countLines = (s: string): number => {
+	if (s === '') return 0;
+	const n = s.split('\n').length;
+	return s.endsWith('\n') ? n - 1 : n;
+};
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+const pathOf = (t: ToolResult, scrub: Scrub): string | undefined => {
+	const p = field('file_path')(t.input);
+	return p === '' ? undefined : clampChars(scrub(p), ARGS_MAX);
+};
 
-// Bash and the other tools fall through to the default clamped output.
+// Claude Code's one-line summaries; Bash and the other tools fall through to the clamped output.
 const RESULT_REGISTRY: Record<string, ResultSummary> = {
-	Edit: (t, scrub) => (t.isError ? undefined : fileResult('updated')(t, scrub)),
-	Write: (t, scrub) => (t.isError ? undefined : fileResult('created')(t, scrub)),
+	Edit: (t, scrub) => {
+		const path = pathOf(t, scrub);
+		if (t.isError || path === undefined) return undefined;
+		const added = countLines(field('new_string')(t.input));
+		const removed = countLines(field('old_string')(t.input));
+		return `Updated ${path} with ${plural(added, 'addition')} and ${plural(removed, 'removal')}`;
+	},
+	Write: (t, scrub) => {
+		const path = pathOf(t, scrub);
+		return t.isError || path === undefined ? undefined : `Wrote ${plural(countLines(field('content')(t.input)), 'line')} to ${path}`;
+	},
+	Read: t => (t.isError ? undefined : `Read ${plural(countLines(t.text.replace(/\n+$/, '')), 'line')}`),
+	Glob: t => {
+		if (t.isError) return undefined;
+		const files = t.text.split('\n').filter(l => l.trim() !== '' && !/^No files found/.test(l));
+		return `Found ${plural(files.length, 'file')}`;
+	},
 	AskUserQuestion: t => (t.isError ? undefined : 'answered'),
 	TodoWrite: t => {
 		if (t.isError) return undefined;
@@ -160,21 +197,21 @@ export function queuedLines(queue: string[], scrub: Scrub, max: number): string[
 	return [...queue.slice(0, max - 1).map(one), `↳ +${queue.length - max + 1} more queued`];
 }
 
-const TODO_MARK: Record<Todo['status'], string> = {completed: '☑', in_progress: '◐', pending: '☐'};
+const TODO_MARK: Record<Todo['status'], string> = {completed: '☒', in_progress: '☐', pending: '☐'};
 
 /** The open checklist as display lines, at most `max` (an item in progress is never left out). */
 export function todoLines(todos: Todo[], scrub: Scrub, max: number): string[] {
 	if (max <= 0 || !todos.some(t => t.status !== 'completed')) return [];
 	const line = (t: Todo) => {
 		const text = `${TODO_MARK[t.status]} ${scrub(t.status === 'in_progress' ? (t.activeForm ?? t.content) : t.content)}`;
-		if (t.status === 'completed') return paint(SGR.dim, text);
+		if (t.status === 'completed') return paint(SGR.dim + SGR.strike, text);
 		return t.status === 'in_progress' ? paint(SGR.bold, text) : text;
 	};
-	if (todos.length <= max) return todos.map(line);
+	if (todos.length <= max) return resultLines(todos.map(line));
 	const current = Math.max(0, todos.findIndex(t => t.status !== 'completed'));
 	const start = Math.min(current, todos.length - (max - 1));
 	const shown = todos.slice(start, start + max - 1).map(line);
-	return [...shown, paint(SGR.dim, `… ${todos.length - shown.length} more`)];
+	return resultLines([...shown, paint(SGR.dim, `… +${todos.length - shown.length} more`)]);
 }
 
 export function summarizeToolResult(t: ToolResult, scrub: Scrub): string {
@@ -182,12 +219,18 @@ export function summarizeToolResult(t: ToolResult, scrub: Scrub): string {
 	return custom ?? summarizeResult(scrub(t.text.slice(0, RESULT_INPUT_CAP)));
 }
 
+export const RESULT_PREFIX = '  ⎿  ';
+const RESULT_INDENT = '     ';
+
+/** Lines under a block: the first after "⎿", the rest aligned with it. */
+export const resultLines = (lines: string[]): string[] => lines.map((l, i) => `${i === 0 ? RESULT_PREFIX : RESULT_INDENT}${l}`);
+
 export function formatToolBlock(t: ToolResult, scrub: Scrub): string {
-	const header = `${SGR.green}●${SGR.reset} ${SGR.bold}${toolHeader(t.name, t.input, scrub)}${SGR.reset}`;
+	const dot = `${t.isError ? SGR.red : SGR.green}●${SGR.reset}`;
+	const header = `${dot} ${styledToolHeader(t.name, t.input, scrub)}${SGR.reset}`;
 	const body = summarizeToolResult(t, scrub);
-	if (body.trim() === '') return t.isError ? `${header}\n${paint(SGR.red, '  ⎿ error')}` : header;
-	const lines = body.split('\n').map((l, i) => `${i === 0 ? '  ⎿ ' : '    '}${l}`);
-	return `${header}\n${paint(t.isError ? SGR.red : SGR.dim, lines.join('\n'))}`;
+	if (body.trim() === '') return t.isError ? `${header}\n${paint(SGR.red, `${RESULT_PREFIX}Error`)}` : header;
+	return `${header}\n${paint(t.isError ? SGR.red : SGR.dim, resultLines(body.split('\n')).join('\n'))}`;
 }
 
 export function formatError(message: string, scrub: Scrub): string {
@@ -309,13 +352,30 @@ export function statusLineText(status: StatusLine): string {
 	if (!status) return '';
 	switch (status.kind) {
 		case 'thinking':
-			return 'thinking…';
+			return 'Thinking…';
 		case 'compacting':
-			return 'compacting…';
+			return 'Compacting…';
 		case 'retry':
 			return `Retrying (${status.attempt}/${status.maxRetries}) in ${Math.ceil(status.delayMs / 1000)}s…`;
 	}
 }
+
+/** The line under the live output while a turn runs: what is happening, for how long, how to stop it. */
+export function workingText(phase: Phase, status: StatusLine, seconds: number): string {
+	if (phase === 'interrupting') return 'Interrupting…';
+	const what = statusLineText(status) || 'Working…';
+	return `${what} (${Math.max(0, Math.floor(seconds))}s · esc to interrupt)`;
+}
+
+const MODE_HINT: Record<ChatMode, string> = {
+	default: '',
+	acceptEdits: '⏵⏵ accept edits on (shift+tab to cycle)',
+	plan: '⏸ plan mode on (shift+tab to cycle)',
+	auto: '⏵⏵ auto mode on (shift+tab to cycle)',
+};
+
+/** The hint under the input box; empty in the default mode. */
+export const modeHint = (mode: ChatMode): string => MODE_HINT[mode];
 
 export function toolRunningText(tool: RunningTool, scrub: Scrub): string {
 	const secs = Math.floor(tool.elapsedSeconds);

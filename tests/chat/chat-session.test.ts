@@ -1020,3 +1020,96 @@ test('the injected clock validates resetsAt of rate limit events', async () => {
 	assert.equal(session.rateLimit?.resetsAt, FAR + 600);
 	session.close();
 });
+
+const fakeTurnLock = (busy = false) => {
+	const calls: string[] = [];
+	let refuse = busy;
+	return {
+		calls,
+		refuse: (on: boolean) => void (refuse = on),
+		lock: {
+			acquire: () => {
+				if (refuse) throw new Error('Another session is working right now');
+				calls.push('acquire');
+			},
+			release: () => void calls.push('release'),
+		},
+	};
+};
+const task = (id: string, subtype: 'task_started' | 'task_notification', status?: string) => ({
+	type: 'system',
+	subtype,
+	task_id: id,
+	description: 'bg',
+	is_backgrounded: true,
+	...(status && {status}),
+});
+
+test('the turn lock is held only while the chat works', async () => {
+	const t = fakeTurnLock();
+	const {session, queries} = setup({turnLock: t.lock} as never);
+	assert.deepEqual(t.calls, [], 'opening takes nothing');
+	session.send('one');
+	assert.deepEqual(t.calls, ['acquire']);
+	queries[0]?.emit(init());
+	queries[0]?.emit(ok());
+	await tick();
+	assert.deepEqual(t.calls, ['acquire', 'release'], 'released when the turn ends');
+	session.send('two');
+	assert.deepEqual(t.calls, ['acquire', 'release', 'acquire']);
+	session.close();
+	assert.deepEqual(t.calls, ['acquire', 'release', 'acquire', 'release'], 'released on close');
+});
+
+test('a background task keeps the lock until it ends', async () => {
+	const t = fakeTurnLock();
+	const {session, queries} = setup({turnLock: t.lock} as never);
+	session.send('start a server');
+	queries[0]?.emit(init());
+	queries[0]?.emit(task('b1', 'task_started'));
+	queries[0]?.emit(ok());
+	await tick();
+	assert.deepEqual(t.calls, ['acquire'], 'still working in the background');
+	queries[0]?.emit(task('b1', 'task_notification', 'completed'));
+	await tick();
+	await tick();
+	assert.deepEqual(t.calls, ['acquire', 'release']);
+});
+
+test('a refused send sends nothing and leaves the chat idle', async () => {
+	const t = fakeTurnLock(true);
+	const {session, queries, events} = setup({turnLock: t.lock} as never);
+	assert.throws(() => session.send('hi'), /Another session is working/);
+	assert.equal(session.state, 'idle');
+	assert.equal(queries.length, 0, 'no Claude Code process was started');
+	assert.ok(!events.some(e => e.type === 'sent'));
+	t.refuse(false);
+	session.send('hi');
+	assert.equal(session.state, 'running');
+});
+
+test('an idle chat ends its Claude Code process and resumes the session on the next message', async () => {
+	const {session, queries, resumes} = setup({idleCloseMs: 20} as never);
+	session.send('one');
+	queries[0]?.emit(init('sess-9'));
+	queries[0]?.emit(ok(0.1, 'sess-9'));
+	await tick();
+	assert.equal(queries[0]?.closed, 0, 'not at once: Claude Code may still write the title');
+	await new Promise(r => setTimeout(r, 40));
+	assert.equal(queries[0]?.closed, 1);
+	session.send('two');
+	assert.equal(queries.length, 2);
+	assert.deepEqual(resumes, [undefined, 'sess-9']);
+});
+
+test('a message before the idle close keeps the same process', async () => {
+	const {session, queries} = setup({idleCloseMs: 30} as never);
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit(ok());
+	await tick();
+	session.send('two');
+	await new Promise(r => setTimeout(r, 50));
+	assert.equal(queries.length, 1);
+	assert.equal(queries[0]?.closed, 0, 'a running turn is never closed');
+});

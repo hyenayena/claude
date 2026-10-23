@@ -14,6 +14,8 @@ import {
 	SGR,
 	statusBarText,
 	statusLineText,
+	modeHint,
+	workingText,
 } from '../../src/ui/present.js';
 
 const SECRET = 'sk-ant-oat-TESTVALUE0123456789abcdef';
@@ -64,9 +66,33 @@ test('liveTail returns at most the requested rows', () => {
 });
 
 test('tool block collapses to three result lines with a footer', () => {
-	const block = formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: false, text: '1\n2\n3\n4\n5'}, scrub);
-	assert.match(block, /Bash\(ls\)/);
-	assert.match(block, /\+2 more lines/);
+	const block = formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: false, text: '1\n2\n3\n4\n5'}, scrub).replace(/\u001b\[\d+m/g, '');
+	assert.equal(block, ['● Bash(ls)', '  ⎿  1', '     2', '     3', '     … +2 lines (ctrl+o to expand)'].join('\n'));
+});
+
+test('tool blocks look like Claude Code: green or red dot, bold name, plain arguments', () => {
+	const ok = formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: false, text: 'x'}, scrub);
+	const failed = formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: true, text: 'boom'}, scrub);
+	assert.ok(ok.startsWith(`${SGR.green}●${SGR.reset} ${SGR.bold}Bash${SGR.boldOff}(ls)`));
+	assert.ok(failed.startsWith(`${SGR.red}●${SGR.reset}`));
+	assert.match(failed, /⎿ {2}boom/);
+	assert.match(formatToolBlock({name: 'Read', input: {file_path: '/a'}, isError: true, text: ''}, scrub), /⎿ {2}Error/);
+});
+
+test('assistant blocks start with a dot and hang under it', () => {
+	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
+	assert.equal(strip(formatAssistantBlock('one\n\ntwo\nthree', scrub)), '● one\n\n  two\n  three');
+	assert.equal(strip(formatAssistantBlock('cut', scrub, true)), '● cut\n  (interrupted)');
+	for (const line of strip(formatAssistantBlock('word '.repeat(40), scrub, false, 30)).split('\n')) assert.ok(line.length <= 30, line);
+});
+
+test('the working line and the mode hint', () => {
+	assert.equal(workingText('running', null, 12.7), 'Working… (12s · esc to interrupt)');
+	assert.equal(workingText('running', {kind: 'thinking'}, 0), 'Thinking… (0s · esc to interrupt)');
+	assert.equal(workingText('interrupting', null, 3), 'Interrupting…');
+	assert.equal(modeHint('default'), '');
+	assert.equal(modeHint('acceptEdits'), '⏵⏵ accept edits on (shift+tab to cycle)');
+	assert.equal(modeHint('plan'), '⏸ plan mode on (shift+tab to cycle)');
 });
 
 test('status bar shows cost only when positive and truncates the session id', () => {
@@ -76,7 +102,7 @@ test('status bar shows cost only when positive and truncates the session id', ()
 
 test('status line texts', () => {
 	assert.equal(statusLineText({kind: 'retry', attempt: 2, maxRetries: 5, delayMs: 3000}), 'Retrying (2/5) in 3s…');
-	assert.equal(statusLineText({kind: 'thinking'}), 'thinking…');
+	assert.equal(statusLineText({kind: 'thinking'}), 'Thinking…');
 	assert.equal(statusLineText(null), '');
 });
 
@@ -106,11 +132,17 @@ test('tool results: Edit and Write summarise, refusals show denied, Bash keeps t
 	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
 	const block = (name: string, input: unknown, isError: boolean, text: string) =>
 		strip(formatToolBlock({name, input, isError, text}, scrub));
-	assert.match(block('Edit', {file_path: '/app/a.ts'}, false, 'The file has been updated'), /⎿ updated \/app\/a\.ts/);
-	assert.match(block('Write', {file_path: '/app/b.ts'}, false, 'File created'), /⎿ created \/app\/b\.ts/);
-	assert.match(block('Bash', {command: 'x'}, true, "The user doesn't want to proceed with this tool use."), /⎿ denied/);
-	assert.match(block('Edit', {file_path: '/app/a.ts'}, true, 'The user denied this tool call. Do not retry'), /⎿ denied/);
-	assert.match(block('Bash', {command: 'x'}, false, 'a\nb\nc\nd\ne'), /… \+2 more lines/);
+	assert.match(
+		block('Edit', {file_path: '/app/a.ts', old_string: 'a', new_string: 'b\nc'}, false, 'The file has been updated'),
+		/⎿ {2}Updated \/app\/a\.ts with 2 additions and 1 removal$/,
+	);
+	assert.match(block('Write', {file_path: '/app/b.ts', content: 'x\ny\n'}, false, 'File created'), /⎿ {2}Wrote 2 lines to \/app\/b\.ts$/);
+	assert.match(block('Read', {file_path: '/app/b.ts'}, false, '1\tx\n2\ty\n'), /⎿ {2}Read 2 lines$/);
+	assert.match(block('Glob', {pattern: '*.ts'}, false, '/a.ts\n/b.ts'), /⎿ {2}Found 2 files$/);
+	assert.match(block('Glob', {pattern: '*.ts'}, false, 'No files found'), /⎿ {2}Found 0 files$/);
+	assert.match(block('Bash', {command: 'x'}, true, "The user doesn't want to proceed with this tool use."), /⎿ {2}denied/);
+	assert.match(block('Edit', {file_path: '/app/a.ts'}, true, 'The user denied this tool call. Do not retry'), /⎿ {2}denied/);
+	assert.match(block('Bash', {command: 'x'}, false, 'a\nb\nc\nd\ne'), /… \+2 lines \(ctrl\+o to expand\)/);
 	assert.match(block('AskUserQuestion', {questions: [{question: 'Which?'}, {}]}, false, 'User answered: secret-answer'), /AskUserQuestion\(Which\? \(\+1 more\)\)/);
 	assert.ok(!block('AskUserQuestion', {questions: [{question: 'Which?'}]}, false, 'secret-answer').includes('secret-answer'));
 });

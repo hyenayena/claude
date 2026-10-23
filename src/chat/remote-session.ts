@@ -1,11 +1,13 @@
 import {randomUUID} from 'node:crypto';
 import net from 'node:net';
+import path from 'node:path';
 import type {CommandBridge, CommandConfirmRequest, CommandRunResult, Logger} from '../../../../src/api.js';
 import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import {errClass, noopLog} from '../log.js';
 import {createDecoder, encodeFrame, ProtocolError} from '../runner/protocol.js';
 import type {ClientFrame, OpenSpec, RpcCall, RunnerFrame, Snapshot, StatePatch} from '../runner/protocol.js';
 import {RESUME_MESSAGE} from '../session.js';
+import {readHolder} from '../sessions/lock.js';
 import type {RewindResult} from '../types.js';
 import type {SlashCommandInfo, TaskInfo} from './chat-session.js';
 import type {ChatEvent, ChatState} from './events.js';
@@ -51,6 +53,9 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 let seq = 0;
 
 /** A chat that runs in a background process, mirrored locally over the runner's unix socket. */
+/** A send refused because another session (another yena or runner) is working right now. */
+export const BUSY_SEND = 'Another session is working right now. Your message stays in the input; send it when that session is done.';
+
 export class RemoteChatSession implements ChatHandle {
 	readonly detachesOnClose = true;
 	/** Set when the attach found a runner that was already working (no `open` was sent). */
@@ -215,6 +220,14 @@ export class RemoteChatSession implements ChatHandle {
 		if (this._state === 'closed') throw new Error('The chat is closed');
 		if (this._state === 'running') throw new Error('A request is already running');
 		if (this._needsNewSession) throw new Error(RESUME_MESSAGE);
+		// The runner holds the session lock only while it works, so a lock here is another session's.
+		let holder;
+		try {
+			holder = readHolder(path.dirname(this.opts.socketPath)).holder;
+		} catch {
+			holder = undefined;
+		}
+		if (holder) throw new Error(BUSY_SEND);
 		// The runner confirms with its own state event; the view needs the flip at once.
 		this._state = 'running';
 		this.write({v: 1, type: 'send', text, ...(opts.command && {command: true})});

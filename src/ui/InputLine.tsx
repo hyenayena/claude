@@ -42,23 +42,13 @@ export function InputLine({
 	text,
 	cursor,
 	columns,
-	running,
 	maxRows,
 }: {
 	text: string;
 	cursor: number;
 	columns: number;
-	running: boolean;
 	maxRows: number;
 }) {
-	if (running && text === '') {
-		return (
-			<Text wrap="truncate">
-				{'> '}
-				<Text dimColor>Waiting for the answer… (Esc to interrupt)</Text>
-			</Text>
-		);
-	}
 	const rows = inputRows(text, cursor, columns, Math.max(1, maxRows));
 	return (
 		<Box flexDirection="column">

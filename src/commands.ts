@@ -11,7 +11,7 @@ import {diskCommands} from './disk-commands.js';
 import {listPrompts, listSessions, readHistory} from './chat/history.js';
 import {readSessionTitle, transcriptFile} from './chat/title.js';
 import {ago, type PickerItem} from './ui/picker-model.js';
-import {buildEnv, buildOptions, cliEnv, ensureMdLinks, resolvePaths, runtimeInfo} from './config.js';
+import {buildEnv, buildOptions, cliEnv, ensureMdLinks, resolvePaths, runtimeInfo, withProjects} from './config.js';
 import {LOGIN_USAGE, parseLoginArgs, probeLogin, runLogout, type LoginProbe, type LoginRequest, type LoginStatus} from './claude-login.js';
 import {
 	describeCredential,
@@ -33,6 +33,7 @@ import {makeScrub} from './chat/scrub.js';
 import {runTurn, TurnFailure} from './session.js';
 import {queryStatus, serveControl, type ControlServer, type ControlStatus} from './sessions/control.js';
 import {acquireLock, isSessionId, readHolder, type LockInfo, type LockKind, type SessionLock} from './sessions/lock.js';
+import {createTurnLock, type TurnLock} from './sessions/turn-lock.js';
 import {stopHolder} from './sessions/stop.js';
 import {createStore, isModelId} from './store.js';
 import type {ChatQueryFn, Credential, CredentialInfo, QueryFn} from './types.js';
@@ -156,7 +157,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const wait = deps.login?.wait ?? waitForEnter;
 	const readSecret = deps.login?.readSecret ?? readHidden;
 	const logoutCli = deps.login?.logout ?? ((bin, e) => runLogout({bin, env: e}));
-	let busy: 'ask' | 'chat' | undefined;
+	// In this process: a chat view is open, an ask is running (they may overlap while the chat is idle).
+	let chatOpen = false;
+	let askRunning = false;
 	let askAbort: (() => void) | undefined;
 
 	const sessionsDir = (): string | undefined => {
@@ -194,12 +197,14 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	const claimBusy = (kind: LockKind): (() => void) => {
-		busy = kind;
+		if (kind === 'chat') chatOpen = true;
+		else askRunning = true;
 		let released = false;
 		return () => {
 			if (released) return;
 			released = true;
-			if (busy === kind) busy = undefined;
+			if (kind === 'chat') chatOpen = false;
+			else askRunning = false;
 		};
 	};
 
@@ -207,8 +212,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	// One chat or ask at a time across every yena on this machine; the in-process flag stays the fast path.
 	const tryAcquire = (kind: LockKind): Acquired => {
-		if (busy === 'ask') throw new Error('An ask is already running');
-		if (busy === 'chat') throw new Error('A chat is already open');
+		if (askRunning) throw new Error('An ask is already running');
+		if (kind === 'chat' && chatOpen) throw new Error('A chat is already open');
 		const dir = sessionsDir();
 		let lock: SessionLock | undefined;
 		if (dir) {
@@ -284,8 +289,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	// Where the next chat runs, given who holds the one-session lock.
 	const routeChat = (req: ChatRouteRequest): ChatRoute => {
-		if (busy === 'ask') throw new Error('An ask is already running');
-		if (busy === 'chat') throw new Error('A chat is already open');
+		if (askRunning) throw new Error('An ask is already running');
+		if (chatOpen) throw new Error('A chat is already open');
 		const dir = sessionsDir();
 		if (dir) {
 			let seen: ReturnType<typeof readHolder> = {};
@@ -304,9 +309,27 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			if (seen.unknown) return {kind: 'wait', message: busyMessage(undefined)};
 			if (req.keep && deps.spawnRunner) return {kind: 'spawn', sessionDir: dir, release: claimBusy('chat')};
 		}
-		const got = tryAcquire('chat');
-		return got.ok ? {kind: 'local', release: got.release} : {kind: 'wait', message: busyMessage(got.holder)};
+		// The lock is taken per turn (chatTurnLock), so an idle chat here never blocks another terminal.
+		return {kind: 'local', release: claimBusy('chat')};
 	};
+
+	const turnBusy = (holder: LockInfo | undefined): string =>
+		`${busyMessage(holder).replace(/ Wait for it or run "claude stop"\.$/, '')} Your message stays in the input; send it when that session is done.`;
+
+	// The one-session lock for a turn of the chat in this process, with the control socket for "claude stop".
+	const chatTurnLock = (): TurnLock =>
+		createTurnLock({
+			dir: sessionsDir(),
+			kind: 'chat',
+			where: 'local',
+			sessionId: () => openSession?.sessionId,
+			status: startedAt => localStatus('chat', startedAt),
+			stop: async () => {
+				await openSession?.interrupt().catch(() => {});
+			},
+			busy: turnBusy,
+			log,
+		});
 
 	// One look at the lock while an open waits for it.
 	const peekLock = async (): Promise<{free: boolean; title?: string}> => {
@@ -400,7 +423,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const startedAt = Date.now();
 
 		try {
-			const paths = resolvePaths(dataDir, deps.moduleDir);
+			const paths = await withProjects(resolvePaths(dataDir, deps.moduleDir));
 			ensureMdLinks(paths);
 			const resume = fresh ? undefined : state.lastSessionId;
 			const options = buildOptions({paths, cred, abortController: controller, resume, env: buildEnv(env, paths, cred)});
@@ -467,6 +490,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			openSession = s;
 		},
 		route: routeChat,
+		turnLock: chatTurnLock,
 		peek: peekLock,
 		...(deps.spawnRunner && {spawnRunner: deps.spawnRunner}),
 		...deps.chatTiming,
@@ -529,7 +553,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	// Opening a chat replaces the one that is open.
 	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>, endIdleRemote = true): Promise<void> => {
-		if (busy === 'ask') throw new Error('An ask is already running');
+		if (askRunning) throw new Error('An ask is already running');
 		// Opening a different chat ends an idle background chat; a busy one is waited for.
 		if (endIdleRemote && openSession?.state === 'idle') openSession.end?.();
 		const previous = openHandle;
@@ -831,7 +855,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				ctx.print('Warning: Claude Code still reports a login. Run "claude auth logout" in the Claude Code CLI, or remove it from the Claude Code config directory.');
 			} else {
 				ctx.print('Claude Code login removed.');
-				if (busy === 'chat') ctx.print('The open chat keeps running with its credentials until you close it.');
+				if (chatOpen) ctx.print('The open chat keeps running with its credentials until you close it.');
 			}
 		}
 		await printActive(ctx);

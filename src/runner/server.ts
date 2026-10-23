@@ -7,8 +7,7 @@ import type {ChatSession} from '../chat/chat-session.js';
 import type {ChatEvent} from '../chat/events.js';
 import type {EngineIo, EngineOpen} from '../chat/engine.js';
 import {clip, errClass} from '../log.js';
-import {serveControl, removeLeftoverSocket, type ControlStatus} from '../sessions/control.js';
-import type {SessionLock} from '../sessions/lock.js';
+import {removeLeftoverSocket, type ControlStatus} from '../sessions/control.js';
 import type {ClaudeState} from '../types.js';
 import {
 	createDecoder,
@@ -20,7 +19,7 @@ import {
 	type Snapshot,
 	type StatePatch,
 } from './protocol.js';
-import {runnerSocketPath} from './spawn.js';
+import {accepts, runnerSocketPath} from './spawn.js';
 
 export const NO_ATTACH_MS = 10_000;
 // Bound for a detached runner that keeps an unsent queue after a failed turn, waiting for the user.
@@ -75,16 +74,20 @@ export type RunnerExit = {reason: string; turns: number; ms: number};
 export type RunnerOptions = {
 	/** Session directory: `runner.sock` and `control.sock` live here. */
 	dir: string;
-	/** Builds the engine for the first attach; `log` is the runner's logger (frames to the client, ring while detached). */
-	createEngine: (open: EngineOpen, io: EngineIo, log: Logger) => Promise<RunnerEngine>;
+	/**
+	 * Builds the engine for the first attach; `log` is the runner's logger (frames to the client, ring
+	 * while detached); `control` answers "claude stop" and status while a turn holds the session lock.
+	 */
+	createEngine: (open: EngineOpen, io: EngineIo, log: Logger, control: RunnerControl) => Promise<RunnerEngine>;
 	store: {update: (patch: Partial<ClaudeState>) => Promise<unknown>};
-	lock?: Pick<SessionLock, 'update' | 'release'>;
 	/** Local sink for the runner's records (the runner itself has no log file). */
 	log?: Logger;
 	noAttachMs?: number;
 	lingerMs?: number;
 	now?: () => number;
 };
+
+export type RunnerControl = {status: () => ControlStatus; stop: () => void};
 
 export type RunnerHandle = {
 	readonly socketPath: string;
@@ -384,10 +387,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 		if (closing) return;
 		if (client) write(client, {type: 'event', event: e});
 		const id = engine?.session.sessionId;
-		if (id && id !== lastSessionId) {
-			lastSessionId = id;
-			opts.lock?.update({sessionId: id});
-		}
+		if (id && id !== lastSessionId) lastSessionId = id;
 		if (e.type === 'turn-end') onTurnEnd(e.outcome);
 	};
 
@@ -409,8 +409,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 			for (const s of sockets) s.end();
 			await Promise.race([closed, sleep(CLOSE_WAIT_MS)]);
 			for (const s of sockets) s.destroy();
-			await Promise.all([new Promise<void>(r => server.close(() => r())), control.close()]);
-			opts.lock?.release();
+			await new Promise<void>(r => server.close(() => r()));
 			const exit = {reason, turns, ms};
 			finish(exit);
 			return exit;
@@ -452,6 +451,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 				},
 				io,
 				log,
+				{status, stop: () => void shutdown('stopped')},
 			);
 		} catch (err) {
 			opening = false;
@@ -475,7 +475,6 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 		}
 		created.session.subscribe(onEvent);
 		lastSessionId = created.session.sessionId;
-		if (lastSessionId) opts.lock?.update({sessionId: lastSessionId});
 		if (client === c) greet(c);
 		else settleDetached();
 	};
@@ -518,7 +517,14 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 		try {
 			switch (frame.type) {
 				case 'send':
-					s.send(frame.text, frame.command ? {command: true} : {});
+					try {
+						s.send(frame.text, frame.command ? {command: true} : {});
+					} catch (err) {
+						// The client already shows the turn as running: end it with the reason instead of leaving it hanging.
+						const error = clip(redact(err instanceof Error ? err.message : 'The message was not sent'), 1000);
+						write(c, {type: 'event', event: {type: 'turn-end', outcome: 'error', error}});
+						write(c, {type: 'event', event: {type: 'state', state: 'idle'}});
+					}
 					break;
 				case 'interrupt':
 					await s.interrupt();
@@ -640,6 +646,8 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 		});
 	});
 
+	// A live runner (idle, attached to another yena) keeps its socket; this one does not start.
+	if (await accepts(socketPath)) throw new Error('A background chat is already running');
 	removeLeftoverSocket(socketPath);
 	await new Promise<void>((resolve, reject) => {
 		server.once('error', reject);
@@ -650,18 +658,6 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 	});
 	server.on('error', err => log.warn('runner server error', {err}));
 	chmodSync(socketPath, 0o600);
-
-	let control: Awaited<ReturnType<typeof serveControl>>;
-	try {
-		control = await serveControl({
-			dir: opts.dir,
-			handlers: {status, stop: () => void shutdown('stopped')},
-			...(opts.log && {log: opts.log}),
-		});
-	} catch (err) {
-		server.close();
-		throw err;
-	}
 
 	noAttachTimer = setTimeout(() => void shutdown('no-attach'), opts.noAttachMs ?? NO_ATTACH_MS);
 	noAttachTimer.unref();

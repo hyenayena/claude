@@ -37,6 +37,10 @@ export type ChatSessionOptions = {
 	onRemember?: (key: string) => void;
 	log?: Logger;
 	clock?: Clock;
+	/** Held only while the chat works (a turn, or background tasks it started); see sessions/turn-lock.ts. */
+	turnLock?: {acquire(): void; release(): void};
+	/** An idle chat ends its Claude Code process after this long; the next message resumes the session. */
+	idleCloseMs?: number;
 };
 
 export type SlashCommandInfo = {name: string; description?: string; argumentHint?: string};
@@ -128,6 +132,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private turnDeadline = 0;
 	private turnRemaining: number | undefined;
 	private holds = 0;
+	private lockHeld = false;
+	private idleTimer: NodeJS.Timeout | undefined;
 	// Bumped when the counter is reset, so a release from an earlier turn cannot touch the next one.
 	private holdEpoch = 0;
 	private permissionHold: (() => void) | undefined;
@@ -255,7 +261,19 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		if (this._state === 'running') throw new Error('A request is already running');
 		if (this._needsNewSession) throw new Error(RESUME_MESSAGE);
 
-		const handle = this.handle ?? this.spawn();
+		// Throws while another session works: nothing is sent and the caller keeps the text.
+		if (!this.lockHeld && this.opts.turnLock) {
+			this.opts.turnLock.acquire();
+			this.lockHeld = true;
+		}
+		this.clearIdleTimer();
+		let handle: Handle;
+		try {
+			handle = this.handle ?? this.spawn();
+		} catch (err) {
+			this.settleIdle();
+			throw err;
+		}
 		this.authFailed = false;
 		this.turnError = undefined;
 		this.pending = undefined;
@@ -397,6 +415,11 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	close(): void {
 		if (this._state === 'closed') return;
 		const wasRunning = this._state === 'running';
+		this.clearIdleTimer();
+		if (this.lockHeld) {
+			this.lockHeld = false;
+			this.opts.turnLock?.release();
+		}
 		this.cancelAll('closed');
 		this.approved.clear();
 		this.clearTimers();
@@ -504,6 +527,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			});
 			if (this._tasks.size > MAX_TASKS) this._tasks.delete(this._tasks.keys().next().value!);
 			const t = this._tasks.get(ev.id)!;
+			// A background task that ends while the chat is idle may be the last work it had.
+			if (ev.status !== 'running') queueMicrotask(() => this.settleIdle());
 			// task_notification does not repeat whether the task ran in the background.
 			ev = {...ev, background: t.background, description: t.description};
 		}
@@ -625,6 +650,37 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			...(error !== undefined && failure === undefined && {reason: clip(this.opts.redact(error))}),
 		});
 		this.emit({type: 'turn-end', outcome, ...(error !== undefined && {error})});
+		this.settleIdle();
+	}
+
+	private hasRunningTasks(): boolean {
+		for (const t of this._tasks.values()) if (t.status === 'running') return true;
+		return false;
+	}
+
+	/**
+	 * Idle and nothing left running: the session is no longer active. The lock goes at once; the Claude
+	 * Code process a little later, so it can still write the transcript (title included).
+	 */
+	private settleIdle(): void {
+		if (this._state !== 'idle' || this.hasRunningTasks()) return;
+		if (this.lockHeld) {
+			this.lockHeld = false;
+			this.opts.turnLock?.release();
+		}
+		if (this.opts.idleCloseMs === undefined || !this.handle || this.idleTimer) return;
+		this.idleTimer = setTimeout(() => {
+			this.idleTimer = undefined;
+			if (this._state !== 'idle' || this.hasRunningTasks() || !this.handle) return;
+			this.log.info('sdk session closed while idle');
+			this.dropHandle();
+		}, this.opts.idleCloseMs);
+		this.idleTimer.unref?.();
+	}
+
+	private clearIdleTimer(): void {
+		if (this.idleTimer) clearTimeout(this.idleTimer);
+		this.idleTimer = undefined;
 	}
 
 	private recycle(handle: Handle): void {

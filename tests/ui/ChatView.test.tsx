@@ -25,11 +25,16 @@ afterEach(() => {
 function setup(size?: {columns: number; rows: number}, label = 'API key', extra: Partial<ChatViewProps> = {}) {
 	const controller: FakeController = fakeController();
 	const printed: string[] = [];
+	// Every print in order, the empty gap lines between blocks included.
+	const raw: string[] = [];
 	const closed = {count: 0};
 	const h = mountHarness(
 		createElement(ChatView, {
 			controller,
-			print: s => printed.push(s),
+			print: s => {
+				raw.push(s);
+				if (s !== ' ') printed.push(s);
+			},
 			close: () => closed.count++,
 			scrub,
 			credentialLabel: label,
@@ -38,7 +43,7 @@ function setup(size?: {columns: number; rows: number}, label = 'API key', extra:
 		size,
 	);
 	cleanup.push(() => h.unmount());
-	return {controller, printed, closed, ...h};
+	return {controller, printed, raw, closed, ...h};
 }
 
 test('createChatElement returns a renderable element', async () => {
@@ -711,7 +716,7 @@ test('with a host: lines fit the width the host gives', async () => {
 	for (const line of t.lastFrame().split('\n')) assert.ok([...line].length <= 30, line);
 });
 
-test('with a host: Esc twice on an idle, empty chat opens the console', async () => {
+test('with a host: Esc never opens the console (double Shift does that in core); it clears and interrupts', async () => {
 	const f = fakeHost();
 	let toggles = 0;
 	const host = {...f.host, togglePanel: () => (toggles++, true)};
@@ -721,24 +726,18 @@ test('with a host: Esc twice on an idle, empty chat opens the console', async ()
 	await t.settle(40);
 	t.press(ESC);
 	await t.settle(40);
-	assert.equal(toggles, 1);
+	assert.equal(toggles, 0);
 	t.press('ab');
 	await t.settle();
 	t.press(ESC);
 	await t.settle(40);
-	t.press(ESC);
-	await t.settle(40);
-	assert.equal(toggles, 1, 'the first Esc only clears the draft');
-	t.press(ESC);
-	await t.settle(40);
-	assert.equal(toggles, 2);
+	assert.doesNotMatch(t.lastFrame(), /> ab/, 'Esc clears the draft');
 	t.controller.setState('running');
 	await t.settle();
 	t.press(ESC);
 	await t.settle(40);
-	t.press(ESC);
-	await t.settle(40);
-	assert.equal(toggles, 2, 'Esc interrupts while running');
+	assert.equal(t.controller.calls.interrupts, 1, 'Esc interrupts while running');
+	assert.equal(toggles, 0);
 	assert.equal(t.closed.count, 0);
 });
 
@@ -789,11 +788,11 @@ test('the open checklist shows above the input and goes when everything is done'
 		input: {todos: [{content: 'Plan', status: 'completed'}, {content: 'Code', status: 'in_progress', activeForm: 'Coding'}]},
 	});
 	await t.settle();
-	assert.match(t.lastFrame(), /☑ Plan/);
-	assert.match(t.lastFrame(), /◐ Coding/);
+	assert.match(t.lastFrame(), /⎿ {2}.*☒ Plan/);
+	assert.match(t.lastFrame(), /^ {5}.*☐ Coding/m);
 	t.controller.ui({kind: 'tool-use', toolUseId: 't2', name: 'TodoWrite', input: {todos: [{content: 'Plan', status: 'completed'}, {content: 'Code', status: 'completed'}]}});
 	await t.settle();
-	assert.doesNotMatch(t.lastFrame(), /☑ Plan/);
+	assert.doesNotMatch(t.lastFrame(), /☒ Plan/);
 });
 
 test('Enter while Claude answers queues the message and sends the queue when the turn ends', async () => {
@@ -1018,12 +1017,13 @@ test('mouse: a click on the input moves the cursor there; malformed events are i
 	assert.equal(m.listeners.length, 1);
 	t.press('hello world');
 	await t.settle();
-	// The status bar is the bottom row, the input the one above it.
-	assert.equal(m.click(7, 8), true);
-	assert.equal(m.send({kind: 'press', button: 'left', x: 60, y: 8}), false);
-	assert.equal(m.send({kind: 'press', button: 'left', x: 2, y: 8, width: 'x'}), false);
+	// The status bar is the bottom row, above it the rule under the input, then the input.
+	assert.equal(m.click(7, 8), false);
+	assert.equal(m.click(7, 7), true);
+	assert.equal(m.send({kind: 'press', button: 'left', x: 60, y: 7}), false);
+	assert.equal(m.send({kind: 'press', button: 'left', x: 2, y: 7, width: 'x'}), false);
 	assert.equal(m.click(7, 2), false);
-	assert.equal(m.send({kind: 'press', button: 'right', x: 2, y: 8}), false);
+	assert.equal(m.send({kind: 'press', button: 'right', x: 2, y: 7}), false);
 	t.press('X');
 	await t.settle();
 	t.press(ENTER);
@@ -1033,7 +1033,7 @@ test('mouse: a click on the input moves the cursor there; malformed events are i
 	assert.equal(m.listeners.length, 0);
 });
 
-test('mouse: in vim NORMAL the row above the mode line is the input and the cursor stays on a character', async () => {
+test('mouse: in vim NORMAL the input sits above its rule and the mode line, and the cursor stays on a character', async () => {
 	const m = mouseFakeHost();
 	const t = setup(undefined, 'API key', {host: m.host, inputMode: () => 'vim'});
 	await t.settle();
@@ -1041,12 +1041,14 @@ test('mouse: in vim NORMAL the row above the mode line is the input and the curs
 	await t.settle();
 	t.press(ESC);
 	await t.settle(60);
+	// From the bottom: status bar, mode line, the rule under the input, the input.
 	assert.equal(m.click(2, 8), false);
-	assert.equal(m.click(2, 7), true);
+	assert.equal(m.click(2, 7), false);
+	assert.equal(m.click(2, 6), true);
 	t.press('x');
 	await t.settle();
 	assert.match(t.lastFrame(), /> bc/);
-	assert.equal(m.click(40, 7), true);
+	assert.equal(m.click(40, 6), true);
 	t.press('x');
 	await t.settle();
 	assert.match(t.lastFrame(), /> b(?!c)/);
@@ -1090,7 +1092,7 @@ test('mouse: clicks during a permission prompt or while waiting for the answer a
 	t.controller.setState('running');
 	t.controller.emit({type: 'state', state: 'running'});
 	await t.settle();
-	assert.match(t.lastFrame(), /Waiting for the answer/);
+	assert.match(t.lastFrame(), /Working… \(\d+s · esc to interrupt\)/);
 	assert.equal(m.click(3, 8), false);
 });
 
@@ -1105,15 +1107,15 @@ test('mouse: a host without subscribeMouse changes nothing', async () => {
 	assert.deepEqual(t.controller.calls.sent, ['abc']);
 });
 
-test('thinking status shows an animated squareCorners spinner', async () => {
+test('thinking status shows the animated Claude Code spinner with seconds and the interrupt hint', async () => {
 	const t = setup();
 	await t.settle();
 	t.controller.ui({kind: 'thinking'});
 	await t.settle();
-	const first = t.lastFrame().match(/([◰◳◲◱]) thinking…/);
+	const first = t.lastFrame().match(/([·✢✳✶✻✽]) Thinking… \(\d+s · esc to interrupt\)/);
 	assert.ok(first, 'spinner frame before the status text');
 	await t.settle(400);
-	const later = t.lastFrame().match(/([◰◳◲◱]) thinking…/);
+	const later = t.lastFrame().match(/([·✢✳✶✻✽]) Thinking… \(\d+s · esc to interrupt\)/);
 	assert.ok(later);
 	assert.notEqual(later[1], first[1]);
 });
@@ -1219,4 +1221,139 @@ test('assistant tables are printed within the host width, and the last width is 
 	await t.settle();
 	assert.equal(t.printed.length, 2);
 	for (const line of t.printed[1]!.split('\n')) assert.ok(plainLen(line) <= 39, line);
+});
+
+test('blocks are separated by one empty line; a notice line belongs to the block after it', async () => {
+	const t = setup();
+	await t.settle();
+	t.controller.emit({type: 'sent', text: 'hi'});
+	t.controller.ui({kind: 'text', messageId: 'm1', text: 'hello'});
+	t.controller.emit({type: 'audit', entry: {outcome: 'allowed', toolName: 'Bash', summary: 'ls'}});
+	t.controller.ui({kind: 'tool-use', toolUseId: 'b', name: 'Bash', input: {command: 'ls'}});
+	t.controller.ui({kind: 'tool-result', toolUseId: 'b', isError: false, text: 'a.txt'});
+	t.controller.emit({type: 'turn-end', outcome: 'ok'});
+	await t.settle();
+	const plain = (s: string) => s.replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '');
+	const shape = t.raw.map(s => (s === ' ' ? 'gap' : plain(s).split('\n')[0]!.slice(0, 12)));
+	assert.deepEqual(shape, ['gap', ' > hi ', 'gap', '● hello', 'gap', 'Allowed Bash', '● Bash(ls)']);
+});
+
+test('the input sits between two rules, with the mode hint under it', async () => {
+	const t = setup({columns: 40, rows: 20});
+	await t.settle();
+	const rule = '─'.repeat(39);
+	assert.match(t.lastFrame(), new RegExp(`${rule}\\n> ?\\n${rule}`));
+	t.controller.setMode('plan');
+	await t.settle();
+	assert.match(t.lastFrame(), /⏸ plan mode on \(shift\+tab to cycle\)/);
+});
+
+function commandFakeHost() {
+	const f = fakeHost(60);
+	const ran: string[] = [];
+	const known = [
+		{name: 'project', description: 'Projects in the workplace', usage: 'project list'},
+		{name: 'settings', description: 'Open the settings'},
+	];
+	const host = {...f.host, runLine: (line: string) => known.some(c => line.split(' ')[0] === c.name) && (ran.push(line), true), listCommands: () => known};
+	return {host, ran};
+}
+
+test('"/command" runs a yena command in the console; other slash lines and "//" go to Claude', async () => {
+	const c = commandFakeHost();
+	const t = setup(undefined, 'API key', {host: c.host});
+	await t.settle();
+	t.press('/project list');
+	await t.settle();
+	t.press(ENTER);
+	await t.settle();
+	assert.deepEqual(c.ran, ['project list']);
+	assert.deepEqual(t.controller.calls.sent, []);
+	assert.match(t.printed.at(-1)!, /\/project list → console/);
+	for (const [typed, sent] of [['/compact', '/compact'], ['//project list', '/project list']]) {
+		t.press(typed);
+		await t.settle();
+		assert.doesNotMatch(t.lastFrame(), /Open the settings/, 'no hints for these');
+		t.press(ENTER);
+		await t.settle();
+		assert.equal(t.controller.calls.sent.at(-1), sent);
+		t.controller.emit({type: 'turn-end', outcome: 'ok'});
+		t.controller.setState('idle');
+		t.controller.emit({type: 'state', state: 'idle'});
+		await t.settle();
+	}
+	assert.deepEqual(c.ran, ['project list']);
+});
+
+test('typing "/" lists matching commands; Tab or Enter takes the highlighted one, a full name runs', async () => {
+	const c = commandFakeHost();
+	const t = setup(undefined, 'API key', {host: c.host});
+	await t.settle();
+	t.press('/');
+	await t.settle();
+	assert.match(t.lastFrame(), /\/project +Projects in the workplace/);
+	assert.match(t.lastFrame(), /\/settings +Open the settings/);
+	t.press('\u001b[B');
+	await t.settle();
+	t.press('\t');
+	await t.settle();
+	assert.match(t.lastFrame(), /> \/settings\s*$/m);
+	assert.doesNotMatch(t.lastFrame(), /Open the settings/);
+	t.press('\u0015');
+	await t.settle();
+	t.press('/pro');
+	await t.settle();
+	t.press(ENTER);
+	await t.settle();
+	assert.match(t.lastFrame(), /> \/project\s*$/m);
+	assert.deepEqual(c.ran, []);
+	t.press('\u0015');
+	await t.settle();
+	t.press('/settings');
+	await t.settle();
+	t.press(ENTER);
+	await t.settle();
+	assert.deepEqual(c.ran, ['settings']);
+});
+
+test('Tab with nothing to complete opens or closes the console; with suggestions it completes; Shift+Tab cycles the mode', async () => {
+	const c = commandFakeHost();
+	let toggles = 0;
+	const host = {...c.host, togglePanel: () => (toggles++, true)};
+	const t = setup(undefined, 'API key', {host});
+	await t.settle();
+	t.press('\t');
+	await t.settle();
+	assert.equal(toggles, 1);
+	t.press('hello');
+	await t.settle();
+	t.press('\t');
+	await t.settle();
+	assert.equal(toggles, 2, 'a draft without suggestions toggles too');
+	assert.match(t.lastFrame(), /> hello/, 'the draft stays');
+	t.press('\u0015');
+	await t.settle();
+	t.press('/pro');
+	await t.settle();
+	t.press('\t');
+	await t.settle();
+	assert.equal(toggles, 2);
+	assert.match(t.lastFrame(), /> \/project\s*$/m);
+	t.press('\u001b[Z');
+	await t.settle();
+	assert.equal(toggles, 2);
+});
+
+test('a send refused because another session works keeps the text in the input', async () => {
+	const t = setup();
+	await t.settle();
+	t.controller.send = () => {
+		throw new Error('Another session is working right now. Your message stays in the input; send it when that session is done.');
+	};
+	t.press('hello there');
+	await t.settle();
+	t.press(ENTER);
+	await t.settle();
+	assert.match(t.lastFrame(), /> hello there/);
+	assert.match(t.printed.join('\n'), /Another session is working right now/);
 });

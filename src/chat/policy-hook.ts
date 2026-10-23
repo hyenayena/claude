@@ -6,8 +6,6 @@ import {POLICY_DENY} from './permission.js';
 
 // Heuristic that over-denies on purpose: a shell command naming an auth file is refused in every mode.
 const AUTH_FILE = /credentials\.json|\.claude\.json|config\/backups/;
-// Same heuristic for the file that decides which projects are writable.
-const PROJECT_STATE = /project\/state\.json/;
 
 const allow: HookJSONOutput = {continue: true};
 
@@ -25,6 +23,7 @@ export function createPolicyHook(scope: Scope, configDir?: string): HookCallback
 	const plans = config ? path.join(config, PLANS_DIR) : undefined;
 	const inside = (p: string, dir: string) => p === dir || p.startsWith(dir + path.sep);
 	const readTool = createCanUseTool(scope);
+	const projectData = scope.projectDataDir ? path.resolve(scope.projectDataDir) : undefined;
 	const opts = {signal: new AbortController().signal, toolUseID: 'policy-hook'} as Parameters<typeof readTool>[2];
 	return async input => {
 		if (input.hook_event_name !== 'PreToolUse') return allow;
@@ -59,7 +58,8 @@ export function createPolicyHook(scope: Scope, configDir?: string): HookCallback
 				if (args.dangerouslyDisableSandbox) return denyWith(POLICY_DENY.background);
 				if (typeof args.command !== 'string') return allow;
 				if (AUTH_FILE.test(args.command)) return denyWith(POLICY_DENY.authFiles);
-				return PROJECT_STATE.test(args.command) ? denyWith(POLICY_DENY.projectState) : allow;
+				// Same heuristic for the project module's data dir, whose state decides which projects are writable.
+				return projectData && args.command.includes(projectData) ? denyWith(POLICY_DENY.projectState) : allow;
 			default: {
 				const denial = agentDenial(tool, args);
 				return denial ? denyWith(denial) : allow;

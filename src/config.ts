@@ -15,7 +15,8 @@ import {
 	MAX_TURNS,
 } from './policy.js';
 import {CONSOLE_SERVER_NAME} from './chat/console-tools.js';
-import {projectStateFile, readProjectAccessSync} from './projects.js';
+import {ensureHub, HUB_DIRS, hubDirFor} from './deps/md.js';
+import {loadProjectAccess, type ProjectAccessReader} from './deps/project.js';
 import {applyTuning, type ChatTuning} from './chat-prefs.js';
 import type {Credential} from './types.js';
 
@@ -34,8 +35,8 @@ export type ClaudePaths = {
 	credentialsFile: string;
 	/** Written by Claude Code's own login; only its metadata is ever inspected. */
 	loginFile: string;
-	/** The project module's state (<YENA_DATA>/project/state.json): which projects are writable. */
-	projectStateFile: string;
+	/** The project module's access reader, when it is installed (see withProjects). */
+	projects?: ProjectAccessReader;
 };
 
 export type RuntimeInfo = {
@@ -50,14 +51,13 @@ export function resolvePaths(dataDir: string, moduleDir?: string): ClaudePaths {
 		moduleDir: mod,
 		projectDir: path.resolve(mod, '..', '..'),
 		dataDir,
-		hubDir: path.join(path.dirname(dataDir), 'md'),
+		hubDir: hubDirFor(dataDir),
 		mdDir: path.join(dataDir, 'md'),
 		configDir: path.join(dataDir, 'config'),
 		runtimeBin: path.join(mod, '.runtime', 'node_modules', '.bin', 'claude'),
 		stateFile: path.join(dataDir, 'state.json'),
 		credentialsFile: path.join(dataDir, 'credentials.json'),
 		loginFile: path.join(dataDir, 'config', '.credentials.json'),
-		projectStateFile: projectStateFile(path.join(path.dirname(dataDir), 'md')),
 	};
 }
 
@@ -67,6 +67,12 @@ export function resolvePaths(dataDir: string, moduleDir?: string): ClaudePaths {
  * and change permissions.
  */
 export const MD_LINKED_DIRS = ['agents', 'skills', 'commands', 'output-styles'] as const;
+
+/** The paths plus the project module's access reader (optional dependency, loaded at runtime). */
+export async function withProjects(paths: ClaudePaths): Promise<ClaudePaths> {
+	const projects = await loadProjectAccess(paths.dataDir, paths.hubDir);
+	return projects ? {...paths, projects} : paths;
+}
 
 const lexists = (p: string): boolean => {
 	try {
@@ -90,7 +96,7 @@ function hubIsBlank(hub: string): boolean {
 	if (!lexists(hub)) return true;
 	try {
 		return readdirSync(hub).every(
-			n => (MD_LINKED_DIRS as readonly string[]).includes(n) && isEmptyDir(path.join(hub, n)),
+			n => (HUB_DIRS as readonly string[]).includes(n) && isEmptyDir(path.join(hub, n)),
 		);
 	} catch {
 		return false;
@@ -120,7 +126,7 @@ export function ensureMdLinks(paths: Pick<ClaudePaths, 'hubDir' | 'mdDir' | 'con
 			removeBlankHub(paths.hubDir);
 			renameSync(paths.mdDir, paths.hubDir);
 		}
-		for (const name of MD_LINKED_DIRS) mkdirSync(path.join(paths.hubDir, name), {recursive: true});
+		ensureHub(paths.hubDir);
 		if (!lexists(paths.mdDir)) {
 			mkdirSync(path.dirname(paths.mdDir), {recursive: true});
 			symlinkSync(path.relative(path.dirname(paths.mdDir), paths.hubDir), paths.mdDir, 'dir');
@@ -299,13 +305,13 @@ export function cliEnv(
 }
 
 /** The workplace and stage dirs, when the project module manages them and they exist. */
-function projectRoots(paths: Pick<ClaudePaths, 'projectStateFile' | 'hubDir'>): string[] {
-	const access = readProjectAccessSync(paths.projectStateFile, paths.hubDir);
+function projectRoots(paths: Pick<ClaudePaths, 'projects'>): string[] {
+	const access = paths.projects?.readSync();
 	return (access?.roots ?? []).filter(dir => lexists(dir));
 }
 
 function projectHint(paths: ClaudePaths): string {
-	const access = readProjectAccessSync(paths.projectStateFile, paths.hubDir);
+	const access = paths.projects?.readSync();
 	if (!access || access.roots.length === 0) return '';
 	const [workplace, stage] = access.roots as [string, string];
 	return (

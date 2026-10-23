@@ -2,7 +2,7 @@ import {realpath} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import type {CanUseTool} from '@anthropic-ai/claude-agent-sdk';
-import {type ProjectAccess, readProjectAccess} from './projects.js';
+import type {ProjectAccess, ProjectAccessReader} from './deps/project.js';
 
 export const ALLOWED_TOOLS = ['Read', 'Glob', 'Grep'];
 
@@ -76,6 +76,8 @@ export type Scope = {
 	lockedExcept?: string[];
 	/** The project module's current isolation, read on every check (it changes during a chat). */
 	projects?: () => Promise<ProjectAccess | undefined>;
+	/** The project module's data dir (its state decides what is writable); shell commands naming it are refused. */
+	projectDataDir?: string;
 };
 
 export type PolicyPaths = {
@@ -88,8 +90,8 @@ export type PolicyPaths = {
 	configDir: string;
 	stateFile: string;
 	credentialsFile: string;
-	/** The project module's state file; projects are read-only unless it isolates them. */
-	projectStateFile?: string;
+	/** The project module's access reader; projects are read-only unless it isolates them. */
+	projects?: ProjectAccessReader;
 };
 
 // `auth login --console` writes primaryApiKey into .claude.json and its backups.
@@ -114,13 +116,10 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 			path.join(home, '.ssh'),
 			...CONFIG_SECRET.map(x => path.join(paths.configDir, x)),
 		],
-		...(paths.projectStateFile !== undefined && {
-			projects: readProjects(paths.projectStateFile, paths.hubDir ?? paths.mdDir),
-		}),
+		...(paths.projects && {projects: () => paths.projects!.read()}),
+		...(paths.projects?.dataDir && {projectDataDir: paths.projects.dataDir}),
 	};
 }
-
-const readProjects = (file: string, hubDir: string) => () => readProjectAccess(file, hubDir);
 
 export function buildAskSettings(paths: PolicyPaths): {
 	permissions: {deny: string[]};
@@ -193,7 +192,7 @@ export function buildChatSettings(paths: PolicyPaths): {
 		'Edit(**/*.pem)',
 		'Edit(**/id_rsa*)',
 		'Edit(./.yena/**)',
-		...(paths.projectStateFile !== undefined ? [`Edit(${absRule(path.dirname(paths.projectStateFile))}/**)`] : []),
+		...(paths.projects?.dataDir ? [`Edit(${absRule(paths.projects.dataDir)}/**)`] : []),
 	];
 	return {
 		permissions: {allow: freeEditAllow(paths), deny: [...buildAskSettings(paths).permissions.deny, ...editDeny]},
