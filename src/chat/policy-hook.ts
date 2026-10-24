@@ -5,7 +5,7 @@ import {agentDenial} from './agent-policy.js';
 import {POLICY_DENY} from './permission.js';
 
 // Heuristic that over-denies on purpose: a shell command naming an auth file is refused in every mode.
-const AUTH_FILE = /credentials\.json|\.claude\.json|config\/backups/;
+const AUTH_FILE = /credentials\.json|\.claude\.json|config\/backups|accounts\.json|claude\/accounts\b/;
 
 const allow: HookJSONOutput = {continue: true};
 

@@ -114,6 +114,12 @@ const NOT_SECRET = [ENV_TEMPLATE, /\.d\.ts$/, /^id_\w+\.pub$/];
 export const isSecretName = (name: string): boolean =>
 	SECRET_BASENAMES.some(re => re.test(name)) && !NOT_SECRET.some(re => re.test(name));
 
+// The accounts (keys, tokens, saved logins; see accounts.ts) sit next to credentials.json.
+const accountPaths = (paths: PolicyPaths): [string, string] => {
+	const dir = path.dirname(paths.credentialsFile);
+	return [path.join(dir, 'accounts.json'), path.join(dir, 'accounts')];
+};
+
 // Claude Code permission rules: "//path" is absolute, "~/" is the home directory.
 const absRule = (p: string) => `/${p}`;
 
@@ -125,6 +131,7 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 		lockedExcept: [path.join(paths.configDir, PLANS_DIR)],
 		denied: [
 			paths.credentialsFile,
+			...accountPaths(paths),
 			paths.stateFile,
 			path.join(paths.projectDir, '.yena'),
 			'/proc',
@@ -145,6 +152,8 @@ export function buildAskSettings(paths: PolicyPaths): {
 			deny: [
 				...GUARD_DENY,
 				`Read(${absRule(paths.credentialsFile)})`,
+				`Read(${absRule(accountPaths(paths)[0])})`,
+				`Read(${absRule(accountPaths(paths)[1])}/**)`,
 				`Read(${absRule(paths.stateFile)})`,
 				`Read(${absRule(paths.configDir)}/.credentials.json)`,
 				`Read(${absRule(paths.configDir)}/.claude.json)`,
@@ -203,6 +212,8 @@ export function buildChatSettings(paths: PolicyPaths): {
 	// templates and public keys through (`isSecretName`).
 	const editDeny = [
 		`Edit(${absRule(paths.credentialsFile)})`,
+		`Edit(${absRule(accountPaths(paths)[0])})`,
+		`Edit(${absRule(accountPaths(paths)[1])}/**)`,
 		`Edit(${absRule(paths.stateFile)})`,
 		...CONFIG_EDIT_DENY.map(p => `Edit(${absRule(paths.configDir)}/${p})`),
 		`Edit(${absRule(paths.configDir)}/.credentials.json)`,

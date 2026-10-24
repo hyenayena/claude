@@ -43,7 +43,9 @@ export type ChatEvent =
 	| {type: 'audit'; entry: AuditEntry}
 	| {type: 'mode'; mode: ChatMode; error?: string}
 	| {type: 'sent'; text: string}
-	| {type: 'title'; title: string};
+	| {type: 'title'; title: string}
+	// The account ran out mid-turn; the chat goes on with `account` (see accounts.ts).
+	| {type: 'account'; account: string; previous: string; reason: 'usage-limit' | 'billing'};
 
 export interface ChatController {
 	readonly state: ChatState;

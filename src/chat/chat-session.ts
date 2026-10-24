@@ -41,7 +41,18 @@ export type ChatSessionOptions = {
 	turnLock?: {acquire(): void; release(): void};
 	/** An idle chat ends its Claude Code process after this long; the next message resumes the session. */
 	idleCloseMs?: number;
+	/**
+	 * The account ran out (usage limit or billing): returns the account to go on with, or undefined to
+	 * end the turn. The chat then restarts Claude Code (buildOptions picks the new account) in the same
+	 * session and asks it to continue.
+	 */
+	onUsageLimit?: (p: {reason: 'usage-limit' | 'billing'; rateLimit?: RateLimitInfo}) => {from: string; to: string} | undefined;
 };
+
+// Sent after an account switch, so Claude picks up the turn the limit cut off.
+export const CONTINUE_TEXT = 'Continue from where you stopped; the previous attempt was cut off by a usage limit.';
+// Account switches within one turn, at most (each needs another account anyway).
+const MAX_SWITCHES = 8;
 
 export type SlashCommandInfo = {name: string; description?: string; argumentHint?: string};
 export type TaskInfo = {
@@ -137,6 +148,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	// Bumped when the counter is reset, so a release from an earlier turn cannot touch the next one.
 	private holdEpoch = 0;
 	private permissionHold: (() => void) | undefined;
+	private switches = 0;
 	private _mode: ChatMode = 'default';
 	private _commands: SlashCommandInfo[] = [];
 	private _title: string | undefined;
@@ -280,8 +292,14 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.setState('running');
 		this.turnStartedAt = Date.now();
 		this.log.info('turn started', {chars: text.length});
+		this.switches = 0;
 		this.turnHandle = handle;
 		this.armTurnTimer(this.timeoutMs);
+		this.pushUser(handle, text, opts.command === true);
+		this.emit({type: 'sent', text});
+	}
+
+	private pushUser(handle: Handle, text: string, command: boolean): void {
 		handle.input.push({
 			type: 'user',
 			message: {role: 'user', content: text},
@@ -290,9 +308,46 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			session_id: this._sessionId ?? '',
 			origin: {kind: 'human'},
 			// Typed text that starts with "/" is a message, not a command; commands come from the console.
-			...(!opts.command && text.startsWith('/') && {client_composed: true as const}),
+			...(!command && text.startsWith('/') && {client_composed: true as const}),
 		});
-		this.emit({type: 'sent', text});
+	}
+
+	/**
+	 * A turn cut off by the account's limit: when another account is there, Claude Code restarts with it
+	 * in the same session and the turn goes on; otherwise the turn ends as before.
+	 */
+	private limitTurn(kind: FailureKind): void {
+		const reason = kind === 'usage-limit' || kind === 'billing' ? kind : undefined;
+		if (reason && this.opts.onUsageLimit && this.switches < MAX_SWITCHES && this._state === 'running' && !this.pending) {
+			let next: {from: string; to: string} | undefined;
+			try {
+				next = this.opts.onUsageLimit({reason, ...(this._rateLimit !== undefined && {rateLimit: this._rateLimit})});
+			} catch (err) {
+				this.log.warn('account switch failed', {errClass: errClass(err)});
+			}
+			if (next) {
+				this.switches++;
+				this.dropHandle();
+				this.clearTimers();
+				this._rateLimit = undefined;
+				this.turnError = undefined;
+				this.authFailed = false;
+				this.log.info('account switched', {reason, switches: this.switches});
+				this.emit({type: 'account', account: next.to, previous: next.from, reason});
+				let handle: Handle;
+				try {
+					handle = this.spawn();
+				} catch (err) {
+					this.endTurn('error', this.opts.redact(err instanceof Error ? err.message : String(err)));
+					return;
+				}
+				this.turnHandle = handle;
+				this.armTurnTimer(this.timeoutMs);
+				this.pushUser(handle, CONTINUE_TEXT, false);
+				return;
+			}
+		}
+		this.endTurn(kind === 'context' ? 'context' : 'limit', this.failureText(kind), kind);
 	}
 
 	async interrupt(): Promise<void> {
@@ -558,7 +613,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		if (!this.authFailed) {
 			const kind = this.classifyTurn(detail, ev.terminalReason);
 			if (kind) {
-				this.endTurn(kind === 'context' ? 'context' : 'limit', this.failureText(kind), kind);
+				this.limitTurn(kind);
 				return;
 			}
 		}
@@ -606,7 +661,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private failTurn(message: string, kind?: FailureKind): void {
 		if (this._state !== 'running') return;
 		if (this.pending) this.endTurn(this.pending.outcome, this.pending.error);
-		else if (kind) this.endTurn(kind === 'context' ? 'context' : 'limit', this.failureText(kind), kind);
+		else if (kind) this.limitTurn(kind);
 		else this.endTurn('error', this.opts.redact(message));
 	}
 

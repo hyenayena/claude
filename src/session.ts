@@ -27,6 +27,8 @@ const assistantText = (msg: Loose): string => {
 export class TurnFailure extends Error {
 	sessionId?: string;
 	model?: string;
+	// The last limit report of the turn (its reset time decides how long the account stays aside).
+	rateLimit?: RateLimitInfo;
 	kind?: FailureKind | 'auth' | 'resume' | 'cancelled' | 'timeout';
 
 	constructor(message: string, kind?: TurnFailure['kind']) {
@@ -73,6 +75,7 @@ export const runTurn = async (p: {
 			if (sessionId !== undefined) f.sessionId = sessionId;
 			if (model !== undefined) f.model = model;
 		}
+		if (rateLimit !== undefined) f.rateLimit = rateLimit;
 		return f;
 	};
 

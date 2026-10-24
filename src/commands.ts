@@ -3,7 +3,9 @@ import {appendFile, lstat, mkdir, open, realpath, stat, writeFile} from 'node:fs
 import path, {join, resolve} from 'node:path';
 import type {Command, CommandContext, Logger, SettingsTab, Subcommand} from '../../../src/api.js';
 import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
-import {isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
+import {CONTINUE_TEXT, isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
+import {type AccountView, checkAccountName, chooseAccount, listAccounts, markLimited, removeAccount, setOrder, stashLogin, adoptLogin, useAccount} from './accounts.js';
+import {formatReset, systemClock} from './chat/limits.js';
 import type {ChatHandle} from './chat/handle.js';
 import {clockTime} from './clock-time.js';
 import {runnerSocketPath} from './runner/spawn.js';
@@ -14,8 +16,12 @@ import {ago, type PickerItem} from './ui/picker-model.js';
 import {buildEnv, buildOptions, cliEnv, ensureMdLinks, resolvePaths, runtimeInfo, withProjects} from './config.js';
 import {LOGIN_USAGE, parseLoginArgs, probeLogin, runLogout, type LoginProbe, type LoginRequest, type LoginStatus} from './claude-login.js';
 import {
+	accountsCtx,
+	allSecrets,
+	NO_CREDENTIALS,
 	describeCredential,
 	inspectFileMode,
+	prepareCredential,
 	isSubscription,
 	listCredentialSources,
 	makeRedactor,
@@ -39,6 +45,10 @@ import {createStore, isModelId} from './store.js';
 import type {ChatQueryFn, Credential, CredentialInfo, QueryFn} from './types.js';
 
 const LIMIT_KINDS = new Set(['usage-limit', 'rate-limit', 'billing', 'context']);
+const MAX_ASK_SWITCHES = 8;
+const LIMIT_HOLD_S = 5 * 3600;
+const BILLING_HOLD_S = 24 * 3600;
+
 const limitKind = (err: unknown): string | undefined =>
 	err instanceof TurnFailure && err.kind !== undefined && LIMIT_KINDS.has(err.kind) ? err.kind : undefined;
 
@@ -75,8 +85,9 @@ const USAGE = 'Usage: claude <ping|ask|chat|new|resume|rewind|fork|rename|export
 const RESUME_USAGE = 'Usage: claude resume [session]';
 const NO_CHAT = 'No chat is open. Claude Code commands run in the open chat; start one with "chat".';
 const ASK_USAGE = 'Usage: claude ask [--new] <text>';
-const AUTH_USAGE = 'Usage: claude auth <status|key|logout|login>';
-const KEY_USAGE = 'Usage: claude auth key --from-file <path>';
+const AUTH_USAGE = 'Usage: claude auth <status|accounts|login|key|order|use|remove|logout>';
+const ORDER_USAGE = 'Usage: claude auth order <account> [<account>…]';
+const KEY_USAGE = 'Usage: claude auth key --from-file <path> [--name <account>]';
 const CHAT_NEW_USAGE = 'Usage: chat [model]';
 const MAX_KEY_FILE_BYTES = 4096;
 const STOP_USAGE = 'Usage: claude stop [session]';
@@ -90,6 +101,23 @@ const SUBSCRIPTION_NOTICE =
 const kindLabel = (info: CredentialInfo): string => {
 	if (info.source === 'claude-login') return isSubscription(info) ? 'subscription login' : 'API key (login)';
 	return isSubscription(info) ? 'subscription token' : 'API key';
+};
+
+/** Takes "--name <account>" out of the arguments. */
+const takeName = (args: string[]): {name: string | undefined; rest: string[]} => {
+	const at = args.indexOf('--name');
+	if (at < 0) return {name: undefined, rest: args};
+	const name = args[at + 1];
+	if (name === undefined || name.startsWith('--')) throw new Error('"--name" needs an account name');
+	if (args.indexOf('--name', at + 1) >= 0) throw new Error('"--name" was given twice');
+	return {name: checkAccountName(name), rest: [...args.slice(0, at), ...args.slice(at + 2)]};
+};
+
+const TYPE_LABELS: Record<AccountView['type'], string> = {
+	env: 'environment variable',
+	login: 'Claude Code login',
+	key: 'API key',
+	token: 'subscription token',
 };
 
 const SOURCE_LABELS: Record<CredentialInfo['source'], string> = {
@@ -379,17 +407,34 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 
+	// After a usage limit or billing error: the account is set aside until its reset and the next one is
+	// prepared (swapped in, for a login); undefined when there is none left.
+	const switchAfterLimit = (err: unknown, cred: Credential): Credential | undefined => {
+		const kind = limitKind(err);
+		if ((kind !== 'usage-limit' && kind !== 'billing') || cred.account === undefined) return undefined;
+		const ctx = accountsCtx({env, dataDir});
+		const now = Date.now() / 1000;
+		const resetsAt = err instanceof TurnFailure ? err.rateLimit?.resetsAt : undefined;
+		const until = kind === 'billing' ? now + BILLING_HOLD_S : resetsAt !== undefined && resetsAt > now ? resetsAt : now + LIMIT_HOLD_S;
+		markLimited(ctx, cred.account, until, kind);
+		const next = chooseAccount(ctx);
+		log.info('account limited', {reason: kind, next: next !== undefined && next.limitedUntil === undefined && next.name !== cred.account});
+		if (!next || next.limitedUntil !== undefined || next.name === cred.account) return undefined;
+		return prepareCredential({env, dataDir});
+	};
+
 	const runAsk = async (text: string, fresh: boolean, ctx: CommandContext): Promise<void> => {
 		let cred: Credential;
 		try {
-			cred = await requireCredential({env, dataDir, probeLogin: probe});
+			// The ask lock is held: a login account can be swapped into the config dir.
+			cred = prepareCredential({env, dataDir});
 		} catch (err) {
 			log.warn('no credential');
 			throw err;
 		}
 		registerLogRedaction(log, cred);
 		log.info('credential resolved', {kind: cred.kind, source: cred.source});
-		const redact = makeRedactor(cred);
+		const redact = makeRedactor(cred, allSecrets({env, dataDir}));
 		const scrub = makeScrub(redact);
 		await showNoticeOnce(cred, ctx);
 		ctx.print('Asking Claude…');
@@ -425,12 +470,27 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		try {
 			const paths = await withProjects(resolvePaths(dataDir, deps.moduleDir));
 			ensureMdLinks(paths);
-			const resume = fresh ? undefined : state.lastSessionId;
-			const options = buildOptions({paths, cred, abortController: controller, resume, env: buildEnv(env, paths, cred)});
+			let resume = fresh ? undefined : state.lastSessionId;
+			let prompt = text;
 			let result;
+			for (let switches = 0; ; switches++) {
+			const options = buildOptions({paths, cred, abortController: controller, resume, env: buildEnv(env, paths, cred)});
 			try {
-				result = await runTurn({query, prompt: text, options, signal: controller.signal, redact, log});
+				result = await runTurn({query, prompt, options, signal: controller.signal, redact, log});
+				break;
 			} catch (err) {
+				// The account ran out: the next one in priority order takes the same session over.
+				const next = !timedOut && switches < MAX_ASK_SWITCHES ? switchAfterLimit(err, cred) : undefined;
+				if (next) {
+					ctx.print(`Account "${cred.account}" ${limitKind(err) === 'billing' ? 'cannot be billed' : 'reached its usage limit'}; continuing with "${next.account}".`);
+					if (err instanceof TurnFailure && err.sessionId) {
+						resume = err.sessionId;
+						prompt = CONTINUE_TEXT;
+					}
+					cred = next;
+					registerLogRedaction(log, cred);
+					continue;
+				}
 				const failure = timedOut ? new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds`) : err;
 				// A failed turn (limit, timeout) can still have created a session worth resuming.
 				if (err instanceof TurnFailure && err.sessionId && err.kind !== 'resume') {
@@ -447,6 +507,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 						: {reason: clip(scrub(failure instanceof Error ? failure.message : String(failure)))}),
 				});
 				throw failure;
+			}
 			}
 			await store.update({lastSessionId: result.sessionId, ...(result.model && {lastModel: result.model})});
 			ctx.print(scrub(result.text));
@@ -776,34 +837,84 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (active) ctx.print(`Active credential: ${describeCredential(active)}`);
 	};
 
+	// A turn in progress anywhere (this yena or a background runner) holds the session lock.
+	const chatRunning = (): boolean => {
+		if (openSession?.state === 'running') return true;
+		const dir = sessionsDir();
+		return dir !== undefined && readHolder(dir).holder !== undefined;
+	};
+
+	// One line per account, in priority order: the one a new turn uses is marked.
+	const accountLines = (list: AccountView[]): string[] => {
+		const chosen = chooseAccount(accountsCtx({env, dataDir}));
+		const scrub = makeScrub(makeRedactor(undefined, allSecrets({env, dataDir})));
+		const width = Math.max(...list.map(a => a.name.length));
+		return list.map((a, i) => {
+			const what = a.type === 'login' ? `${TYPE_LABELS.login} (${a.kind === 'oauth' ? 'subscription' : 'Console'}${a.email ? `, ${a.email}` : ''})` : a.type === 'env' ? `${a.kind === 'api-key' ? 'ANTHROPIC_API_KEY' : 'CLAUDE_CODE_OAUTH_TOKEN'} (${TYPE_LABELS.env})` : TYPE_LABELS[a.type];
+			const state =
+				a.limitedUntil !== undefined
+					? `${a.reason === 'billing' ? 'billing failed' : 'limit reached'}, back at ${formatReset(a.limitedUntil, systemClock)}`
+					: '';
+			const mark = chosen?.name === a.name ? '▸' : ' ';
+			return scrub(`${mark} ${i + 1}. ${a.name.padEnd(width)}  ${what}${state ? `  · ${state}` : ''}`);
+		});
+	};
+
+	const authAccounts = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length > 0) throw new Error('Usage: claude auth accounts');
+		const list = listAccounts(accountsCtx({env, dataDir}));
+		log.info('auth accounts', {count: list.length, limited: list.filter(a => a.limitedUntil !== undefined).length});
+		if (list.length === 0) {
+			ctx.print(NO_CREDENTIALS);
+			return;
+		}
+		ctx.print('Accounts, in priority order (▸ is used next; when it reaches its limit, the next one takes over):');
+		for (const line of accountLines(list)) ctx.print(line);
+	};
+
 	const authStatus = async (ctx: CommandContext): Promise<void> => {
-		let memo: Promise<LoginStatus | undefined> | undefined;
-		const once: LoginProbe = () => (memo ??= probe());
-		const sources = await listCredentialSources({env, dataDir, probeLogin: once});
-		const active = sources[0];
-		const login = await once().catch(() => undefined);
+		const list = listAccounts(accountsCtx({env, dataDir}));
+		const active = await resolveCredential({env, dataDir});
+		log.info('auth status', {kind: active?.kind, source: active?.source, accounts: list.length, limited: list.filter(a => a.limitedUntil !== undefined).length});
 		if (!active) {
-			try {
-				await requireCredential({env, dataDir, probeLogin: once});
-			} catch (err) {
-				ctx.print(err instanceof Error ? err.message : String(err));
-			}
+			ctx.print(NO_CREDENTIALS);
 		} else {
 			ctx.print(`Active credential: ${describeCredential(active)}`);
+			if (list.length > 1) {
+				ctx.print('Accounts, in priority order:');
+				for (const line of accountLines(list)) ctx.print(line);
+			}
 		}
-		if (login?.loggedIn && login.method) {
-			const scrub = makeScrub(active ? makeRedactor(active) : s => s);
-			const detail = [login.method, login.subscriptionType, login.email].filter(Boolean).join(', ');
-			ctx.print(scrub(`Claude Code login: signed in (${detail})`));
-		}
-		const others = [...new Set(sources.filter(c => c.source !== active?.source).map(c => SOURCE_LABELS[c.source]))];
-		log.info('auth status', {kind: active?.kind, source: active?.source, others, login: login?.loggedIn ? login.method : undefined});
-		if (others.length > 0) ctx.print(`Other available sources: ${others.join(', ')}`);
 		for (const warning of await inspectFileMode(dataDir)) ctx.print(`Warning: ${warning}`);
 		if (active) await showNoticeOnce(active, ctx);
 	};
 
-	const authKey = async (args: string[], ctx: CommandContext): Promise<void> => {
+	const authOrder = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length === 0) throw new Error(ORDER_USAGE);
+		const list = setOrder(accountsCtx({env, dataDir}), args);
+		log.info('auth order', {count: list.length});
+		for (const line of accountLines(list)) ctx.print(line);
+	};
+
+	const authUse = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length !== 1) throw new Error('Usage: claude auth use <account>');
+		const list = useAccount(accountsCtx({env, dataDir}), args[0]!);
+		log.info('auth use', {count: list.length});
+		ctx.print(`"${args[0]}" is first now and its limit is forgotten; new turns use it.`);
+		for (const line of accountLines(list)) ctx.print(line);
+	};
+
+	const authRemove = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length !== 1) throw new Error('Usage: claude auth remove <account>');
+		const {wasInstalled} = removeAccount(accountsCtx({env, dataDir}), args[0]!);
+		log.info('auth remove', {login: wasInstalled});
+		ctx.print(`Account "${args[0]}" removed${wasInstalled ? '; Claude Code is signed out of it' : ''}.`);
+		if (chatOpen) ctx.print('The open chat keeps its current account until Claude Code restarts.');
+		await printActive(ctx);
+	};
+
+	const authKey = async (rawArgs: string[], ctx: CommandContext): Promise<void> => {
+		const {name, rest: args} = takeName(rawArgs);
 		if (args[0] !== '--from-file') {
 			throw new Error(
 				`API keys are not accepted as command arguments because they would stay in the scrollback and history. ${KEY_USAGE}`,
@@ -815,8 +926,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			throw new Error('Paths with spaces are not supported by "claude auth key --from-file"; move the file to a path without spaces.');
 		}
 		const value = await readKeyFile(rest[0]!);
+		let account;
 		try {
-			await storeApiKey(dataDir, value);
+			account = await storeApiKey(dataDir, value, name, env);
 		} catch (err) {
 			if (err instanceof Error && err.message.startsWith('Invalid API key format')) {
 				throw new Error('The file does not contain a valid Anthropic API key');
@@ -825,17 +937,24 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 		log.info('api key stored');
 		ctx.print(
-			`API key stored in ${join(dataDir, 'credentials.json')} (mode 0600). Source file left untouched; delete it yourself.`,
+			`API key stored as account "${account.name}" in ${join(dataDir, 'accounts.json')} (mode 0600). Source file left untouched; delete it yourself.`,
 		);
-		const active = await resolveCredential({env, dataDir, probeLogin: probe});
-		if (active && active.source !== 'stored') {
-			ctx.print(`Note: the stored key is not used while another source has priority (${describeCredential(active)}).`);
+		await noteIfShadowed(account.name, ctx);
+	};
+
+	// Says so when a new account is not the one used next.
+	const noteIfShadowed = async (name: string, ctx: CommandContext): Promise<void> => {
+		const active = await resolveCredential({env, dataDir});
+		if (active && active.account !== name) {
+			ctx.print(`Note: "${name}" is used after ${describeCredential(active)} in priority order; "claude auth use ${name}" puts it first.`);
 		}
 	};
 
 	// A login counts as present when Claude Code reports one, or, if it cannot be asked, its file exists.
-	const loginPresent = async (): Promise<boolean> =>
-		(await listCredentialSources({env: {}, dataDir, probeLogin: probe})).some(c => c.source === 'claude-login');
+	const loginPresent = async (): Promise<boolean> => {
+		const status = await probe().catch(() => undefined);
+		return status?.loggedIn === true;
+	};
 
 	const authLogout = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 0) throw new Error(LOGOUT_USAGE);
@@ -843,8 +962,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		log.info('stored credential removed', {removed});
 		ctx.print(
 			removed
-				? 'Stored credential removed. Environment variables are not touched.'
-				: 'No stored credential.',
+				? 'Every stored account removed (keys, tokens and logins). Environment variables are not touched. "claude auth remove <account>" removes one.'
+				: 'No stored account.',
 		);
 		if (await loginPresent()) {
 			const bin = cliBin();
@@ -861,18 +980,19 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await printActive(ctx);
 	};
 
-	const authLogin = async (args: string[], ctx: CommandContext): Promise<void> => {
+	const authLogin = async (rawArgs: string[], ctx: CommandContext): Promise<void> => {
+		const {name, rest: args} = takeName(rawArgs);
 		const request = parseLoginArgs(args);
 		if (!ctx.suspend) throw new Error('"claude auth login" needs an interface that can hand over the terminal');
 		const bin = cliBin();
 		if (!bin) throw new Error('Claude Code is not installed for this module. Run modules/claude/bin/install.');
-		if (request.kind === 'token') return authLoginToken(bin, ctx);
-		return authLoginBrowser(bin, request, ctx);
+		if (request.kind === 'token') return authLoginToken(bin, ctx, name);
+		return authLoginBrowser(bin, request, ctx, name);
 	};
 
 	// Runs Claude Code's "setup-token" on the terminal, then asks for the token it printed (hidden input)
 	// and saves it to credentials.json; the token never passes through arguments, history or logs.
-	const authLoginToken = async (bin: string, ctx: CommandContext): Promise<void> => {
+	const authLoginToken = async (bin: string, ctx: CommandContext, name: string | undefined): Promise<void> => {
 		const paths = loginPaths();
 		const token = await ctx.suspend!(() => {
 			const ok = runCli(bin, ['setup-token'], cliEnv(env, paths) as NodeJS.ProcessEnv);
@@ -886,10 +1006,10 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			ctx.print('Login cancelled; nothing was saved.');
 			return;
 		}
-		await storeOauthToken(dataDir, token);
+		const account = await storeOauthToken(dataDir, token, name, env);
 		log.info('subscription token stored');
-		ctx.print(`Subscription token stored in ${join(dataDir, 'credentials.json')} (mode 0600), replacing any stored API key. New chats use it unless an environment variable or a Claude Code login takes priority.`);
-		await printActive(ctx);
+		ctx.print(`Subscription token stored as account "${account.name}" in ${join(dataDir, 'accounts.json')} (mode 0600).`);
+		await noteIfShadowed(account.name, ctx);
 	};
 
 	// Claude Code's own browser login; yena never sees the tokens, it only asks the CLI afterwards.
@@ -897,9 +1017,13 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		bin: string,
 		request: Extract<LoginRequest, {kind: 'browser'}>,
 		ctx: CommandContext,
+		name: string | undefined,
 	): Promise<void> => {
 		const paths = loginPaths();
 		const {meta} = request;
+		if (chatRunning()) throw new Error('A chat is answering; wait for it (a sign-in replaces the login Claude Code is using)');
+		// The login there now is kept in its account before Claude Code replaces it.
+		stashLogin(accountsCtx({env, dataDir}));
 		log.info('claude login started', {method: meta.console ? 'console' : 'claude.ai', sso: meta.sso, email: meta.email});
 		const ok = await ctx.suspend!(() => {
 			const done = runCli(bin, ['auth', 'login', ...request.cliArgs], cliEnv(env, paths) as NodeJS.ProcessEnv);
@@ -917,16 +1041,13 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			ctx.print('Login did not complete; nothing was changed.');
 			return;
 		}
+		const account = adoptLogin(accountsCtx({env, dataDir}), name);
 		ctx.print(
 			status.method === 'claude.ai'
-				? `Signed in with Claude Code (claude.ai). The login is kept in ${paths.loginFile} (mode 0600) and refreshed automatically.`
-				: `Signed in with Claude Code (Console account). Claude Code keeps the key in ${join(paths.configDir, '.claude.json')}.`,
+				? `Signed in with Claude Code (claude.ai) as account "${account.name}". Its login is kept in ${join(dataDir, 'accounts', account.name)} (mode 0600) and swapped into ${paths.loginFile} when it is used; Claude Code refreshes it.`
+				: `Signed in with Claude Code (Console account) as account "${account.name}".`,
 		);
-		const active = await resolveCredential({env, dataDir, probeLogin: async () => status});
-		if (active) ctx.print(`Active credential: ${describeCredential(active)}`);
-		if (active && active.source !== 'claude-login') {
-			ctx.print(`Note: the login is not used while another source has priority (${describeCredential(active)}).`);
-		}
+		await noteIfShadowed(account.name, ctx);
 		await showNoticeOnce({kind: status.method === 'claude.ai' ? 'oauth' : 'api-key', source: 'claude-login'}, ctx);
 	};
 
@@ -998,6 +1119,15 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		switch (sub) {
 			case 'status':
 				return authStatus(ctx);
+			case 'accounts':
+			case 'list':
+				return authAccounts(rest, ctx);
+			case 'order':
+				return authOrder(rest, ctx);
+			case 'use':
+				return authUse(rest, ctx);
+			case 'remove':
+				return authRemove(rest, ctx);
 			case 'key':
 				return authKey(rest, ctx);
 			case 'logout':
@@ -1074,8 +1204,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		{name: 'stop', usage: 'claude stop [session]', description: 'Stop the running chat or ask', agent: 'confirm'},
 		{
 			name: 'auth',
-			usage: 'claude auth <status|key|logout|login>',
-			description: 'Manage credentials: login [--console|--sso|--email <address>|--token], key --from-file <path>, status, logout',
+			usage: 'claude auth <status|accounts|login|key|order|use|remove|logout>',
+			description:
+				'Accounts in priority order (the next takes over at a limit): accounts, login [--name <n>] [--console|--sso|--email <a>|--token], key --from-file <path>, order, use, remove, status, logout',
 			agent: 'confirm',
 		},
 	];

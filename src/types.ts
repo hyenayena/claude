@@ -6,6 +6,8 @@ export type CredentialSource = 'env' | 'claude-login' | 'stored';
 export type CredentialInfo = {
 	readonly kind: CredentialKind;
 	readonly source: CredentialSource;
+	// The account it belongs to (see accounts.ts); unset in old callers' literals.
+	readonly account?: string;
 };
 
 export type Credential = CredentialInfo & {readonly value: string};

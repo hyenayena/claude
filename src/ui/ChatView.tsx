@@ -257,7 +257,7 @@ export function ChatView(props: ChatViewProps) {
 			for (const out of step.out) {
 				if (out.kind === 'blank') continue;
 				const text = formatOut(out, scrub, reveal, lastWidthRef.current || undefined);
-				if (out.kind === 'audit' || out.kind === 'mode') printNotice(text);
+				if (out.kind === 'audit' || out.kind === 'mode' || out.kind === 'account') printNotice(text);
 				else print(text);
 			}
 			if (event.type === 'turn-end' && queueRef.current.length > 0) {
@@ -866,7 +866,7 @@ export function ChatView(props: ChatViewProps) {
 	}, [resetsAt, clock, render]);
 	const barStatus = statusBarText(
 		{
-			credentialLabel,
+			credentialLabel: t.account !== undefined ? `account ${t.account}` : credentialLabel,
 			model: t.model,
 			sessionId: t.sessionId,
 			phase: t.phase,

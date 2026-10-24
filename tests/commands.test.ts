@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
 import type {CommandContext} from '../../../src/api.js';
 import {storeOauthToken} from '../src/credentials.js';
+import {CONTINUE_TEXT} from '../src/chat/chat-session.js';
 import {createClaudeCommand, type ClaudeDeps} from '../src/commands.js';
 import type {LoginStatus} from '../src/claude-login.js';
 import type {QueryFn} from '../src/types.js';
@@ -14,6 +15,7 @@ import {TurnFailure} from '../src/session.js';
 import {makeFakeLog, serialized} from './helpers/fake-log.js';
 
 const KEY = 'sk-ant-api03-TESTVALUE0123456789abcdef';
+const KEY2 = 'sk-ant-api03-SPAREVALUE0123456789abcdef';
 const OAUTH = 'sk-ant-oat-TESTVALUE0123456789abcdef';
 const SID1 = '11111111-aaaa-4bbb-8ccc-222222222222';
 const SID2 = '33333333-aaaa-4bbb-8ccc-444444444444';
@@ -239,14 +241,14 @@ test('new clears the session; session prints id and model', async () => {
 	void dataDir;
 });
 
-test('auth status warns on a world-readable credentials.json and reports no secret', async () => {
+test('auth status warns on a world-readable accounts.json and reports no secret', async () => {
 	const {command, ctx, printed, dataDir} = await setup({env: {}});
 	await storeOauthToken(dataDir, OAUTH);
-	await chmod(join(dataDir, 'credentials.json'), 0o644);
+	await chmod(join(dataDir, 'accounts.json'), 0o644);
 	await command.run(['auth', 'status'], ctx);
 	const out = printed.join('\n');
-	assert.match(out, /subscription token \(stored by yena\)/);
-	assert.match(out, /Warning: credentials\.json is readable by other users/);
+	assert.match(out, /account "token": subscription token \(stored by yena\)/);
+	assert.match(out, /Warning: accounts\.json is readable by other users/);
 	assert.ok(!out.includes(OAUTH));
 });
 
@@ -256,14 +258,39 @@ test('auth status without credentials prints the missing message', async () => {
 	assert.match(printed[0]!, /^No credentials found/);
 });
 
-test('auth status lists other sources by name only', async () => {
+test('auth status lists the accounts in priority order, by name only', async () => {
 	const {command, ctx, printed, dataDir} = await setup();
 	await command.run(['auth', 'status'], ctx);
-	assert.ok(!printed.some(l => l.startsWith('Other available')));
+	assert.ok(!printed.some(l => l.startsWith('Accounts')));
 	await storeOauthToken(dataDir, OAUTH);
 	printed.length = 0;
 	await command.run(['auth', 'status'], ctx);
-	assert.ok(printed.includes('Other available sources: stored credential (credentials.json)'));
+	assert.equal(printed[0], 'Active credential: API key (from environment)');
+	assert.equal(printed[1], 'Accounts, in priority order:');
+	assert.match(printed[2]!, /^▸ 1\. env-key +ANTHROPIC_API_KEY \(environment variable\)$/);
+	assert.match(printed[3]!, /^  2\. token +subscription token$/);
+	assert.ok(!printed.join('\n').includes(OAUTH) && !printed.join('\n').includes(KEY));
+});
+
+test('auth accounts, order, use and remove manage the priority', async () => {
+	const {command, ctx, printed, dataDir} = await setup();
+	await storeOauthToken(dataDir, OAUTH, 'work');
+	await command.run(['auth', 'accounts'], ctx);
+	assert.match(printed[0]!, /^Accounts, in priority order/);
+	assert.match(printed[1]!, /^▸ 1\. env-key /);
+	printed.length = 0;
+	await command.run(['auth', 'order', 'work'], ctx);
+	assert.match(printed[0]!, /^▸ 1\. work /);
+	assert.match(printed[1]!, /^  2\. env-key /);
+	await assert.rejects(async () => command.run(['auth', 'order'], ctx), /Usage: claude auth order/);
+	await assert.rejects(async () => command.run(['auth', 'order', 'nope'], ctx), /No account "nope"/);
+	printed.length = 0;
+	await command.run(['auth', 'use', 'env-key'], ctx);
+	assert.equal(printed[0], '"env-key" is first now and its limit is forgotten; new turns use it.');
+	printed.length = 0;
+	await command.run(['auth', 'remove', 'work'], ctx);
+	assert.equal(printed[0], 'Account "work" removed.');
+	await assert.rejects(async () => command.run(['auth', 'remove', 'env-key'], ctx), /unset the variable/);
 });
 
 const keyFile = async (content: string) => {
@@ -277,13 +304,18 @@ test('auth key --from-file stores the key at 0600 and never echoes it', async ()
 	const {command, ctx, printed, dataDir} = await setup({env: {}});
 	const {file} = await keyFile(` ${KEY}\n`);
 	await command.run(['auth', 'key', '--from-file', file], ctx);
-	assert.equal(printed[0], `API key stored in ${join(dataDir, 'credentials.json')} (mode 0600). Source file left untouched; delete it yourself.`);
+	assert.equal(printed[0], `API key stored as account "key" in ${join(dataDir, 'accounts.json')} (mode 0600). Source file left untouched; delete it yourself.`);
 	assert.ok(!printed.join('\n').includes(KEY));
-	assert.equal((await stat(join(dataDir, 'credentials.json'))).mode & 0o777, 0o600);
+	assert.equal((await stat(join(dataDir, 'accounts.json'))).mode & 0o777, 0o600);
 	assert.equal(await readFile(file, 'utf8'), ` ${KEY}\n`);
 	printed.length = 0;
 	await command.run(['auth', 'status'], ctx);
-	assert.equal(printed[0], 'Active credential: API key (stored by yena)');
+	assert.equal(printed[0], 'Active credential: account "key": API key (stored by yena)');
+	printed.length = 0;
+	await command.run(['auth', 'key', '--from-file', (await keyFile(KEY2)).file, '--name', 'spare'], ctx);
+	assert.match(printed[0]!, /^API key stored as account "spare"/);
+	assert.equal(printed[1], 'Note: "spare" is used after account "key": API key (stored by yena) in priority order; "claude auth use spare" puts it first.');
+	await assert.rejects(async () => command.run(['auth', 'key', '--from-file', file, '--name'], ctx), /"--name" needs an account name/);
 });
 
 test('auth key follows a symlink to a regular file', async () => {
@@ -292,7 +324,7 @@ test('auth key follows a symlink to a regular file', async () => {
 	const link = join(dir, 'link');
 	await symlink(file, link);
 	await command.run(['auth', 'key', '--from-file', link], ctx);
-	assert.ok((await readdir(dataDir)).includes('credentials.json'));
+	assert.ok((await readdir(dataDir)).includes('accounts.json'));
 });
 
 test('auth key rejects a fifo without hanging', async () => {
@@ -307,7 +339,7 @@ test('auth key rejects a fifo without hanging', async () => {
 		]),
 		/not a regular file/,
 	);
-	assert.ok(!(await readdir(dataDir)).includes('credentials.json'));
+	assert.ok(!(await readdir(dataDir)).includes('accounts.json'));
 });
 
 test('auth key rejects bad input without echoing content', async () => {
@@ -340,22 +372,20 @@ test('auth key rejects bad input without echoing content', async () => {
 	assert.deepEqual(printed, []);
 });
 
-test('auth logout removes the stored credential, key or token', async () => {
+const LOGGED_OUT = 'Every stored account removed (keys, tokens and logins). Environment variables are not touched. "claude auth remove <account>" removes one.';
+
+test('auth logout removes every stored account', async () => {
 	const {command, ctx, printed, dataDir} = await setup({env: {}});
 	await command.run(['auth', 'logout'], ctx);
-	assert.deepEqual(printed, ['No stored credential.']);
+	assert.deepEqual(printed, ['No stored account.']);
 	printed.length = 0;
 	await storeOauthToken(dataDir, OAUTH);
-	await command.run(['auth', 'logout'], ctx);
-	assert.deepEqual(printed, ['Stored credential removed. Environment variables are not touched.']);
-	assert.ok(!(await readdir(dataDir)).includes('credentials.json'));
-	printed.length = 0;
 	const {file} = await keyFile(KEY);
 	await command.run(['auth', 'key', '--from-file', file], ctx);
 	printed.length = 0;
 	await command.run(['auth', 'logout'], ctx);
-	assert.deepEqual(printed, ['Stored credential removed. Environment variables are not touched.']);
-	assert.ok(!(await readdir(dataDir)).includes('credentials.json'));
+	assert.deepEqual(printed, [LOGGED_OUT]);
+	assert.ok(!(await readdir(dataDir)).includes('accounts.json'));
 });
 
 test('auth login needs a terminal handoff; the token goes to credentials.json only when it looks right', async () => {
@@ -363,8 +393,8 @@ test('auth login needs a terminal handoff; the token goes to credentials.json on
 	await assert.rejects(async () => command.run(['auth', 'login'], ctx), /needs an interface that can hand over the terminal/);
 	await assert.rejects(storeOauthToken(dataDir, 'sk-ant-api03-notatoken'), /not a subscription token/);
 	await storeOauthToken(dataDir, `  ${OAUTH}\n`);
-	const file = join(dataDir, 'credentials.json');
-	assert.equal(JSON.parse(await readFile(file, 'utf8')).value, OAUTH);
+	const file = join(dataDir, 'accounts.json');
+	assert.equal(JSON.parse(await readFile(file, 'utf8')).accounts[0].value, OAUTH);
 	assert.equal((await stat(file)).mode & 0o777, 0o600);
 });
 
@@ -380,7 +410,7 @@ test('claude memory opens an md file through the terminal handoff', async () => 
 test('auth without or with unknown subcommand fails with usage', async () => {
 	const {command, ctx} = await setup();
 	for (const args of [['auth'], ['auth', 'nope']]) {
-		await assert.rejects(async () => command.run(args, ctx), {message: 'Usage: claude auth <status|key|logout|login>'});
+		await assert.rejects(async () => command.run(args, ctx), {message: 'Usage: claude auth <status|accounts|login|key|order|use|remove|logout>'});
 	}
 });
 
@@ -418,7 +448,8 @@ test('only credentials.ts reads credential env values or credential files', asyn
 	const offenders: string[] = [];
 	for (const file of await listSources(dir)) {
 		const name = file.slice(dir.length + 1);
-		if (name === 'credentials.ts') continue;
+		// The accounts store and its front end are the two places that handle credentials.
+		if (name === 'credentials.ts' || name === 'accounts.ts') continue;
 		const lines = (await readFile(file, 'utf8')).split('\n');
 		lines.forEach((line, i) => {
 			const code = line.replace(/\/\/.*$/, '');
@@ -566,7 +597,7 @@ test('auth status, key and logout are logged with labels only', async () => {
 	await command.run(['auth', 'status'], ctx);
 	const status = log.records.find(r => r.msg === 'auth status')!;
 	assert.equal(status.level, 'info');
-	assert.deepEqual(status.fields, {kind: 'api-key', source: 'env', others: [], login: undefined});
+	assert.deepEqual(status.fields, {kind: 'api-key', source: 'env', accounts: 1, limited: 0});
 
 	await command.run(['auth', 'logout'], ctx);
 	assert.deepEqual(log.records.find(r => r.msg === 'stored credential removed')!.fields, {removed: false});
@@ -593,6 +624,33 @@ test('ask limit failure logs the failure kind and no reason', async () => {
 	assert.ok(!JSON.stringify(log.records).includes('hit your limit'));
 });
 
+test('ask at a usage limit goes on with the next account in the same session', async () => {
+	const OAUTH2 = 'sk-ant-oat-SECONDVALUE0123456789abcdef';
+	const limited = [
+		{type: 'system', subtype: 'init', session_id: SID1, model: 'claude-test-1', apiKeySource: 'x'},
+		{type: 'rate_limit_event', rate_limit_info: {status: 'rejected', resetsAt: Math.floor(Date.now() / 1000) + 3600, rateLimitType: 'five_hour'}},
+		{type: 'assistant', error: 'rate_limit', message: {content: [{type: 'text', text: "You've hit your limit · resets 3pm"}]}},
+		{type: 'result', subtype: 'success', is_error: true, result: 'x', session_id: SID1},
+	];
+	const q = makeQuery((_c, n) => (n === 1 ? limited : okMsgs(SID1, 'answer')));
+	const {command, ctx, printed, dataDir} = await setup({env: {}, loadQuery: async () => q.query});
+	await storeOauthToken(dataDir, OAUTH, 'work');
+	await storeOauthToken(dataDir, OAUTH2, 'spare');
+	await command.run(['ask', 'hi'], ctx);
+	assert.ok(printed.includes('Account "work" reached its usage limit; continuing with "spare".'));
+	assert.ok(printed.includes('answer'));
+	assert.equal(q.calls.length, 2);
+	assert.equal((q.calls[0]!.options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN, OAUTH);
+	assert.equal((q.calls[1]!.options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN, OAUTH2);
+	assert.equal(q.calls[1]!.options.resume, SID1);
+	assert.equal(q.calls[1]!.prompt, CONTINUE_TEXT);
+	const file = JSON.parse(await readFile(join(dataDir, 'accounts.json'), 'utf8'));
+	assert.equal(file.limits.work.reason, 'usage-limit');
+	// The next ask starts on the account that still has quota.
+	await command.run(['ask', 'again'], ctx);
+	assert.equal((q.calls[2]!.options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN, OAUTH2);
+});
+
 const EMAIL = 'owner.person@example.com';
 
 const loginSetup = async (over: {env?: NodeJS.ProcessEnv; status?: LoginStatus; runOk?: boolean; afterRun?: LoginStatus; logoutOk?: boolean; token?: string; log?: ReturnType<typeof makeFakeLog>} = {}) => {
@@ -604,6 +662,13 @@ const loginSetup = async (over: {env?: NodeJS.ProcessEnv; status?: LoginStatus; 
 	const logouts: Array<{bin: string; env: Record<string, string | undefined>}> = [];
 	let status: LoginStatus | undefined = over.status;
 	let probes = 0;
+	// What Claude Code's login leaves in its config dir (yena reads it to keep the login as an account).
+	const signIn = async (dataDir: string) => {
+		await mkdir(join(dataDir, 'config'), {recursive: true});
+		await writeFile(join(dataDir, 'config', '.credentials.json'), JSON.stringify({claudeAiOauth: {accessToken: 'LOGIN-ACCESS', refreshToken: 'LOGIN-REFRESH'}}));
+		await writeFile(join(dataDir, 'config', '.claude.json'), JSON.stringify({oauthAccount: {emailAddress: EMAIL, accountUuid: 'uuid-1'}}));
+	};
+	let pendingSignIn = false;
 	const s = await setup({
 		env: over.env ?? {},
 		moduleDir,
@@ -612,7 +677,10 @@ const loginSetup = async (over: {env?: NodeJS.ProcessEnv; status?: LoginStatus; 
 			probe: async () => (probes++, status),
 			run: (bin, args, env) => {
 				runs.push({bin, args, env});
-				if (over.runOk !== false && over.afterRun) status = over.afterRun;
+				if (over.runOk !== false && over.afterRun) {
+					status = over.afterRun;
+					pendingSignIn = args[0] === 'auth';
+				}
 				return over.runOk !== false;
 			},
 			wait: () => {},
@@ -624,8 +692,18 @@ const loginSetup = async (over: {env?: NodeJS.ProcessEnv; status?: LoginStatus; 
 			},
 		},
 	});
+	if (over.status?.loggedIn) await signIn(s.dataDir);
 	const suspended: string[] = [];
-	const ctx: CommandContext = {...s.ctx, suspend: async <T,>(fn: () => T | Promise<T>) => (suspended.push('s'), fn())};
+	const ctx: CommandContext = {
+		...s.ctx,
+		suspend: async <T,>(fn: () => T | Promise<T>) => {
+			suspended.push('s');
+			const out = await fn();
+			if (pendingSignIn) await signIn(s.dataDir);
+			pendingSignIn = false;
+			return out;
+		},
+	};
 	return {...s, ctx, plain: s.ctx, runs, logouts, suspended, probes: () => probes, moduleDir};
 };
 
@@ -648,7 +726,7 @@ test('auth login --token runs setup-token with the CLI env and keeps the old flo
 	assert.equal(s.runs[0]!.env.ANTHROPIC_API_KEY, undefined);
 	assert.equal(s.runs[0]!.env.CLAUDE_CONFIG_DIR, join(s.dataDir, 'config'));
 	assert.ok(printed.includes('Login cancelled; nothing was saved.'));
-	assert.ok(!(await readdir(s.dataDir)).includes('credentials.json'));
+	assert.ok(!(await readdir(s.dataDir)).includes('accounts.json'));
 });
 
 test('browser login success passes exact args and a credential-free env', async () => {
@@ -662,9 +740,9 @@ test('browser login success passes exact args and a credential-free env', async 
 	assert.equal(s.runs[0]!.env.CLAUDE_CONFIG_DIR, join(s.dataDir, 'config'));
 	assert.equal(s.runs[0]!.env.DISABLE_AUTOUPDATER, '1');
 	const out = s.printed.join('\n');
-	assert.match(out, /Signed in with Claude Code \(claude\.ai\)/);
+	assert.match(out, /Signed in with Claude Code \(claude\.ai\) as account "owner\.person@example\.com"/);
 	assert.ok(out.includes(join(s.dataDir, 'config', '.credentials.json')));
-	assert.match(out, /Note: the login is not used while another source has priority/);
+	assert.match(out, /Note: "owner\.person@example\.com" is used after API key \(from environment\) in priority order/);
 	assert.deepEqual(log.records.find(r => r.msg === 'claude login started')!.fields, {method: 'console', sso: true, email: true});
 	assert.deepEqual(log.records.find(r => r.msg === 'claude login finished')!.fields, {
 		exitOk: true,
@@ -680,9 +758,14 @@ test('browser login without an env source makes the login active and shows the n
 	const s = await loginSetup({afterRun: SIGNED_IN});
 	await s.command.run(['auth', 'login'], s.ctx);
 	assert.deepEqual(s.runs[0]!.args, ['auth', 'login']);
-	assert.ok(s.printed.includes('Active credential: Claude subscription (Claude Code login)'));
+	assert.ok(s.printed.some(l => l.startsWith('Signed in with Claude Code (claude.ai) as account "owner.person@example.com"')));
 	assert.ok(!s.printed.some(l => l.startsWith('Note:')));
 	assert.equal(s.printed.filter(l => l.startsWith('Notice:')).length, 1);
+	const slot = JSON.parse(await readFile(join(s.dataDir, 'accounts', EMAIL, 'login.json'), 'utf8'));
+	assert.equal(slot.credentials.claudeAiOauth.accessToken, 'LOGIN-ACCESS');
+	s.printed.length = 0;
+	await s.command.run(['auth', 'status'], s.plain);
+	assert.equal(s.printed[0], `Active credential: account "${EMAIL}": Claude subscription (Claude Code login)`);
 });
 
 test('browser login that does not finish changes nothing', async () => {
@@ -733,26 +816,25 @@ test('auth status shows the login with subscription and email on screen only', a
 	const s = await loginSetup({status: SIGNED_IN, log});
 	await storeOauthToken(s.dataDir, OAUTH);
 	await s.command.run(['auth', 'status'], s.ctx);
-	assert.equal(s.printed[0], 'Active credential: Claude subscription (Claude Code login)');
-	assert.ok(s.printed.includes(`Claude Code login: signed in (claude.ai, max, ${EMAIL})`));
-	assert.ok(s.printed.includes('Other available sources: stored credential (credentials.json)'));
-	assert.equal(s.probes(), 1);
+	assert.equal(s.printed[0], `Active credential: account "${EMAIL}": Claude subscription (Claude Code login)`);
+	assert.ok(s.printed.some(l => l.includes(`Claude Code login (subscription, ${EMAIL})`)));
+	assert.ok(s.printed.some(l => /^ {2}2\. token +subscription token$/.test(l)));
 	const rec = log.records.find(r => r.msg === 'auth status')!;
-	assert.deepEqual(rec.fields, {kind: 'oauth', source: 'claude-login', others: ['stored credential (credentials.json)'], login: 'claude.ai'});
+	assert.deepEqual(rec.fields, {kind: 'oauth', source: 'claude-login', accounts: 2, limited: 0});
 	assert.ok(!serialized(log).includes(EMAIL));
 });
 
 test('auth status names the login among other sources when an env key has priority', async () => {
 	const s = await loginSetup({status: SIGNED_IN, env: {ANTHROPIC_API_KEY: KEY}});
 	await s.command.run(['auth', 'status'], s.ctx);
-	assert.ok(s.printed.includes('Other available sources: Claude Code login'));
+	assert.ok(s.printed.some(l => /^ {2}2\. owner\.person@example\.com +Claude Code login/.test(l)));
 });
 
 test('auth key notes that a login shadows the stored key', async () => {
 	const s = await loginSetup({status: SIGNED_IN});
 	const {file} = await keyFile(KEY);
 	await s.command.run(['auth', 'key', '--from-file', file], s.ctx);
-	assert.ok(s.printed.some(l => l.startsWith('Note: the stored key is not used while another source has priority')));
+	assert.ok(s.printed.some(l => l.startsWith(`Note: "key" is used after account "${EMAIL}": Claude subscription (Claude Code login)`)));
 });
 
 test('ask with a login source: env without credentials, footer says subscription login', async () => {
@@ -767,21 +849,21 @@ test('ask with a login source: env without credentials, footer says subscription
 test('auth subcommand description lists the login options within the hint limit', () => {
 	const command = createClaudeCommand({dataDir: '/nonexistent', env: {}, loadQuery: async () => (() => []) as unknown as QueryFn});
 	const auth = command.subcommands!.find(x => x.name === 'auth')!;
-	assert.match(auth.description!, /login \[--console\|--sso\|--email <address>\|--token\]/);
+	assert.match(auth.description!, /login \[--name <n>\] \[--console\|--sso\|--email <a>\|--token\]/);
 	assert.match(auth.description!, /key --from-file <path>/);
 	assert.ok(auth.description!.length <= 200);
 });
 
-test('auth login --token stores the pasted token in credentials.json at 0600', async () => {
+test('auth login --token stores the pasted token as an account at 0600', async () => {
 	const s = await loginSetup({token: OAUTH});
 	await s.command.run(['auth', 'login', '--token'], s.ctx);
-	const file = join(s.dataDir, 'credentials.json');
-	const body = JSON.parse(await readFile(file, 'utf8'));
+	const file = join(s.dataDir, 'accounts.json');
+	const body = JSON.parse(await readFile(file, 'utf8')).accounts[0];
 	assert.equal(body.kind, 'oauth');
 	assert.equal(body.value, OAUTH);
 	assert.equal((await stat(file)).mode & 0o777, 0o600);
 	assert.ok(!(await readdir(s.dataDir)).includes('.token'));
-	assert.ok(s.printed.includes(`Subscription token stored in ${file} (mode 0600), replacing any stored API key. New chats use it unless an environment variable or a Claude Code login takes priority.`));
+	assert.ok(s.printed.includes(`Subscription token stored as account "token" in ${file} (mode 0600).`));
 	assert.ok(!s.printed.join('\n').includes(OAUTH));
 });
 
@@ -792,5 +874,5 @@ test('auth key with an OAuth token file points to "auth login --token" and does 
 		async () => s.command.run(['auth', 'key', '--from-file', file], s.ctx),
 		(e: Error) => e.message.includes('claude auth login --token') && !e.message.includes(OAUTH),
 	);
-	assert.ok(!(await readdir(s.dataDir)).includes('credentials.json'));
+	assert.ok(!(await readdir(s.dataDir)).includes('accounts.json'));
 });

@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import type {Options, SDKMessage, SDKUserMessage} from '@anthropic-ai/claude-agent-sdk';
 import {AUTH_MESSAGE, RESUME_MESSAGE} from '../../src/session.js';
 import type {ChatQueryFn} from '../../src/types.js';
-import {ChatSession} from '../../src/chat/chat-session.js';
+import {CONTINUE_TEXT, ChatSession} from '../../src/chat/chat-session.js';
 import type {ChatEvent} from '../../src/chat/events.js';
 import {MAX_QUEUE, PERMISSION_IDLE_MS, type PermissionDecision, type PermissionPrompter, type PermissionRequest} from '../../src/chat/permission.js';
 import type {Clock} from '../../src/chat/limits.js';
@@ -70,7 +70,9 @@ class FakeQuery {
 	}
 }
 
-const setup = (o: {timeoutMs?: number; graceMs?: number; initialResume?: string; clock?: Clock} = {}) => {
+const setup = (
+	o: {timeoutMs?: number; graceMs?: number; initialResume?: string; clock?: Clock; onUsageLimit?: ConstructorParameters<typeof ChatSession>[0]['onUsageLimit']} = {},
+) => {
 	const log = makeFakeLog();
 	const queries: FakeQuery[] = [];
 	const resumes: Array<string | undefined> = [];
@@ -864,6 +866,46 @@ test('a usage limit ends the turn as limit, keeps the session and the query', as
 	assert.equal(record?.fields['failure'], 'usage-limit');
 	assert.ok(log.records.some(r => r.msg === 'rate limit' && r.fields['status'] === 'rejected' && r.fields['pct'] === 100));
 	assert.ok(!JSON.stringify(log.records).includes('hit your limit'));
+	session.close();
+});
+
+test('a usage limit with another account restarts Claude Code in the same session and continues the turn', async () => {
+	const asked: unknown[] = [];
+	let left = 1;
+	const {session, queries, resumes, ends, events} = setup({
+		clock,
+		onUsageLimit: p => {
+			asked.push(p);
+			return left-- > 0 ? {from: 'work', to: 'spare'} : undefined;
+		},
+	});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit(rejected());
+	queries[0]?.emit(limitError());
+	queries[0]?.emit(errResult({result: CLI_TEXT}));
+	await tick();
+	assert.deepEqual(ends(), [], 'the turn goes on');
+	assert.equal(session.state, 'running');
+	assert.deepEqual(asked, [{reason: 'usage-limit', rateLimit: {status: 'rejected', resetsAt: NOW_S + 3600, type: 'five_hour', utilization: 1}}]);
+	assert.deepEqual(events.find(e => e.type === 'account'), {type: 'account', account: 'spare', previous: 'work', reason: 'usage-limit'});
+	assert.equal(queries.length, 2);
+	assert.equal(queries[0]?.closed, 1, 'the limited process is closed');
+	assert.deepEqual(resumes, [undefined, 'sess-1'], 'the new process resumes the session');
+	await tick();
+	const pushed = queries[1]?.sent[0] as {message: {content: string}};
+	assert.equal(pushed.message.content, CONTINUE_TEXT);
+	assert.equal(events.filter(e => e.type === 'sent').length, 1, 'the continue message is not shown as typed');
+	queries[1]?.emit(init());
+	queries[1]?.emit(ok());
+	await tick();
+	assert.deepEqual(ends().map(e => (e as {outcome: string}).outcome), ['ok']);
+	// The next limit has no account left: the turn ends as before.
+	session.send('two');
+	queries[1]?.emit(limitError());
+	queries[1]?.emit(errResult({result: CLI_TEXT}));
+	await tick();
+	assert.equal((ends()[1] as {outcome: string}).outcome, 'limit');
 	session.close();
 });
 

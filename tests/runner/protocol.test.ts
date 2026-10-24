@@ -82,6 +82,14 @@ test('a runner event with a permission request is validated and rebuilt', () => 
 	assert.throws(() => createDecoder('toClient').push(line(broken)), ProtocolError);
 });
 
+test('an account switch event crosses the protocol; an unknown reason does not', () => {
+	const frame: RunnerFrame = {v: 1, type: 'event', event: {type: 'account', account: 'spare', previous: 'work', reason: 'usage-limit'}};
+	const [back] = createDecoder('toClient').push(encodeFrame(frame));
+	assert.deepEqual(back, frame);
+	const broken = {v: 1, type: 'event', event: {type: 'account', account: 'spare', previous: 'work', reason: 'other'}};
+	assert.throws(() => createDecoder('toClient').push(line(broken)), ProtocolError);
+});
+
 test('open, applyLive and stateUpdate frames keep only known fields', () => {
 	const dec = createDecoder('toRunner');
 	const [open, patch] = dec.push(

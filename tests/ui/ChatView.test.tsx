@@ -1156,8 +1156,8 @@ test('the indicator disappears by itself when the reset time passes', async () =
 	const t = limitSetup(clock);
 	await t.settle();
 	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed_warning', type: 'five_hour', utilization: 0.5, resetsAt: start / 1000 + 1.5}});
-	// A window wide enough for a loaded test run to render before the reset time.
-	await t.settle(5);
+	// The reset is 1.5 s away: wide enough to wait for a full render first.
+	await t.settle();
 	assert.match(t.bars.at(-1)![1] ?? '', /5h limit/);
 	await new Promise(r => setTimeout(r, Math.max(0, start + 1700 - Date.now())));
 	await t.settle();

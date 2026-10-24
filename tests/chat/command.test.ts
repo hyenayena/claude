@@ -1086,6 +1086,9 @@ test('chat with a Claude Code login: no credentials in the child env, login labe
 			await done;
 		},
 	});
+	// The login Claude Code keeps in its config dir; yena takes it as an account.
+	await mkdir(join(s.dataDir, 'config'), {recursive: true});
+	await writeFile(join(s.dataDir, 'config', '.credentials.json'), JSON.stringify({claudeAiOauth: {accessToken: 'A', refreshToken: 'R'}}));
 	await s.command.run(['chat'], s.ctx);
 	assert.deepEqual(labels, ['subscription login']);
 	const env = s.q.calls[0]!.options.env as Record<string, string | undefined>;

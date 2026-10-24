@@ -186,6 +186,8 @@ describe('ask policy snapshot', () => {
 					'Edit(./CLAUDE.local.md)',
 					'Edit(./.claude/**)',
 					`Read(/${paths.credentialsFile})`,
+					`Read(/${path.join(path.dirname(paths.credentialsFile), 'accounts.json')})`,
+					`Read(/${path.join(path.dirname(paths.credentialsFile), 'accounts')}/**)`,
 					`Read(/${paths.stateFile})`,
 					`Read(/${paths.configDir}/.credentials.json)`,
 					`Read(/${paths.configDir}/.claude.json)`,

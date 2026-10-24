@@ -487,6 +487,13 @@ export const readChatEvent = (v: unknown): ChatEvent => {
 			return {type: 'sent', text: str(o.text, 'text')};
 		case 'title':
 			return {type: 'title', title: str(o.title, 'title', 4096)};
+		case 'account':
+			return {
+				type: 'account',
+				account: str(o.account, 'account', 64),
+				previous: str(o.previous, 'previous', 64),
+				reason: oneOf(o.reason, ['usage-limit', 'billing'] as const, 'reason'),
+			};
 		default:
 			return fail('chat event type');
 	}

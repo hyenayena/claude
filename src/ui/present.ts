@@ -305,6 +305,11 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 			return formatAudit(out.entry, scrub, reveal);
 		case 'mode':
 			return formatModeLine(out.mode, out.error, scrub);
+		case 'account':
+			return formatNotice(
+				`Account "${out.previous}" ${out.reason === 'billing' ? 'cannot be billed' : 'reached its usage limit'}; continuing with "${out.account}".`,
+				scrub,
+			);
 		case 'thinking':
 			return formatThinking(out.text, scrub);
 		case 'task':

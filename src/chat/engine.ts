@@ -2,7 +2,8 @@ import type {CommandBridge, Logger} from '../../../../src/api.js';
 import {withPatch, type ChatTuning, type LivePatch} from '../chat-prefs.js';
 import {buildChatOptions, buildEnv, ensureMdLinks, resolvePaths, withProjects, type ClaudePaths} from '../config.js';
 import type {LoginProbe} from '../claude-login.js';
-import {makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
+import {accountsCtx, allSecrets, makeRedactor, prepareCredential, registerLogRedaction, requireCredential} from '../credentials.js';
+import {chooseAccount, markLimited} from '../accounts.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {buildScope} from '../policy.js';
 import type {ChatQueryFn, ClaudeState, Credential} from '../types.js';
@@ -80,6 +81,10 @@ export type ChatEngine = {
 	flush: () => Promise<void>;
 };
 
+// How long an account stays aside when the limit report gives no reset time, and after a billing error.
+const LIMIT_HOLD_S = 5 * 3600;
+const BILLING_HOLD_S = 24 * 3600;
+
 export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: EngineIo): Promise<ChatEngine> => {
 	const {fresh, model, tuning, resume: chosen, fork, resumeAt} = open;
 	const {dataDir, env, store} = deps;
@@ -92,7 +97,8 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		throw err;
 	}
 	registerLogRedaction(log, cred);
-	const redact = makeRedactor(cred);
+	const credOpts = {env, dataDir};
+	const redact = makeRedactor(cred, allSecrets(credOpts));
 	const scrub = makeScrub(redact);
 	const reveal = makeReveal(redact);
 	await deps.onCredential?.(cred);
@@ -178,7 +184,12 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 				.catch(() => io.warn('Warning: could not save the permission rule'));
 		},
 		...(state.chatPermissionMode && {initialMode: state.chatPermissionMode}),
-		buildOptions: (abortController, id, prompter) => ({
+		// The account is chosen again at every start of Claude Code (a limit may have passed or been hit),
+		// under the session lock, so a login can be swapped into the config dir safely.
+		buildOptions: (abortController, id, prompter) => {
+			cred = prepareCredential(credOpts);
+			registerLogRedaction(log, cred);
+			return {
 			...buildChatOptions({
 				paths,
 				cred,
@@ -211,7 +222,21 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			...(firstSpawn() && {...(fork && {forkSession: true}), ...(resumeAt && {resumeSessionAt: resumeAt})}),
 			permissionMode: sdkPermissionMode(prompter.mode),
 			hooks: policyHooks(scope, paths.configDir),
-		}),
+			};
+		},
+		onUsageLimit: ({reason, rateLimit}) => {
+			const current = cred.account;
+			if (current === undefined) return undefined;
+			const ctx = accountsCtx(credOpts);
+			const now = Date.now() / 1000;
+			const until =
+				reason === 'billing' ? now + BILLING_HOLD_S : rateLimit?.resetsAt !== undefined && rateLimit.resetsAt > now ? rateLimit.resetsAt : now + LIMIT_HOLD_S;
+			markLimited(ctx, current, until, reason);
+			const next = chooseAccount(ctx);
+			log.info('account limited', {reason, next: next !== undefined && next.limitedUntil === undefined && next.name !== current});
+			if (!next || next.limitedUntil !== undefined || next.name === current) return undefined;
+			return {from: current, to: next.name};
+		},
 	});
 	created = session;
 
@@ -259,7 +284,10 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 
 	return {
 		session,
-		cred,
+		// The account in use now: it changes when a limit switches it.
+		get cred() {
+			return cred;
+		},
 		redact,
 		scrub,
 		reveal,

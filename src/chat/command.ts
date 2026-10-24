@@ -3,7 +3,7 @@ import {tuningFromState, type ChatTuning, type LivePatch} from '../chat-prefs.js
 import type {LoginProbe} from '../claude-login.js';
 import {clockTime} from '../clock-time.js';
 import {resolvePaths, type ClaudePaths} from '../config.js';
-import {makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
+import {allSecrets, makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
 import {clip, errClass, noopLog} from '../log.js';
 import type {spawnRunner} from '../runner/spawn.js';
 import type {LockInfo} from '../sessions/lock.js';
@@ -263,7 +263,7 @@ const openRemote = async (
 		throw err;
 	}
 	registerLogRedaction(log, cred);
-	const redact = makeRedactor(cred);
+	const redact = makeRedactor(cred, allSecrets({env: deps.env, dataDir: deps.dataDir}));
 	const scrub = makeScrub(redact);
 	await deps.showNoticeOnce(cred, ctx);
 	let chatUi: ChatUi;

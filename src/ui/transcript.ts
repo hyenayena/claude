@@ -67,6 +67,8 @@ export interface TranscriptState {
 	limit?: RateLimitInfo;
 	// Held until the turn ends: a limit or context outcome already says it all.
 	pendingApiError?: string;
+	// The account the chat switched to after a limit (shown in the status bar).
+	account?: string;
 }
 
 // Raw (unscrubbed) items; present.ts turns them into display strings.
@@ -78,6 +80,7 @@ export type Out =
 	| {kind: 'outcome'; outcome: Exclude<TurnOutcome, 'ok'>; error?: string}
 	| {kind: 'audit'; entry: AuditEntry}
 	| {kind: 'mode'; mode: ChatMode; error?: string}
+	| {kind: 'account'; account: string; previous: string; reason: 'usage-limit' | 'billing'}
 	| {kind: 'thinking'; text: string}
 	| {kind: 'task'; status: string; description: string; summary?: string}
 	| {kind: 'blank'};
@@ -270,6 +273,11 @@ export function reduceTranscript(state: TranscriptState, event: ChatEvent): Step
 		case 'sent':
 		case 'title':
 			return {state, out: []};
+		case 'account':
+			return {
+				state: {...state, account: event.account, limit: undefined},
+				out: [{kind: 'account', account: event.account, previous: event.previous, reason: event.reason}],
+			};
 		case 'mode':
 			if (event.mode === state.mode && !event.error) return {state, out: []};
 			return {
