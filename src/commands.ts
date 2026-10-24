@@ -1,4 +1,4 @@
-import {constants} from 'node:fs';
+import {accessSync, constants} from 'node:fs';
 import {appendFile, lstat, mkdir, open, realpath, stat, writeFile} from 'node:fs/promises';
 import path, {join, resolve} from 'node:path';
 import type {Command, CommandContext, Logger, SettingsTab, Subcommand} from '../../../src/api.js';
@@ -32,7 +32,7 @@ import {
 	storeApiKey,
 	storeOauthToken,
 } from './credentials.js';
-import {editFile, readHidden, runInteractive, waitForEnter} from './terminal.js';
+import {editFile, readHidden, runInteractive, runInteractiveStatus, waitForEnter} from './terminal.js';
 import {clip, errClass, noopLog} from './log.js';
 import {openChat, runChat, type ChatOpen, type ChatRoute, type ChatRouteRequest, type ChatRunDeps, type ChatUi} from './chat/command.js';
 import {makeScrub} from './chat/scrub.js';
@@ -65,6 +65,8 @@ export type ClaudeDeps = {
 	chatTiming?: Pick<ChatRunDeps, 'waitPollMs' | 'remote'>;
 	loadUi?: () => Promise<ChatUi>;
 	moduleDir?: string;
+	// Runs bin/claude on the terminal for "claude code"; replaceable so tests never start the CLI.
+	runCode?: (bin: string, args: string[], env: NodeJS.ProcessEnv) => number | undefined;
 	// Private directory for the single-session lock and control socket; absent or throwing means no global lock.
 	sessionDir?: () => string;
 	log?: Logger;
@@ -81,7 +83,7 @@ export type ClaudeDeps = {
 	};
 };
 
-const USAGE = 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|tasks|mcp|session|sessions|stop|auth|<Claude Code command>>';
+const USAGE = 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|auth|<Claude Code command>>';
 const RESUME_USAGE = 'Usage: claude resume [session]';
 const NO_CHAT = 'No chat is open. Claude Code commands run in the open chat; start one with "chat".';
 const ASK_USAGE = 'Usage: claude ask [--new] <text>';
@@ -184,6 +186,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			return bin ? probeLogin({bin, env: cliEnv(env, loginPaths())}) : undefined;
 		});
 	const runCli = deps.login?.run ?? ((bin, args, e) => runInteractive(bin, args, e));
+	const runCode = deps.runCode ?? runInteractiveStatus;
 	const wait = deps.login?.wait ?? waitForEnter;
 	const readSecret = deps.login?.readSecret ?? readHidden;
 	const logoutCli = deps.login?.logout ?? ((bin, e) => runLogout({bin, env: e}));
@@ -1013,6 +1016,22 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await printActive(ctx);
 	};
 
+	// Runs the Claude Code CLI (bin/claude) on the terminal; arguments go to it as they are, without a shell.
+	const code = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (!ctx.suspend) throw new Error('"claude code" needs an interface that can hand over the terminal');
+		const bin = join(loginPaths().moduleDir, 'bin', 'claude');
+		try {
+			accessSync(bin, constants.X_OK);
+		} catch {
+			throw new Error('Claude Code wrapper not found or not executable. Run modules/claude/bin/install.');
+		}
+		const status = await ctx.suspend(() => runCode(bin, args, env));
+		log.info('claude code finished', {args: args.length, status});
+		if (status === 0) return;
+		if (!ctx.headless) wait('\nClaude Code did not finish cleanly. Press Enter to return to yena. ');
+		throw new Error(status === undefined ? 'Claude Code did not run to completion (it did not start or was stopped by a signal)' : `Claude Code exited with status ${status}`);
+	};
+
 	const authLogin = async (rawArgs: string[], ctx: CommandContext): Promise<void> => {
 		const {name, rest: args} = takeName(rawArgs);
 		const request = parseLoginArgs(args);
@@ -1231,6 +1250,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		{name: 'export', usage: 'claude export [file]', description: 'Save the current chat as Markdown', agent: 'confirm'},
 		{name: 'copy', usage: 'claude copy [N]', description: "Copy Claude's last (or Nth last) answer to the clipboard", agent: 'deny'},
 		{name: 'memory', usage: 'claude memory [file]', description: 'Edit CLAUDE.md (or another md instruction file) in your editor', agent: 'deny'},
+		{name: 'code', usage: 'claude code [args…]', description: 'Run the Claude Code CLI in this terminal (bin/claude; arguments are passed on)', agent: 'deny'},
 		{name: 'tasks', usage: 'claude tasks', description: 'Background tasks and subagents of the chat; pick one to stop it', agent: 'safe'},
 		{name: 'mcp', usage: 'claude mcp [reconnect <server>]', description: 'MCP servers of the chat and their status', agent: 'safe'},
 		{name: 'session', usage: 'claude session', description: 'Show the current session, model and runtime', agent: 'safe'},
@@ -1315,6 +1335,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 					return copyAnswer(args, ctx);
 				case 'memory':
 					return memory(args, ctx);
+				case 'code':
+					return code(args, ctx);
 				case 'tasks':
 					return tasksCmd(args, ctx);
 				case 'mcp':

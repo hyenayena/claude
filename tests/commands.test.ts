@@ -407,6 +407,48 @@ test('claude memory opens an md file through the terminal handoff', async () => 
 	assert.deepEqual(opened, []);
 });
 
+const codeSetup = async (status: number | undefined, wrapper = true) => {
+	const moduleDir = await mkdtemp(join(tmpdir(), 'claude-code-'));
+	if (wrapper) {
+		await mkdir(join(moduleDir, 'bin'));
+		await writeFile(join(moduleDir, 'bin', 'claude'), '#!/bin/sh\n', {mode: 0o755});
+	}
+	const calls: Array<{bin: string; args: string[]}> = [];
+	const waits: string[] = [];
+	const s = await setup({
+		moduleDir,
+		runCode: (bin, args) => (calls.push({bin, args}), status),
+		login: {probe: async () => undefined, wait: m => waits.push(m)},
+	});
+	const ctx = (headless: boolean): CommandContext => ({...s.ctx, headless, suspend: async <T,>(fn: () => T | Promise<T>) => fn()});
+	return {...s, plain: s.ctx, moduleDir, calls, waits, ctx};
+};
+
+test('claude code runs bin/claude with the arguments as given', async () => {
+	const s = await codeSetup(0);
+	await s.command.run(['code', '-p', 'a b', '$(x)'], s.ctx(false));
+	assert.deepEqual(s.calls, [{bin: join(s.moduleDir, 'bin', 'claude'), args: ['-p', 'a b', '$(x)']}]);
+	assert.deepEqual(s.waits, []);
+});
+
+test('claude code needs a terminal handoff and an executable wrapper', async () => {
+	const s = await codeSetup(0);
+	await assert.rejects(async () => s.command.run(['code'], s.plain), /hand over the terminal/);
+	const missing = await codeSetup(0, false);
+	await assert.rejects(async () => missing.command.run(['code'], missing.ctx(false)), /bin\/install/);
+	assert.deepEqual(missing.calls, []);
+});
+
+test('claude code reports a failing exit and waits for Enter only outside headless mode', async () => {
+	const s = await codeSetup(3);
+	await assert.rejects(async () => s.command.run(['code'], s.ctx(true)), {message: 'Claude Code exited with status 3'});
+	assert.deepEqual(s.waits, []);
+	await assert.rejects(async () => s.command.run(['code'], s.ctx(false)), {message: 'Claude Code exited with status 3'});
+	assert.equal(s.waits.length, 1);
+	const killed = await codeSetup(undefined);
+	await assert.rejects(async () => killed.command.run(['code'], killed.ctx(true)), /did not run to completion/);
+});
+
 test('auth without or with unknown subcommand fails with usage', async () => {
 	const {command, ctx} = await setup();
 	for (const args of [['auth'], ['auth', 'nope']]) {
@@ -479,7 +521,7 @@ test('commands carry agent policies', async () => {
 	const by = Object.fromEntries(command.subcommands!.map(s => [s.name, s.agent]));
 	for (const n of ['session', 'tasks', 'mcp']) assert.equal(by[n], 'safe', n);
 	for (const n of ['ping', 'rename', 'export', 'auth']) assert.equal(by[n], 'confirm', n);
-	for (const n of ['ask', 'chat', 'new', 'resume', 'rewind', 'fork', 'copy', 'memory']) assert.equal(by[n], 'deny', n);
+	for (const n of ['ask', 'chat', 'new', 'resume', 'rewind', 'fork', 'copy', 'memory', 'code']) assert.equal(by[n], 'deny', n);
 });
 
 test('the top-level chat command is denied to agents', async () => {

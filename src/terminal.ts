@@ -34,6 +34,12 @@ export function runInteractive(bin: string, args: string[], env: NodeJS.ProcessE
 	return !r.error && r.status === 0;
 }
 
+/** Runs an interactive program on the terminal; its exit status, or undefined when it did not start or a signal ended it. */
+export function runInteractiveStatus(bin: string, args: string[], env: NodeJS.ProcessEnv): number | undefined {
+	const r = spawnSync(bin, args, {stdio: 'inherit', env, shell: false});
+	return r.error || r.status === null ? undefined : r.status;
+}
+
 /** Asks for a secret on the terminal without echo; the typed line (never logged or shown). */
 export function readHidden(prompt: string): string {
 	const script = 'printf "%s" "$1" >&2; stty -echo; IFS= read -r t; stty echo; printf "\\n" >&2; printf "%s" "$t"';
