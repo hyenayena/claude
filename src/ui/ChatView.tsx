@@ -64,6 +64,8 @@ export interface ChatViewProps {
 	initialSessionId?: string;
 	// Text the input starts with (e.g. the prompt a rewind went back to).
 	initialDraft?: string;
+	// Sent once when the view mounts, as if typed and sent.
+	initialSend?: string;
 	// Project files for @ mentions (read lazily, may be empty until loaded).
 	files?: () => readonly string[];
 	// Opens the draft in an external editor (Ctrl+G); resolves with the new text, or undefined.
@@ -417,6 +419,16 @@ export function ChatView(props: ChatViewProps) {
 		}
 		if (controller.state === 'running') feed({type: 'state', state: 'running'});
 	}, [controller, feed, host, leave, print, printNotice, render, requestMode, scrub, setT]);
+
+	// "claude start <message>": the message goes out once, right after the view is up.
+	const sentInitial = useRef(false);
+	useEffect(() => {
+		const text = props.initialSend;
+		if (sentInitial.current || !text) return;
+		sentInitial.current = true;
+		edRef.current = editorReduce(emptyEditor, {type: 'insert', text});
+		submit();
+	}, [props.initialSend, submit]);
 
 	const browseHistory = useCallback(
 		(step: -1 | 1) => {

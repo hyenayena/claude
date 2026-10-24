@@ -81,7 +81,7 @@ export type ClaudeDeps = {
 	};
 };
 
-const USAGE = 'Usage: claude <ping|ask|chat|new|resume|rewind|fork|rename|export|copy|memory|tasks|mcp|session|sessions|stop|auth|<Claude Code command>>';
+const USAGE = 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|tasks|mcp|session|sessions|stop|auth|<Claude Code command>>';
 const RESUME_USAGE = 'Usage: claude resume [session]';
 const NO_CHAT = 'No chat is open. Claude Code commands run in the open chat; start one with "chat".';
 const ASK_USAGE = 'Usage: claude ask [--new] <text>';
@@ -89,6 +89,8 @@ const AUTH_USAGE = 'Usage: claude auth <status|accounts|login|key|order|use|remo
 const ORDER_USAGE = 'Usage: claude auth order <account> [<account>…]';
 const KEY_USAGE = 'Usage: claude auth key --from-file <path> [--name <account>]';
 const CHAT_NEW_USAGE = 'Usage: chat [model]';
+const START_USAGE = 'Usage: claude start <message…>';
+const START_MAX = 20_000;
 const MAX_KEY_FILE_BYTES = 4096;
 const STOP_USAGE = 'Usage: claude stop [session]';
 
@@ -613,7 +615,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	// Opening a chat replaces the one that is open.
-	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>, endIdleRemote = true): Promise<void> => {
+	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>, endIdleRemote = true, onOpened?: () => void): Promise<void> => {
 		if (askRunning) throw new Error('An ask is already running');
 		// Opening a different chat ends an idle background chat; a busy one is waited for.
 		if (endIdleRemote && openSession?.state === 'idle') openSession.end?.();
@@ -627,6 +629,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const done = start(
 			chatDeps(c => {
 				close = c;
+				onOpened?.();
 				// Deferred: the host registers the view only after `build` returns.
 				if (closeRequested) queueMicrotask(c);
 			}),
@@ -648,7 +651,37 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	const chat = (args: string[], ctx: CommandContext): Promise<void> => replaceChat(d => runChat(args, ctx, d), args.includes('--new'));
 
+	// The context of the chat's own command (autostart or typed): it can show the chat in the main area,
+	// which a command run by an assistant or the scheduler cannot.
+	let mainCtx: CommandContext | undefined;
+
+	// "claude start <message…>": a new chat that sends the message at once. Returns when the chat is up,
+	// so an assistant or the scheduler can call it; the chat itself stays open.
+	const startChat = async (args: string[], ctx: CommandContext): Promise<void> => {
+		const text = args.join(' ').trim();
+		if (text === '') throw new Error(START_USAGE);
+		if (text.length > START_MAX) throw new Error(`The message is longer than ${START_MAX} characters`);
+		if (openSession?.state === 'running') throw new Error('A chat is answering; start the new one when it is done (or press Esc in it).');
+		const view = ctx.signal ? mainCtx : ctx;
+		if (!view?.mount) throw new Error('No chat view is available; open the chat once with "chat".');
+		const state = await store.read();
+		let opened!: () => void;
+		const up = new Promise<void>(resolve => {
+			opened = resolve;
+		});
+		const running = replaceChat(
+			d => openChat({fresh: true, ...(state.chatModel && {model: state.chatModel}), tuning: tuningFromState(state), send: text}, view, d),
+			true,
+			opened,
+		);
+		running.catch(err => log.warn('started chat failed', {errClass: errClass(err)}));
+		await Promise.race([up, running]);
+		log.info('chat started with a message', {chars: text.length, byCaller: ctx.signal !== undefined});
+		ctx.print('Started a new chat with the message.');
+	};
+
 	const newChat = async (args: string[], ctx: CommandContext, attach = false): Promise<void> => {
+		if (!ctx.signal) mainCtx = ctx;
 		if (args.length > 1) throw new Error(CHAT_NEW_USAGE);
 		const requested = args[0];
 		if (requested !== undefined && !isModelId(requested)) {
@@ -1190,6 +1223,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		{name: 'ask', usage: 'claude ask [--new] <text>', description: 'Ask Claude a question (continues the last session)', agent: 'deny'},
 		{name: 'chat', usage: 'claude chat [--new]', description: 'Open an interactive chat (continues the last session)', agent: 'deny'},
 		{name: 'new', usage: 'claude new [model]', description: 'Start a new chat', agent: 'deny'},
+		{name: 'start', usage: 'claude start <message…>', description: 'Start a new chat and send it the message (the open chat is saved)', agent: 'confirm'},
 		{name: 'resume', usage: 'claude resume [session]', description: 'Continue an earlier chat (pick from a list, or give an id prefix)', agent: 'deny'},
 		{name: 'rewind', usage: 'claude rewind', description: 'Go back to before one of your messages (files and conversation)', agent: 'deny'},
 		{name: 'fork', usage: 'claude fork', description: 'Continue the current chat on a new branch', agent: 'deny'},
@@ -1265,6 +1299,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 					return chat(args, ctx);
 				case 'new':
 					return newChat(args, ctx);
+				case 'start':
+					return startChat(args, ctx);
 				case 'resume':
 					return resumeChat(args, ctx);
 				case 'rewind':

@@ -104,6 +104,8 @@ export type ChatOpen = {
 	historyUntil?: string;
 	// Text put into the input when the chat opens.
 	draft?: string;
+	// A message sent as soon as the chat opens (as if typed and sent).
+	send?: string;
 	// A background chat that is already running may be attached to instead of waiting for it.
 	attach?: boolean;
 };
@@ -188,6 +190,7 @@ type ViewSource = {
 	applyLive: (patch: LivePatch) => void;
 	initialModel: string | undefined;
 	draft: string | undefined;
+	send?: string;
 	fork: boolean;
 	historyUntil: string | undefined;
 	remote: RemoteChatSession | undefined;
@@ -238,6 +241,7 @@ const openLocal = async (open: ChatOpen, ctx: CommandContext, deps: ChatRunDeps)
 		applyLive: engine.applyLive,
 		initialModel: model !== undefined ? model : !fresh ? state.lastModel : undefined,
 		draft,
+		...(open.send && {send: open.send}),
 		fork: fork === true,
 		historyUntil,
 		remote: undefined,
@@ -350,6 +354,7 @@ const openRemote = async (
 		applyLive: patch => remote.applyLive(patch),
 		initialModel: spawned ? open.model : remote.model,
 		draft: spawned ? open.draft : undefined,
+		...(open.send && {send: open.send}),
 		fork: spawned && open.fork === true,
 		historyUntil: spawned ? open.historyUntil : undefined,
 		remote,
@@ -387,7 +392,7 @@ const runLocked = async (
 			return;
 		}
 	}
-	const {chatUi, session, cred, scrub, reveal, paths, state, resume, shellRoot, applyLive, initialModel, draft, historyUntil} = source;
+	const {chatUi, session, cred, scrub, reveal, paths, state, resume, shellRoot, applyLive, initialModel, draft, historyUntil, send} = source;
 	const startedAt = Date.now();
 
 	// Project files for @ mentions, read in the background on the first "@" of the chat.
@@ -446,6 +451,7 @@ const runLocked = async (
 				...(initialModel !== undefined && {initialModel}),
 				...(resume && !source.fork && {initialSessionId: resume}),
 				...(draft && {initialDraft: draft}),
+				...(send && {initialSend: send}),
 				files,
 				loadTranscript: async () => {
 					const id = session.sessionId;

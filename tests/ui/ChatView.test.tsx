@@ -1402,3 +1402,12 @@ test('a send refused because another session works keeps the text in the input',
 	assert.match(t.lastFrame(), /> hello there/);
 	assert.match(t.printed.join('\n'), /Another session is working right now/);
 });
+
+test('initialSend goes out once when the view mounts, shown as the user line', async () => {
+	const t = setup(undefined, 'API key', {initialSend: 'hello from the scheduler'});
+	await t.settle();
+	assert.deepEqual(t.controller.calls.sent, ['hello from the scheduler']);
+	assert.ok(t.printed.some(l => l.includes('hello from the scheduler')));
+	await t.settle();
+	assert.equal(t.controller.calls.sent.length, 1);
+});

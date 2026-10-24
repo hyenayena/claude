@@ -1139,3 +1139,20 @@ test('the chat child gets the private shell tmp root, and a failure only logs', 
 	const rec = log.records.find(r => r.msg === 'shell tmp unavailable');
 	assert.deepEqual(rec?.fields, {error: 'Error'});
 });
+
+test('claude start opens a new chat that sends the message and returns while the chat stays open', async () => {
+	let release!: () => void;
+	const hold = new Promise<void>(resolve => {
+		release = resolve;
+	});
+	const s = await setup({run: () => hold});
+	await s.command.run(['start', 'hello', 'there'], s.ctx);
+	assert.equal(s.props.at(-1)!.initialSend, 'hello there');
+	assert.ok(s.printed.includes('Started a new chat with the message.'));
+	// An assistant or the scheduler (a context with a signal) needs the chat's own view.
+	const s2 = await setup();
+	const agent: CommandContext = {print: () => {}, clear: () => {}, exit: () => {}, signal: new AbortController().signal};
+	await assert.rejects(s2.command.run(['start', 'x'], agent), /No chat view is available/);
+	await assert.rejects(s2.command.run(['start'], s2.ctx), /Usage: claude start <message…>/);
+	release();
+});
