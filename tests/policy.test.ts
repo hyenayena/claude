@@ -235,7 +235,14 @@ describe('chat static policy', () => {
 				assert.ok(!rule.startsWith(`Edit(/${paths.configDir}/${d}`), rule);
 			}
 		}
-		for (const rule of buildAskSettings(paths).permissions.deny) assert.ok(s.permissions.deny.includes(rule), rule);
+		for (const rule of buildAskSettings(paths).permissions.deny) {
+			// The chat leaves the other env files to the policy hook, so templates can be read and written.
+			if (rule === 'Read(**/.env*)' || rule === 'Read(**/id_rsa*)') continue;
+			assert.ok(s.permissions.deny.includes(rule), rule);
+		}
+		assert.ok(s.permissions.deny.includes('Read(**/.env)'));
+		assert.ok(s.permissions.deny.includes('Read(**/id_rsa)'));
+		assert.ok(!s.permissions.deny.some(r => r.includes('.env*') || r.includes('id_rsa*')));
 		for (const rule of GUARD_DENY) assert.ok(s.permissions.deny.includes(rule));
 		for (const rule of [
 			`Edit(/${paths.credentialsFile})`,
@@ -246,13 +253,27 @@ describe('chat static policy', () => {
 			`Edit(/${paths.configDir}/.claude.json)`,
 			'Edit(//proc/**)',
 			'Edit(~/.ssh/**)',
-			'Edit(**/.env*)',
+			'Edit(**/.env)',
 			'Edit(**/*.pem)',
-			'Edit(**/id_rsa*)',
+			'Edit(**/id_rsa)',
 			'Edit(./.yena/**)',
 		]) {
 			assert.ok(s.permissions.deny.includes(rule), rule);
 		}
+	});
+});
+
+describe('glob patterns', () => {
+	it('are checked by the folder they start from', async () => {
+		const ok = async (tool: string, input: Record<string, unknown>) => (await run(tool, input)).behavior;
+		assert.equal(await ok('Glob', {pattern: path.join(projectDir, '**', '*.txt')}), 'allow');
+		assert.equal(await ok('Glob', {pattern: '../' + path.basename(projectDir) + '/*.txt', path: projectDir}), 'allow');
+		assert.equal(await ok('Grep', {pattern: 'x', glob: path.join(projectDir, '*.txt')}), 'allow');
+		assert.equal(await ok('Glob', {pattern: '/etc/*'}), 'deny');
+		assert.equal(await ok('Glob', {pattern: '/**/*.txt'}), 'deny');
+		assert.equal(await ok('Glob', {pattern: '*/../../*'}), 'deny');
+		assert.equal(await ok('Glob', {pattern: '~/x/*'}), 'deny');
+		assert.equal(await ok('Grep', {pattern: 'x', glob: '/etc/**'}), 'deny');
 	});
 });
 
@@ -311,6 +332,21 @@ describe('classifyEditTarget', () => {
 
 	it('denies secrets', async () => {
 		assert.equal(await cls(f('.env')), 'deny-secret');
+		for (const name of ['.env.local', '.env.production', '.env.example.bak', '.envrc', 'sub/.env.test']) {
+			assert.equal(await cls(f(name)), 'deny-secret', name);
+		}
+		// Templates are ordinary dotfiles: asked for, never denied.
+		for (const name of ['.env.example', '.env.sample', '.env.template', '.env.dist', '.env.local.example']) {
+			assert.equal(await cls(f(name)), 'prompt-only', name);
+		}
+		assert.equal(await cls(f('sub/.env.EXAMPLE')), 'auto-eligible');
+		// Code named after env files and public keys are not secrets; every SSH private key name is.
+		for (const name of ['.env.d.ts', 'src/.environment.ts', 'docs/id_rsa.pub', 'keys/id_ed25519.pub', 'src/key.ts', 'monkey.json', '.npmrc.example']) {
+			assert.notEqual(await cls(f(name)), 'deny-secret', name);
+		}
+		for (const name of ['keys/id_ed25519', 'keys/id_ecdsa', 'id_rsa', 'k/id_dsa_old', '.env-prod', '.env_test', 'tls/server.key', 'a.P12', 'cert.pfx', '.netrc', 'sub/.npmrc', '.pgpass']) {
+			assert.equal(await cls(f(name)), 'deny-secret', name);
+		}
 		assert.equal(await cls(f('k.pem')), 'deny-secret');
 		assert.equal(await cls(staleToken), 'deny-secret');
 		assert.equal(await cls(f('.yena/other')), 'deny-secret');

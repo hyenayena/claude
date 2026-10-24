@@ -97,7 +97,22 @@ export type PolicyPaths = {
 // `auth login --console` writes primaryApiKey into .claude.json and its backups.
 export const CONFIG_SECRET = ['.credentials.json', '.claude.json', 'backups'];
 
-const SECRET_BASENAMES = [/^\.env/, /\.pem$/, /^id_rsa/];
+// Env files (`.env`, `.envrc`, `.env.local`, `.env-prod`…), PEM files and private keys, key stores
+// (`*.key`, `*.p12`, `*.pfx`), SSH private keys and files that hold login tokens (`.netrc`, `.npmrc`, `.pgpass`).
+const SECRET_BASENAMES = [
+	/^\.env(rc)?$/,
+	/^\.env[.\-_]/,
+	/\.(pem|key|p12|pfx)$/i,
+	/^id_(rsa|dsa|ecdsa|ed25519)/,
+	/^\.(netrc|npmrc|pgpass)$/,
+];
+// Templates of an env file hold no secrets by convention and are meant to be committed.
+export const ENV_TEMPLATE = /^\.env(\.[\w-]+)*\.(example|sample|template|dist)$/i;
+// Not secrets either: type declarations named after env files and public SSH keys.
+const NOT_SECRET = [ENV_TEMPLATE, /\.d\.ts$/, /^id_\w+\.pub$/];
+
+export const isSecretName = (name: string): boolean =>
+	SECRET_BASENAMES.some(re => re.test(name)) && !NOT_SECRET.some(re => re.test(name));
 
 // Claude Code permission rules: "//path" is absolute, "~/" is the home directory.
 const absRule = (p: string) => `/${p}`;
@@ -176,10 +191,16 @@ export const CONFIG_EDIT_DENY = [
 // auto mode's classifier included. Deny rules still win over these.
 export const freeEditAllow = (paths: PolicyPaths): string[] => [`Edit(${absRule(paths.hubDir ?? paths.mdDir)}/**)`];
 
+// Ask rules the chat narrows: its policy hook checks the rest by name (`isSecretName`), templates and public keys excepted.
+const CHAT_NARROWED: Record<string, string> = {'Read(**/.env*)': 'Read(**/.env)', 'Read(**/id_rsa*)': 'Read(**/id_rsa)'};
+
 export function buildChatSettings(paths: PolicyPaths): {
 	permissions: {allow: string[]; deny: string[]};
 	disableAllHooks: true;
 } {
+	// Settings rules cannot say "but not .env.example": the chat names only `.env` and `id_rsa` here and
+	// leaves the other env files and keys to the policy hook, which runs in every mode and lets the
+	// templates and public keys through (`isSecretName`).
 	const editDeny = [
 		`Edit(${absRule(paths.credentialsFile)})`,
 		`Edit(${absRule(paths.stateFile)})`,
@@ -188,14 +209,17 @@ export function buildChatSettings(paths: PolicyPaths): {
 		`Edit(${absRule(paths.configDir)}/.claude.json)`,
 		'Edit(//proc/**)',
 		'Edit(~/.ssh/**)',
-		'Edit(**/.env*)',
+		'Edit(**/.env)',
 		'Edit(**/*.pem)',
-		'Edit(**/id_rsa*)',
+		'Edit(**/id_rsa)',
 		'Edit(./.yena/**)',
 		...(paths.projects?.dataDir ? [`Edit(${absRule(paths.projects.dataDir)}/**)`] : []),
 	];
 	return {
-		permissions: {allow: freeEditAllow(paths), deny: [...buildAskSettings(paths).permissions.deny, ...editDeny]},
+		permissions: {
+			allow: freeEditAllow(paths),
+			deny: [...buildAskSettings(paths).permissions.deny.map(r => CHAT_NARROWED[r] ?? r), ...editDeny],
+		},
 		disableAllHooks: true,
 	};
 }
@@ -259,11 +283,28 @@ export async function isPathAllowed(p: string, scope: Scope): Promise<boolean> {
 	return !path
 		.relative('/', real)
 		.split(path.sep)
-		.some(seg => SECRET_BASENAMES.some(re => re.test(seg)));
+		.some(isSecretName);
 }
 
 const isPlainRelative = (pattern: string) =>
 	!path.isAbsolute(pattern) && !pattern.split(/[\\/]/).includes('..') && !pattern.startsWith('~');
+
+const GLOB_CHARS = /[*?[\]{}!]/;
+
+/**
+ * The folder a glob pattern starts from: the part before its first wildcard, resolved against the
+ * search path ("/app/src" for an absolute pattern under /app/src). Undefined when the pattern could
+ * leave that folder (".." after a wildcard, "~").
+ */
+export function globBase(pattern: string, from: string): string | undefined {
+	if (pattern.startsWith('~')) return undefined;
+	const segs = pattern.split(/[\\/]/);
+	const at = segs.findIndex(seg => GLOB_CHARS.test(seg));
+	const fixed = at < 0 ? segs : segs.slice(0, at);
+	if (at >= 0 && segs.slice(at).includes('..')) return undefined;
+	const prefix = fixed.join('/');
+	return path.resolve(from, prefix === '' && path.isAbsolute(pattern) ? '/' : prefix);
+}
 
 export function createCanUseTool(scope: Scope): CanUseTool {
 	const notAvailable = (name: string) => ({
@@ -286,13 +327,22 @@ export function createCanUseTool(scope: Scope): CanUseTool {
 				break;
 			case 'Grep':
 				if (!optionalString(input.path) || !optionalString(input.glob)) return pathDenied;
-				if (typeof input.glob === 'string' && !isPlainRelative(input.glob)) return pathDenied;
 				paths = [(input.path as string | undefined) ?? cwd];
+				if (typeof input.glob === 'string' && !isPlainRelative(input.glob)) {
+					const base = globBase(input.glob, path.resolve(cwd, paths[0]!));
+					if (base === undefined) return pathDenied;
+					paths.push(base);
+				}
 				break;
 			case 'Glob':
 				if (!optionalString(input.path) || typeof input.pattern !== 'string') return pathDenied;
-				if (!isPlainRelative(input.pattern)) return pathDenied;
 				paths = [(input.path as string | undefined) ?? cwd];
+				// An absolute pattern or one with ".." is checked by the folder it starts from.
+				if (!isPlainRelative(input.pattern)) {
+					const base = globBase(input.pattern, path.resolve(cwd, paths[0]!));
+					if (base === undefined) return pathDenied;
+					paths.push(base);
+				}
 				break;
 			default:
 				return notAvailable(toolName);
