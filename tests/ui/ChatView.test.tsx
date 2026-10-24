@@ -1254,6 +1254,15 @@ function commandFakeHost() {
 	const known = [
 		{name: 'project', description: 'Projects in the workplace', usage: 'project list'},
 		{name: 'settings', description: 'Open the settings'},
+		{
+			name: 'claude',
+			description: 'Claude Code integration',
+			subcommands: [
+				{name: 'resume', description: 'Resume a chat'},
+				{name: 'rename', description: 'Rename the chat'},
+				{name: 'compact', description: 'Claude Code: compact the context', aliases: ['c']},
+			],
+		},
 	];
 	const host = {...f.host, runLine: (line: string) => known.some(c => line.split(' ')[0] === c.name) && (ran.push(line), true), listCommands: () => known};
 	return {host, ran};
@@ -1314,6 +1323,41 @@ test('typing "/" lists matching commands; Tab or Enter takes the highlighted one
 	t.press(ENTER);
 	await t.settle();
 	assert.deepEqual(c.ran, ['settings']);
+});
+
+test('after "/claude " the hints list its subcommands; Tab takes one, Enter after a space runs the line', async () => {
+	const c = commandFakeHost();
+	const t = setup(undefined, 'API key', {host: c.host});
+	await t.settle();
+	t.press('/cla');
+	await t.settle();
+	t.press('\t');
+	await t.settle();
+	assert.match(t.lastFrame(), /> \/claude\s*$/m);
+	// The list stays and shows what comes next.
+	assert.match(t.lastFrame(), /\/claude resume +Resume a chat/);
+	assert.match(t.lastFrame(), /\/claude compact +Claude Code: compact the context/);
+	t.press('re');
+	await t.settle();
+	assert.match(t.lastFrame(), /\/claude resume/);
+	assert.match(t.lastFrame(), /\/claude rename/);
+	assert.doesNotMatch(t.lastFrame(), /\/claude compact/);
+	t.press('\u001b[B');
+	await t.settle();
+	t.press(ENTER);
+	await t.settle();
+	assert.match(t.lastFrame(), /> \/claude rename\s*$/m);
+	assert.deepEqual(c.ran, [], 'Enter on a partial word only completes it');
+	// Arguments get no hints; an alias leads to the same level as the name.
+	assert.doesNotMatch(t.lastFrame(), /Resume a chat/);
+	t.press('\u0015');
+	await t.settle();
+	t.press('/claude ');
+	await t.settle();
+	assert.match(t.lastFrame(), /Resume a chat/);
+	t.press(ENTER);
+	await t.settle();
+	assert.deepEqual(c.ran, ['claude'], 'Enter right after a space runs what is typed');
 });
 
 test('Tab with nothing to complete opens or closes the console; with suggestions it completes; Shift+Tab cycles the mode', async () => {

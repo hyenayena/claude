@@ -1,6 +1,7 @@
 // A structural copy of core's optional ViewHost members for console commands (core 0.6.0+);
 // older cores do not have them, and the chat then sends every line to Claude.
-export type ViewCommandInfo = {name: string; description: string; usage?: string};
+// `subcommands` and `aliases` come from core 0.7.0+; older cores list the top level only.
+export type ViewCommandInfo = {name: string; description: string; usage?: string; aliases?: string[]; subcommands?: ViewCommandInfo[]};
 
 export type CommandHost = {
 	runLine(line: string): boolean;

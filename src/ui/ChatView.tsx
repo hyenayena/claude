@@ -38,8 +38,8 @@ import {
 	type ToolPromptState,
 } from './prompt-state.js';
 import {QuestionPrompt} from './QuestionPrompt.js';
-import {matchCommands, parseSlash, slashQuery} from './slash.js';
-import {commandHost} from './view-commands.js';
+import {parseSlash, slashHints, type SlashHints} from './slash.js';
+import {commandHost, type ViewCommandInfo} from './view-commands.js';
 import {WorkingLine} from './WorkingLine.js';
 import {StatusBar, useViewHost} from './kit.js';
 import {mouseHost, validEvent} from './view-mouse.js';
@@ -125,6 +125,7 @@ export const rememberSent = (text: string): void => {
 export const clearSentHistory = (): void => {
 	sentHistory.length = 0;
 };
+const COMMAND_LIST_MS = 1000;
 const MODE_NAME: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept-edits', plan: 'plan', auto: 'auto'};
 
 // Claude Code's colours for the mode hint under the input.
@@ -195,6 +196,7 @@ export function ChatView(props: ChatViewProps) {
 	const mentionRef = useRef<{selected: number; dismissed: boolean}>({selected: 0, dismissed: false});
 	// "/" command hints: the highlighted command; dismissed after Esc until the text changes.
 	const commandRef = useRef<{selected: number; dismissed: boolean}>({selected: 0, dismissed: false});
+	const commandListRef = useRef<{at: number; list: ViewCommandInfo[]} | undefined>(undefined);
 	const vimRef = useRef<VimState>(vimStart);
 	// Ctrl+O: the full transcript and the first row shown (-1 means the bottom).
 	const viewerRef = useRef<{lines: string[]; top: number} | undefined>(undefined);
@@ -540,26 +542,28 @@ export function ChatView(props: ChatViewProps) {
 		return matches.length > 0 ? {start: at.start, matches} : undefined;
 	};
 
-	// The "/name" being typed and the console commands it matches, unless dismissed.
-	const activeCommand = (): {query: string; matches: {name: string; description: string}[]} | undefined => {
+	// The "/command sub…" being typed and what may come next, unless dismissed.
+	const activeCommand = (): SlashHints | undefined => {
 		if (commandRef.current.dismissed) return undefined;
 		const commands = commandHost(host);
 		if (!commands) return undefined;
 		const ed = edRef.current;
-		const query = slashQuery(ed.text, ed.cursor);
-		if (query === undefined) return undefined;
-		const matches = matchCommands(commands.listCommands(), query, MENTION_ROWS);
-		return matches.length > 0 ? {query, matches} : undefined;
+		if (!ed.text.startsWith('/')) return undefined;
+		// Listing may read command files from disk, so it is taken at most once a second while typing.
+		const now = Date.now();
+		if (!commandListRef.current || now - commandListRef.current.at > COMMAND_LIST_MS) commandListRef.current = {at: now, list: commands.listCommands()};
+		return slashHints(commandListRef.current.list, ed.text, ed.cursor, MENTION_ROWS);
 	};
 
-	const acceptCommand = (c: {matches: {name: string}[]}) => {
+	const acceptCommand = (c: SlashHints) => {
 		const choice = c.matches[Math.min(commandRef.current.selected, c.matches.length - 1)];
 		if (choice === undefined) return;
 		const ed = edRef.current;
 		undoRef.current.push(ed);
-		const text = `/${choice.name} `;
+		const text = `/${[...c.path, choice.name].join(' ')} `;
 		edRef.current = {...ed, text, cursor: text.length, truncated: false};
-		commandRef.current = {selected: 0, dismissed: true};
+		// The list stays: a command with subcommands shows them next.
+		commandRef.current = {selected: 0, dismissed: false};
 		render();
 	};
 
@@ -772,8 +776,8 @@ export function ChatView(props: ChatViewProps) {
 				commandRef.current = {...commandRef.current, selected: (commandRef.current.selected + (key.upArrow ? n - 1 : 1)) % n};
 				return render();
 			}
-			// Enter on a name typed in full runs it; otherwise Enter and Tab take the highlighted one.
-			const exact = command.matches.some(c => c.name === command.query);
+			// Enter on a name typed in full, or right after a space, runs the line; otherwise Enter and Tab take the highlighted one.
+			const exact = command.query === '' && command.path.length > 0 ? true : command.matches.some(c => c.name === command.query);
 			if (key.tab || (key.return && !key.meta && !key.shift && !exact)) return acceptCommand(command);
 		}
 		// Tab with nothing to complete opens or closes the console beside the chat.
@@ -964,7 +968,8 @@ export function ChatView(props: ChatViewProps) {
 	const command = mention ? undefined : activeCommand();
 	const commandRows = command ? Math.min(command.matches.length, Math.max(0, rem - 2)) : 0;
 	rem -= commandRows;
-	const nameWidth = command ? Math.max(...command.matches.map(c => c.name.length)) + 1 : 0;
+	const commandLabel = (name: string) => `/${[...(command?.path ?? []), name].join(' ')}`;
+	const nameWidth = command ? Math.max(...command.matches.map(c => commandLabel(c.name).length)) + 1 : 0;
 	const vimNormal = props.inputMode?.() === 'vim' && vimRef.current.mode === 'normal';
 	rem -= vimNormal ? 1 : 0;
 	const queued = queuedLines(queueRef.current, scrub, Math.min(3, Math.max(0, rem - 1)));
@@ -1012,7 +1017,7 @@ export function ChatView(props: ChatViewProps) {
 					const selected = i === Math.min(commandRef.current.selected, command.matches.length - 1);
 					return (
 						<Text key={`command-${c.name}`} wrap="truncate">
-							<Text inverse={selected}>{`  /${scrub(c.name).padEnd(nameWidth)}`}</Text>
+							<Text inverse={selected}>{`  ${scrub(commandLabel(c.name)).padEnd(nameWidth)}`}</Text>
 							<Text dimColor>{` ${scrub(c.description)}`}</Text>
 						</Text>
 					);
