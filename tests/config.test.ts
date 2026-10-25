@@ -16,6 +16,7 @@ import {
 	resolvePaths,
 	runtimeInfo,
 	scrubChatEnv,
+	soulSection,
 } from '../src/config.js';
 import {buildChatSettings, CHAT_DISALLOWED_TOOLS, CHAT_TOOLS} from '../src/policy.js';
 import type {Credential} from '../src/types.js';
@@ -267,7 +268,7 @@ describe('buildChatOptions', () => {
 		assert.deepEqual(o.settings, buildChatSettings(paths));
 		assert.equal((o.settings as {disableAllHooks: boolean}).disableAllHooks, true);
 		const sp = o.systemPrompt as {append: string};
-		assert.equal(sp.append, buildChatHint(paths));
+		assert.equal(sp.append, buildChatHint(paths) + soulSection(paths));
 	});
 
 	it('reuses the ask options for the rest', () => {
@@ -473,5 +474,20 @@ describe('claude login environment', () => {
 	it('cliEnv scrubs secrets and pins the config dir', () => {
 		const env = cliEnv({...base, HOME: '/root', GITHUB_TOKEN: 'g'}, paths);
 		assert.deepEqual(env, {PATH: '/bin', HOME: '/root', CLAUDE_CONFIG_DIR: paths.configDir, DISABLE_AUTOUPDATER: '1'});
+	});
+});
+
+describe('soulSection', () => {
+	it('carries SOUL.md from the md dir, trimmed and capped; nothing when it is missing or empty', () => {
+		const mdDir = mkdtempSync(path.join(tmp, 'md-'));
+		assert.equal(soulSection({mdDir}), '');
+		writeFileSync(path.join(mdDir, 'SOUL.md'), '  \n');
+		assert.equal(soulSection({mdDir}), '');
+		writeFileSync(path.join(mdDir, 'SOUL.md'), '# SOUL\nWarm and brief.\n');
+		const s = soulSection({mdDir});
+		assert.ok(s.includes('do not read it again'));
+		assert.ok(s.endsWith('# SOUL\nWarm and brief.'));
+		writeFileSync(path.join(mdDir, 'SOUL.md'), 'x'.repeat(40_000));
+		assert.ok(soulSection({mdDir}).length < 17_000);
 	});
 });

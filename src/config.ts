@@ -332,6 +332,25 @@ export function buildChatHint(paths: ClaudePaths): string {
 	);
 }
 
+const SOUL_MAX_BYTES = 16 * 1024;
+
+/**
+ * The persona from the md hub's SOUL.md for the main chat. CLAUDE.md's `@SOUL.md` import is skipped in the
+ * SDK (a file outside the working directory, no approval dialog), so the model had to Read it in every
+ * session; in the system prompt it is cached with the rest. Subagents get their own prompts, without it.
+ */
+export function soulSection(paths: Pick<ClaudePaths, 'mdDir'>): string {
+	let text: string;
+	try {
+		text = readFileSync(path.join(paths.mdDir, 'SOUL.md'), 'utf8');
+	} catch {
+		return '';
+	}
+	if (Buffer.byteLength(text) > SOUL_MAX_BYTES) text = Buffer.from(text).subarray(0, SOUL_MAX_BYTES).toString('utf8');
+	text = text.trim();
+	return text ? `\n\nPersona and tone (SOUL.md from the md hub, already loaded; do not read it again):\n${text}` : '';
+}
+
 export function buildChatOptions(p: {
 	paths: ClaudePaths;
 	cred: Credential;
@@ -354,7 +373,7 @@ export function buildChatOptions(p: {
 		{
 			...base,
 			env: scrubChatEnv(full, keep),
-			systemPrompt: {type: 'preset', preset: 'claude_code', append: buildChatHint(p.paths)},
+			systemPrompt: {type: 'preset', preset: 'claude_code', append: buildChatHint(p.paths) + soulSection(p.paths)},
 			settings: buildChatSettings(p.paths),
 			tools: [...CHAT_TOOLS],
 			disallowedTools: [...CHAT_DISALLOWED_TOOLS],
