@@ -52,7 +52,7 @@ const plugin: ModulePlugin = host => {
 	exitLog = log;
 	log.info('plugin loaded');
 	return [
-		...createClaudeCommands({dataDir: host.dataDir, env: process.env, log, loadQuery, loadChatQuery, loadConsoleSdk, loadUi, registerAbort, spawnRunner, sessionDir: () => ensureSessionDir()}),
+		...createClaudeCommands({dataDir: host.dataDir, env: process.env, log, ...(host.build && {build: host.build}), loadQuery, loadChatQuery, loadConsoleSdk, loadUi, registerAbort, spawnRunner, sessionDir: () => ensureSessionDir()}),
 	];
 };
 

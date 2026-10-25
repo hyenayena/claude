@@ -218,3 +218,17 @@ test('yena console tools are shown as Yena with the command line', async () => {
 	assert.equal(styledToolHeader('mcp__yena__run_command', {command: 'mod list'}, id), `${SGR.bold}Yena${SGR.boldOff}(mod list)`);
 	assert.equal(toolHeader('mcp__other__run_command', {command: 'x'}, id), 'mcp__other__run_command(command)');
 });
+
+test('formatAssistantBlockWithCopy points each action at its header row after wrapping and indent', async () => {
+	const {formatAssistantBlockWithCopy, formatAssistantBlock} = await import('../../src/ui/present.js');
+	const id = (s: string) => s;
+	const strip = (s: string) => s.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '');
+	const md = `${'word '.repeat(30)}\n\n\`\`\`js\nlet x = 1;\n\`\`\``;
+	const block = formatAssistantBlockWithCopy(md, id, false, 40);
+	const rows = block.text.split('\n').map(strip);
+	assert.equal(block.actions.length, 1);
+	assert.equal(rows[block.actions[0]!.line]!.trim(), '╭─ js · copy');
+	assert.equal(block.actions[0]!.copy, 'let x = 1;');
+	assert.equal(strip(formatAssistantBlock(md, id, false, 40)).includes('copy'), false);
+	assert.deepEqual(formatAssistantBlockWithCopy('no code here', id).actions, []);
+});

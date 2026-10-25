@@ -42,3 +42,20 @@ test('a thinking block is dim, labelled and cut to six lines', () => {
 	assert.equal(lines.length, 8);
 	assert.equal(lines.at(-1), '  … +3 lines (ctrl+o to expand)');
 });
+
+test('renderMarkdownBlocks reports each fenced block and labels it for copying when asked', async () => {
+	const {renderMarkdownBlocks, renderMarkdown} = await import('../../src/ui/markdown.js');
+	const strip = (s: string) => s.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '');
+	const md = 'Intro\n\n```ts\nconst a = 1;\nconst b = 2;\n```\n\n```\n```\n\n~~~sh\necho hi';
+	const plain = renderMarkdownBlocks(md);
+	assert.deepEqual(plain.codeBlocks, [
+		{header: 2, code: 'const a = 1;\nconst b = 2;'},
+		{header: 10, code: 'echo hi'},
+	]);
+	assert.equal(strip(plain.text.split('\n')[2]!), '╭─ ts');
+	assert.equal(renderMarkdown(md), plain.text);
+	const labelled = renderMarkdownBlocks(md, {copyLabel: true}).text.split('\n').map(strip);
+	assert.equal(labelled[2], '╭─ ts · copy');
+	assert.equal(labelled[7], '╭─');
+	assert.equal(labelled[10], '╭─ sh · copy');
+});

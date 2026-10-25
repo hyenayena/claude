@@ -9,7 +9,8 @@ import type {AuditEntry, ChatMode} from '../chat/permission.js';
 import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
 import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
 import {wrapRows} from '../kit.js';
-import {renderMarkdown} from './markdown.js';
+import type {PrintAction} from '../../../../src/api.js';
+import {renderMarkdownBlocks} from './markdown.js';
 import {LIVE, parseTodos, type Out, type Phase, type RunningTool, type StatusLine, type Todo} from './transcript.js';
 
 export type Scrub = (s: string) => string;
@@ -68,13 +69,33 @@ const hang = (marker: string, lines: string[]): string =>
 const BLOCK_INDENT = 2;
 
 export function formatAssistantBlock(text: string, scrub: Scrub, interrupted = false, width?: number): string {
+	return assistantBlock(text, scrub, interrupted, width, false).text;
+}
+
+/** The answer block with a "copy" label on each code block header and the print actions behind them. */
+export function formatAssistantBlockWithCopy(text: string, scrub: Scrub, interrupted = false, width?: number): {text: string; actions: PrintAction[]} {
+	return assistantBlock(text, scrub, interrupted, width, true);
+}
+
+function assistantBlock(text: string, scrub: Scrub, interrupted: boolean, width: number | undefined, copyLabel: boolean): {text: string; actions: PrintAction[]} {
 	// Markdown styling is applied to the scrubbed text, so it only adds the constant SGR codes.
 	const inner = width === undefined ? undefined : Math.max(10, width - BLOCK_INDENT);
-	const body = renderMarkdown(scrub(clampChars(text, BLOCK_DISPLAY_CAP)), {width: inner}).replace(/^\n+/, '');
+	const rendered = renderMarkdownBlocks(scrub(clampChars(text, BLOCK_DISPLAY_CAP)), {width: inner, copyLabel});
+	const lead = /^\n*/.exec(rendered.text)![0].length;
+	const source = rendered.text.slice(lead).split('\n');
 	// Wrapped here, not by the terminal, so continuation rows keep the indent under the dot.
-	const lines = inner === undefined ? body.split('\n') : body.split('\n').flatMap(l => wrapRows(l, inner, {mode: 'word'}));
+	const lines: string[] = [];
+	const firstRow: number[] = [];
+	for (const l of source) {
+		firstRow.push(lines.length);
+		if (inner === undefined) lines.push(l);
+		else lines.push(...wrapRows(l, inner, {mode: 'word'}));
+	}
 	if (interrupted) lines.push(paint(SGR.dim, '(interrupted)'));
-	return hang('●', lines);
+	const actions = rendered.codeBlocks
+		.map(b => ({line: firstRow[b.header - lead], copy: b.code}))
+		.filter((a): a is PrintAction => a.line !== undefined);
+	return {text: hang('●', lines), actions};
 }
 
 type ArgsSummary = (input: unknown) => string;

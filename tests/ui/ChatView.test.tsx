@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import type {PrintOptions} from '../../../../src/api.js';
 import {afterEach, test} from 'node:test';
 import React, {createElement} from 'react';
 void React;
@@ -1409,4 +1410,19 @@ test('initialSend goes out once when the view mounts, shown as the user line', a
 	assert.ok(t.printed.some(l => l.includes('hello from the scheduler')));
 	await t.settle();
 	assert.equal(t.controller.calls.sent.length, 1);
+});
+
+test('an answer with a code block is printed with a copy action on its header row', async () => {
+	const prints: {text: string; options?: PrintOptions}[] = [];
+	const t = setup(undefined, {print: (text, options) => void prints.push({text, ...(options && {options})})});
+	await t.settle();
+	t.controller.ui({kind: 'text', messageId: 'm1', text: 'Run:\n\n```sh\nnpm test\n```'});
+	await t.settle();
+	const answer = prints.find(p => p.text.includes('npm test'))!;
+	const action = answer.options!.actions![0]!;
+	assert.equal(action.copy, 'npm test');
+	assert.match(answer.text.split('\n')[action.line]!, /copy/);
+	t.controller.ui({kind: 'text', messageId: 'm2', text: 'plain answer'});
+	await t.settle();
+	assert.equal(prints.find(p => p.text.includes('plain answer'))!.options, undefined);
 });

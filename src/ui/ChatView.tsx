@@ -1,6 +1,6 @@
 import React, {useCallback, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {Box, Text, useInput, usePaste, useWindowSize, type Key} from 'ink';
-import type {ViewHost} from '../../../../src/api.js';
+import type {PrintOptions, ViewHost} from '../../../../src/api.js';
 import type {ChatController, ChatEvent} from '../chat/events.js';
 import {limitIndicator, systemClock, type Clock} from '../chat/limits.js';
 import {MODE_CYCLE, QUESTION_LIMITS, REASON_MAX} from '../chat/permission.js';
@@ -13,6 +13,7 @@ import {PermissionPrompt} from './PermissionPrompt.js';
 import {
 	formatError,
 	formatNotice,
+	formatAssistantBlockWithCopy,
 	formatOut,
 	formatUserLine,
 	liveTail,
@@ -57,7 +58,7 @@ import {
 
 export interface ChatViewProps {
 	controller: ChatController;
-	print: (text: string) => void;
+	print: (text: string, options?: PrintOptions) => void;
 	close: () => void;
 	scrub: Scrub;
 	initialModel?: string;
@@ -149,9 +150,9 @@ export function ChatView(props: ChatViewProps) {
 	// the block that follows it, so no gap is left after it.
 	const gapRef = useRef(true);
 	const print = useCallback(
-		(text: string) => {
+		(text: string, options?: PrintOptions) => {
 			if (gapRef.current) printRaw(' ');
-			printRaw(text);
+			printRaw(text, options);
 			gapRef.current = true;
 		},
 		[printRaw],
@@ -270,6 +271,11 @@ export function ChatView(props: ChatViewProps) {
 			setT(event.type === 'turn-end' ? {...step.state, notice: undefined} : step.state);
 			for (const out of step.out) {
 				if (out.kind === 'blank') continue;
+				if (out.kind === 'assistant') {
+					const block = formatAssistantBlockWithCopy(out.text, scrub, out.interrupted, lastWidthRef.current || undefined);
+					print(block.text, block.actions.length > 0 ? {actions: block.actions} : undefined);
+					continue;
+				}
 				const text = formatOut(out, scrub, reveal, lastWidthRef.current || undefined);
 				if (out.kind === 'audit' || out.kind === 'mode' || out.kind === 'account') printNotice(text);
 				else print(text);

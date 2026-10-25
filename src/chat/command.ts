@@ -1,4 +1,4 @@
-import type {CommandContext, Logger, UiElement, ViewHost} from '../../../../src/api.js';
+import type {BuildInfo, CommandContext, Logger, PrintOptions, UiElement, ViewHost} from '../../../../src/api.js';
 import {tuningFromState, type ChatTuning, type LivePatch} from '../chat-prefs.js';
 import type {LoginProbe} from '../claude-login.js';
 import {clockTime} from '../clock-time.js';
@@ -9,6 +9,7 @@ import type {spawnRunner} from '../runner/spawn.js';
 import type {LockInfo} from '../sessions/lock.js';
 import type {ClaudeState, ChatQueryFn, Credential, CredentialInfo} from '../types.js';
 import type {ChatViewProps, ListPickerProps, WaitingViewProps} from '../ui/mount.js';
+import {formatBanner} from '../ui/banner.js';
 import {formatAssistantBlock, formatNotice, formatUserLine} from '../ui/present.js';
 import {readHistory, readTranscriptDetail} from './history.js';
 import {listProjectFiles} from './files.js';
@@ -52,6 +53,7 @@ export type ChatRouteRequest = {
 
 export type ChatRunDeps = {
 	dataDir: string;
+	build?: BuildInfo;
 	env: NodeJS.ProcessEnv;
 	moduleDir?: string;
 	log?: Logger;
@@ -433,7 +435,7 @@ const runLocked = async (
 	deps.onSession?.(session);
 	deps.onLive?.(applyLive);
 	try {
-		let printHistory: ((text: string) => void) | undefined;
+		let printHistory: ((text: string, options?: PrintOptions) => void) | undefined;
 		const mounted = mount(control => {
 			printHistory = control.print ?? ctx.print;
 			chatHost = control.host;
@@ -471,6 +473,11 @@ const runLocked = async (
 				print(m.role === 'user' ? formatUserLine(m.text, scrub) : formatAssistantBlock(m.text, scrub, false, chatHost?.columns() || undefined));
 			}
 			if (earlier.length > 0) print(formatNotice('Resumed — earlier messages above.', scrub));
+		}
+		if (!resume && !source.remote?.reattached && printHistory) {
+			// Laid out again by the transcript whenever its width changes; the text is for places without that.
+			const banner = (columns: number): string => formatBanner({build: deps.build, model: initialModel, columns}, scrub);
+			printHistory(banner(chatHost?.columns() || 80), {render: banner});
 		}
 		if (source.remote?.reattached && printHistory) {
 			printHistory(formatNotice(`Reattached to a session working since ${clockTime(source.remote.startedAt)}`, scrub));

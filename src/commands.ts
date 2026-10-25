@@ -1,7 +1,7 @@
 import {accessSync, constants} from 'node:fs';
 import {appendFile, lstat, mkdir, open, realpath, stat, writeFile} from 'node:fs/promises';
 import path, {join, resolve} from 'node:path';
-import type {Command, CommandContext, Logger, SettingsTab, Subcommand} from '../../../src/api.js';
+import type {BuildInfo, Command, CommandContext, Logger, SettingsTab, Subcommand} from '../../../src/api.js';
 import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
 import {CONTINUE_TEXT, isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
 import {type AccountView, checkAccountName, chooseAccount, listAccounts, markLimited, removeAccount, setOrder, stashLogin, adoptLogin, useAccount} from './accounts.js';
@@ -55,6 +55,8 @@ const limitKind = (err: unknown): string | undefined =>
 
 export type ClaudeDeps = {
 	dataDir: string;
+	// Versions of the host and modules, shown at the top of a new chat.
+	build?: BuildInfo;
 	env: NodeJS.ProcessEnv;
 	loadQuery: () => Promise<QueryFn>;
 	loadChatQuery?: () => Promise<ChatQueryFn>;
@@ -539,6 +541,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	const chatDeps = (onMount: (close: () => void) => void): ChatRunDeps => ({
 		dataDir,
+		...(deps.build && {build: deps.build}),
 		env,
 		moduleDir: deps.moduleDir,
 		log,

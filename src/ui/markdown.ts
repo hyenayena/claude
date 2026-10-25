@@ -63,26 +63,48 @@ function inline(text: string): string {
 
 const DEFAULT_WIDTH = 100;
 
-export function renderMarkdown(text: string, options: {width?: number} = {}): string {
+export type CodeBlock = {header: number; code: string};
+
+export type MarkdownOptions = {width?: number; copyLabel?: boolean};
+
+export function renderMarkdown(text: string, options: MarkdownOptions = {}): string {
+	return renderMarkdownBlocks(text, options).text;
+}
+
+/**
+ * The rendered text and its fenced code blocks: the index of each header line in the output and the
+ * code as written. With `copyLabel` a header of a non-empty block ends with "· copy".
+ */
+export function renderMarkdownBlocks(text: string, options: MarkdownOptions = {}): {text: string; codeBlocks: CodeBlock[]} {
 	const width = options.width !== undefined && Number.isFinite(options.width) ? options.width : DEFAULT_WIDTH;
 	const out: string[] = [];
-	let fence: {lang: string; marker: string} | undefined;
+	let fence: {lang: string; marker: string; header: number; code: string[]} | undefined;
+	const codeBlocks: CodeBlock[] = [];
+	const header = (lang: string, copy: boolean) =>
+		`${S.dim}╭─${lang ? ` ${lang}` : ''}${copy ? ` · ${S.reset}${S.underline}copy${S.underlineOff}` : ''}${S.reset}`;
+	const closeFence = (f: NonNullable<typeof fence>) => {
+		out.push(`${S.dim}╰─${S.reset}`);
+		if (f.code.length === 0) return;
+		codeBlocks.push({header: f.header, code: f.code.join('\n')});
+		if (options.copyLabel) out[f.header] = header(f.lang, true);
+	};
 	const lines = text.split('\n');
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i]!;
 		const open = /^\s*(```+|~~~+)\s*([\w+#.-]*)\s*$/.exec(line);
 		if (fence) {
 			if (open && open[1]!.startsWith(fence.marker[0]!) && open[1]!.length >= fence.marker.length && open[2] === '') {
+				closeFence(fence);
 				fence = undefined;
-				out.push(`${S.dim}╰─${S.reset}`);
 			} else {
+				fence.code.push(line);
 				out.push(`${S.dim}│${S.reset} ${highlightLine(line, fence.lang)}`);
 			}
 			continue;
 		}
 		if (open) {
-			fence = {lang: open[2] ?? '', marker: open[1]!};
-			out.push(`${S.dim}╭─${fence.lang ? ` ${fence.lang}` : ''}${S.reset}`);
+			fence = {lang: open[2] ?? '', marker: open[1]!, header: out.length, code: []};
+			out.push(header(fence.lang, false));
 			continue;
 		}
 		const table = matchTable(lines, i);
@@ -120,6 +142,6 @@ export function renderMarkdown(text: string, options: {width?: number} = {}): st
 		}
 		out.push(inline(line));
 	}
-	if (fence) out.push(`${S.dim}╰─${S.reset}`);
-	return out.join('\n');
+	if (fence) closeFence(fence);
+	return {text: out.join('\n'), codeBlocks};
 }

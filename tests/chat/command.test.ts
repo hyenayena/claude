@@ -389,7 +389,8 @@ test('closing line carries no control bytes or secret from the model name', asyn
 		},
 	};
 	await cmd.run(['chat'], ctx);
-	const out = s.printed.join('\n');
+	// The banner and notices are styled with SGR sequences; anything else would come from the model name.
+	const out = s.printed.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
 	assert.equal(/[\x1b\x07]/.test(out), false);
 	assert.equal(out.includes(OAUTH), false);
 	assert.ok(s.printed.at(-1)!.startsWith('[chat closed'));
@@ -538,9 +539,10 @@ test('the shipped bridge gets the real preview and highlight builders', async ()
 	await s.command.run(['chat'], s.ctx);
 });
 
-const setupChat = async (opts: Parameters<typeof setup>[0] = {}) => {
+const setupChat = async (opts: Parameters<typeof setup>[0] = {}, extra: Partial<Parameters<typeof createClaudeCommands>[0]> = {}) => {
 	const s = await setup(opts);
 	const [chat] = createClaudeCommands({
+		...extra,
 		dataDir: s.dataDir,
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
@@ -622,7 +624,43 @@ test('the chat view gets the host and the print of the mount control', async () 
 	await s.chat.run([], s.ctx);
 	assert.equal(s.props[0]!.host, host);
 	s.props[0]!.print('x');
-	assert.deepEqual(printed, ['x']);
+	assert.equal(printed.length, 2);
+	assert.match(printed[0]!, /╭/);
+	assert.equal(printed[1], 'x');
+});
+
+test('a new chat opens with the yena banner sized to the view; a resumed one does not', async () => {
+	const build = {version: '9.9.9', modules: [{name: 'claude', version: '1.2.3'}]};
+	const s = await setupChat({run: async () => {}}, {build});
+	const printed: string[] = [];
+	const renders: ((width: number) => string)[] = [];
+	const host = {isFocused: () => true, columns: () => 60, subscribe: () => () => {}, move: () => false, isHostKey: () => false};
+	s.ctx.mount = async mount => {
+		mount({
+			close: () => {},
+			print: (t, o) => {
+				printed.push(t);
+				if (o?.render) renders.push(o.render);
+			},
+			host,
+		});
+	};
+	await s.chat.run([], s.ctx);
+	const banner = printed.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+	assert.match(banner, /yena 9\.9\.9/);
+	assert.match(banner, /claude 1\.2\.3/);
+	assert.ok(banner.split('\n').every(row => row.length <= 60));
+	// The transcript lays the banner out again for a new width.
+	assert.equal(renders.length, 1);
+	const narrow = renders[0]!(30).replace(/\x1b\[[0-9;]*m/g, '').split('\n');
+	assert.ok(narrow.every(row => row.length === 30));
+	assert.notEqual(renders[0]!(30), renders[0]!(60));
+
+	printed.length = 0;
+	await writeTranscript(s.dataDir, SID1, [{type: 'user', message: {content: 'old question'}}]);
+	await claudeWithPicker(s).run(['resume', SID1.slice(0, 6)], s.ctx);
+	assert.match(printed.join('\n'), /old question/);
+	assert.doesNotMatch(printed.join('\n'), /╭|yena /);
 });
 
 test('the Claude tab offers permission mode, model, effort, thinking, fast mode and output style', async () => {
