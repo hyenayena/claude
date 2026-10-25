@@ -1210,3 +1210,20 @@ test('a message sent while Claude Code runs its own turn is refused, so the view
 	await tick();
 	assert.throws(() => session.send('two'), /already running/);
 });
+
+test('a turn logs its token counts, subagents apart', async () => {
+	const {session, queries, log} = setup();
+	session.send('x');
+	const usage = {input_tokens: 1, cache_creation_input_tokens: 10, cache_read_input_tokens: 100, output_tokens: 5};
+	queries[0]?.emit({type: 'assistant', parent_tool_use_id: null, message: {id: 'm1', usage, content: []}});
+	queries[0]?.emit({type: 'assistant', parent_tool_use_id: 'toolu_1', message: {id: 'm2', usage, content: []}});
+	queries[0]?.emit({type: 'assistant', parent_tool_use_id: 'toolu_1', message: {id: 'm3', usage, content: []}});
+	queries[0]?.emit(ok());
+	await tick();
+	const ended = log.records.find(r => r.msg === 'turn ended')!;
+	assert.equal(ended.fields.calls, 1);
+	assert.equal(ended.fields.cacheWrite, 10);
+	assert.equal(ended.fields.agentCalls, 2);
+	assert.equal(ended.fields.agentCacheRead, 200);
+	assert.equal(session.usage.agents.output, 10);
+});

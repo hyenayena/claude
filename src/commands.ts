@@ -7,6 +7,7 @@ import {CONTINUE_TEXT, isCommandName, type SlashCommandInfo} from './chat/chat-s
 import {type AccountView, checkAccountName, chooseAccount, listAccounts, markLimited, removeAccount, setOrder, stashLogin, adoptLogin, useAccount} from './accounts.js';
 import {formatReset, systemClock} from './chat/limits.js';
 import type {ChatHandle} from './chat/handle.js';
+import {usageLines} from './chat/usage.js';
 import {clockTime} from './clock-time.js';
 import {runnerSocketPath} from './runner/spawn.js';
 import {diskCommands} from './disk-commands.js';
@@ -866,6 +867,11 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		ctx.print(scrub(`Claude Code runtime: ${rt.cli ?? '(not installed)'}`));
 		ctx.print(scrub(`Agent SDK: ${rt.sdk}`));
 		ctx.print(scrub(`Binary in use: ${rt.binary}`));
+		const usage = openSession && openSession.state !== 'closed' ? openSession.usage : undefined;
+		if (usage) {
+			ctx.print('Tokens in this chat (since it opened):');
+			for (const line of usageLines(usage)) ctx.print(`  ${line}`);
+		}
 	};
 
 	const printActive = async (ctx: CommandContext): Promise<void> => {

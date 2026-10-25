@@ -9,6 +9,7 @@ import type {ChatController, ChatEvent, ChatState, TurnOutcome, UiEvent} from '.
 import {InputQueue} from './input-queue.js';
 import {classifyFailure, type Clock, failureMessage, type FailureKind, type RateLimitInfo, systemClock} from './limits.js';
 import {normalize} from './normalize.js';
+import {type ChatUsage, subtract, UsageMeter} from './usage.js';
 import {
 	type AuditEntry,
 	type CancelCause,
@@ -145,6 +146,9 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private turnDeadline = 0;
 	private turnRemaining: number | undefined;
 	private holds = 0;
+	private readonly meter = new UsageMeter();
+	// The meter's totals when the current turn started; the turn's share is logged when it ends.
+	private turnUsageFrom: ChatUsage | undefined;
 	private lockHeld = false;
 	private idleTimer: NodeJS.Timeout | undefined;
 	// Bumped when the counter is reset, so a release from an earlier turn cannot touch the next one.
@@ -208,6 +212,11 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		if (patch.outputStyle !== undefined) flags['outputStyle'] = patch.outputStyle;
 		if (Object.keys(flags).length > 0) q.applyFlagSettings?.(flags).catch(fail('flags'));
 		this.log.info('live settings applied', {keys: Object.keys(patch)});
+	}
+
+	/** Tokens of this chat since it opened: the main chat and its subagents apart. */
+	get usage(): ChatUsage {
+		return {main: {...this.meter.total.main}, agents: {...this.meter.total.agents}};
 	}
 
 	/** Tasks of this chat (background Bash and subagents), newest first. */
@@ -293,6 +302,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.pending = undefined;
 		this.setState('running');
 		this.turnStartedAt = Date.now();
+		this.turnUsageFrom = this.usage;
 		this.log.info('turn started', {chars: text.length});
 		this.switches = 0;
 		this.turnHandle = handle;
@@ -552,6 +562,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.switches = 0;
 		this.setState('running');
 		this.turnStartedAt = Date.now();
+		this.turnUsageFrom = this.usage;
 		this.log.info('turn started', {origin: 'claude-code'});
 		this.turnHandle = handle;
 		this.armTurnTimer(this.timeoutMs);
@@ -561,6 +572,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		try {
 			for await (const msg of handle.q) {
 				if (this.handle !== handle) return;
+				this.meter.add(msg);
 				this.keepTurnAlive(handle);
 				for (const ev of normalize(msg, this.clock)) {
 					if (this.handle !== handle) return;
@@ -729,9 +741,16 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.clearTimers();
 		this.pending = undefined;
 		this.setState('idle');
+		const from = this.turnUsageFrom;
+		this.turnUsageFrom = undefined;
+		const main = from ? subtract(this.meter.total.main, from.main) : undefined;
+		const agents = from ? subtract(this.meter.total.agents, from.agents) : undefined;
 		this.log.info('turn ended', {
 			outcome,
 			ms: Date.now() - this.turnStartedAt,
+			...(main && main.calls > 0 && {calls: main.calls, cacheWrite: main.cacheWrite, cacheRead: main.cacheRead, output: main.output}),
+			...(agents &&
+				agents.calls > 0 && {agentCalls: agents.calls, agentCacheWrite: agents.cacheWrite, agentCacheRead: agents.cacheRead, agentOutput: agents.output}),
 			...(failure !== undefined && {failure}),
 			...(error !== undefined && failure === undefined && {reason: clip(this.opts.redact(error))}),
 		});
