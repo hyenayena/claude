@@ -209,3 +209,12 @@ test('the status bar counts running agents and background work', () => {
 	);
 	assert.equal(tasksBarText([{status: 'running', background: true}]), '1 in background');
 });
+
+test('yena console tools are shown as Yena with the command line', async () => {
+	const {toolHeader, styledToolHeader} = await import('../../src/ui/present.js');
+	const id = (s: string) => s;
+	assert.equal(toolHeader('mcp__yena__run_command', {command: 'http get https://x.test'}, id), 'Yena(http get https://x.test)');
+	assert.equal(toolHeader('mcp__yena__list_commands', {}, id), 'Yena(list commands)');
+	assert.equal(styledToolHeader('mcp__yena__run_command', {command: 'mod list'}, id), `${SGR.bold}Yena${SGR.boldOff}(mod list)`);
+	assert.equal(toolHeader('mcp__other__run_command', {command: 'x'}, id), 'mcp__other__run_command(command)');
+});

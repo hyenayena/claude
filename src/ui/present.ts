@@ -6,6 +6,7 @@ import {
 	tailRows,
 } from '../chat/truncate.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
+import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
 import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
 import {wrapRows} from '../kit.js';
 import {renderMarkdown} from './markdown.js';
@@ -117,7 +118,14 @@ const ARGS_REGISTRY: Record<string, ArgsSummary> = {
 	Agent: agentArgs,
 	Task: agentArgs,
 	SendMessage: field('to'),
+	[RUN_COMMAND_TOOL]: field('command'),
+	[LIST_COMMANDS_TOOL]: () => 'list commands',
 };
+
+// yena's own console tools read as one tool, named after the app, with the command line as arguments.
+const DISPLAY_NAMES: Record<string, string> = {[RUN_COMMAND_TOOL]: 'Yena', [LIST_COMMANDS_TOOL]: 'Yena'};
+
+const displayName = (name: string): string => DISPLAY_NAMES[name] ?? name;
 
 export function toolArgs(name: string, input: unknown, scrub: Scrub): string {
 	const custom = ARGS_REGISTRY[name]?.(input);
@@ -129,13 +137,13 @@ export function toolArgs(name: string, input: unknown, scrub: Scrub): string {
 
 export function toolHeader(name: string, input: unknown, scrub: Scrub): string {
 	const args = toolArgs(name, input, scrub);
-	return `${scrub(name)}${args ? `(${args})` : ''}`;
+	return `${scrub(displayName(name))}${args ? `(${args})` : ''}`;
 }
 
 /** The tool name bold, the arguments plain, as Claude Code shows them. */
 export function styledToolHeader(name: string, input: unknown, scrub: Scrub): string {
 	const args = toolArgs(name, input, scrub);
-	return `${SGR.bold}${scrub(name)}${SGR.boldOff}${args ? `(${args})` : ''}`;
+	return `${SGR.bold}${scrub(displayName(name))}${SGR.boldOff}${args ? `(${args})` : ''}`;
 }
 
 type ToolResult = {name: string; input: unknown; isError: boolean; text: string};

@@ -128,6 +128,16 @@ export const clearSentHistory = (): void => {
 	sentHistory.length = 0;
 };
 const COMMAND_LIST_MS = 1000;
+type Viewer = {lines: string[]; top: number; wrapped?: {width: number; rows: string[]}};
+
+// Wrapping a long transcript takes tens of milliseconds; doing it on every scroll step made the
+// viewer lag, so the rows are kept until the width changes.
+export function viewerRowsOf(v: Viewer, columns: number): string[] {
+	const width = Math.max(1, columns - 1);
+	if (v.wrapped?.width !== width) v.wrapped = {width, rows: wrapLines(v.lines, width, {mode: 'char'})};
+	return v.wrapped.rows;
+}
+
 const MODE_NAME: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept-edits', plan: 'plan', auto: 'auto'};
 
 // Claude Code's colours for the mode hint under the input.
@@ -202,7 +212,7 @@ export function ChatView(props: ChatViewProps) {
 	const commandListRef = useRef<{at: number; list: ViewCommandInfo[]} | undefined>(undefined);
 	const vimRef = useRef<VimState>(vimStart);
 	// Ctrl+O: the full transcript and the first row shown (-1 means the bottom).
-	const viewerRef = useRef<{lines: string[]; top: number} | undefined>(undefined);
+	const viewerRef = useRef<Viewer | undefined>(undefined);
 	// What the last render showed, for mouse events that arrive between renders.
 	const shownRef = useRef({columns: 0, rows: 0, inputRows: 0, vimNormal: false, statusBar: false, waiting: false, belowInput: 0});
 	const [, setTick] = useState(0);
@@ -649,7 +659,7 @@ export function ChatView(props: ChatViewProps) {
 
 	const scrollViewer = (width: number, height: number, step: (top: number, max: number) => number) => {
 		const v = viewerRef.current!;
-		const total = wrapLines(v.lines, Math.max(1, width - 1), {mode: 'char'}).length;
+		const total = viewerRowsOf(v, width).length;
 		const max = Math.max(0, total - height);
 		const top = v.top < 0 ? max : v.top;
 		viewerRef.current = {...v, top: Math.min(max, Math.max(0, step(top, max)))};
@@ -929,7 +939,7 @@ export function ChatView(props: ChatViewProps) {
 
 	if (viewerRef.current) {
 		const v = viewerRef.current;
-		const wrapped = wrapLines(v.lines, Math.max(1, columns - 1), {mode: 'char'});
+		const wrapped = viewerRowsOf(v, columns);
 		const height = viewerRows();
 		const max = Math.max(0, wrapped.length - height);
 		const top = v.top < 0 ? max : Math.min(v.top, max);
