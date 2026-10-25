@@ -365,7 +365,8 @@ export function buildChatOptions(p: {
 	runtimeBin?: string;
 }): Options {
 	const {canUseTool, tuning, consoleServer, ...rest} = p;
-	const base = buildOptions(rest);
+	// The turn limit is for one-shot asks; a chat turn runs as long as Claude Code needs, as in Claude Code.
+	const {maxTurns: _askLimit, ...base} = buildOptions(rest);
 	const full = base.env ?? {};
 	// The credential is found by value, so no variable names are read here.
 	const keep = Object.keys(full).filter(k => full[k] === p.cred.value && p.cred.value !== '');
