@@ -60,7 +60,6 @@ export interface ChatViewProps {
 	print: (text: string) => void;
 	close: () => void;
 	scrub: Scrub;
-	credentialLabel: string;
 	initialModel?: string;
 	initialSessionId?: string;
 	// Text the input starts with (e.g. the prompt a rewind went back to).
@@ -135,7 +134,7 @@ const MODE_NAME: Record<ChatMode, string> = {default: 'default', acceptEdits: 'a
 const MODE_COLOR: Record<ChatMode, string | undefined> = {default: undefined, acceptEdits: 'magenta', plan: 'cyan', auto: 'yellow'};
 
 export function ChatView(props: ChatViewProps) {
-	const {controller, print: printRaw, close, scrub, credentialLabel} = props;
+	const {controller, print: printRaw, close, scrub} = props;
 	// Claude Code's rhythm: one empty line before every block. A notice line (audit, mode) belongs to
 	// the block that follows it, so no gap is left after it.
 	const gapRef = useRef(true);
@@ -879,20 +878,17 @@ export function ChatView(props: ChatViewProps) {
 		if (resetsAt === undefined) return;
 		return armExpiry(resetsAt * 1000, clock, render);
 	}, [resetsAt, clock, render]);
-	const barStatus = statusBarText(
+	const barStatusFull = statusBarText(
 		{
-			credentialLabel: t.account !== undefined ? `account ${t.account}` : credentialLabel,
 			model: t.model,
 			sessionId: t.sessionId,
 			phase: t.phase,
-			mode: controller.mode,
 			pending: controller.pendingPermissions.length,
 			...(limit !== undefined && {limit}),
+			tasks: tasksBarText(controller.tasks ?? []),
 		},
 		scrub,
 	);
-	const taskText = tasksBarText(controller.tasks ?? []);
-	const barStatusFull = taskText ? `${barStatus} · ${taskText}` : barStatus;
 	// A host with a title bar shows the chat's name and this status above the chat instead.
 	const barTitle = scrub(controller.title ?? NEW_CHAT_TITLE);
 	const statusBar = host?.setTitle ? null : <StatusBar text={barStatusFull} />;

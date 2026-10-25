@@ -549,7 +549,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		registerAbort: deps.registerAbort,
 		store,
 		showNoticeOnce,
-		kindLabel,
 		probeLogin: probe,
 		isMissingModule,
 		onMount,

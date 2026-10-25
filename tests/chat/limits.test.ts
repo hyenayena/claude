@@ -132,21 +132,21 @@ describe('limitIndicator', () => {
 	it('warning', () => {
 		assert.equal(
 			limitIndicator({ status: 'allowed_warning', type: 'five_hour', utilization: 0.854, resetsAt: reset }, c),
-			'5h limit 85% · resets 15:00',
+			'5h limit 85%, resets 15:00',
 		);
 		assert.equal(limitIndicator({ status: 'allowed_warning', type: 'five_hour' }, c), '5h limit');
 		assert.equal(limitIndicator({ status: 'allowed_warning', utilization: 50 }, c), 'usage limit 999%');
 	});
 	it('rejected', () => {
-		assert.equal(limitIndicator({ status: 'rejected', type: 'five_hour', resetsAt: reset }, c), '5h limit reached · resets 15:00');
+		assert.equal(limitIndicator({ status: 'rejected', type: 'five_hour', resetsAt: reset }, c), '5h limit reached, resets 15:00');
 		assert.equal(
 			limitIndicator({ status: 'rejected', type: 'five_hour', resetsAt: reset, usingOverage: true }, c),
-			'5h limit reached · extra usage',
+			'5h limit reached, extra usage',
 		);
-		assert.equal(limitIndicator({ status: 'rejected', resetsAt: reset }, c), 'usage limit reached · resets 15:00');
+		assert.equal(limitIndicator({ status: 'rejected', resetsAt: reset }, c), 'usage limit reached, resets 15:00');
 		assert.equal(
 			limitIndicator({ status: 'rejected', type: 'seven_day_opus', resetsAt: at('2026-10-23T09:00:00Z') }, c),
-			'weekly Opus limit reached · resets Oct 23, 09:00',
+			'weekly Opus limit reached, resets Oct 23, 09:00',
 		);
 	});
 	it('expires at the reset time', () => {

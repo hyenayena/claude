@@ -85,7 +85,6 @@ for (const [name, request] of Object.entries(hostile)) {
 						close={() => {}}
 						scrub={scrub}
 						reveal={reveal}
-						credentialLabel="API key"
 						armMs={20}
 						projectDir="/app"
 					/>,
@@ -102,7 +101,7 @@ for (const [name, request] of Object.entries(hostile)) {
 					assert.ok(stringCells(plain) <= columns, `${tag}: ${stringCells(plain)} cells`);
 					assert.doesNotMatch(plain, RAW_CONTROL, `${tag}: raw control character`);
 				}
-				assert.match(frame.replace(SGR, ''), /API key/, `${tag}: status bar`);
+				assert.match(frame.replace(SGR, ''), /awaiting approval$/, `${tag}: status bar`);
 			}
 		}
 	});

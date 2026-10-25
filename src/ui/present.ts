@@ -285,8 +285,6 @@ export function formatAudit(entry: AuditEntry, scrub: Scrub, reveal: Scrub = scr
 	return paint(SGR.dim, line);
 }
 
-export const MODE_LABEL: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept edits', plan: 'plan', auto: 'auto'};
-
 const MODE_LINE: Record<ChatMode, string> = {
 	default: 'Mode: default (edits ask for approval)',
 	acceptEdits: 'Mode: auto-accept edits (this chat only)',
@@ -419,23 +417,23 @@ export function tasksBarText(tasks: readonly {status: string; background: boolea
 	return parts.join(' · ');
 }
 
+/** Session, model, limit, phase, running tasks; the mode is shown under the input instead. */
 export function statusBarText(
 	s: {
-		credentialLabel: string;
 		model: string | undefined;
 		sessionId: string | undefined;
 		phase: Phase;
-		mode?: ChatMode;
 		pending?: number;
 		limit?: string;
+		tasks?: string;
 	},
 	scrub: Scrub,
 ): string {
-	const parts = [scrub(s.credentialLabel)];
-	if (s.model) parts.push(scrub(s.model));
+	const parts: string[] = [];
 	if (s.sessionId) parts.push(scrub(s.sessionId).slice(0, 8));
-	parts.push(s.pending !== undefined && s.pending > 0 ? 'awaiting approval' : s.phase);
-	if (s.mode !== undefined) parts.push(`mode: ${MODE_LABEL[s.mode]}`);
+	if (s.model) parts.push(scrub(s.model));
 	if (s.limit) parts.push(scrub(s.limit));
+	parts.push(s.pending !== undefined && s.pending > 0 ? 'awaiting approval' : s.phase);
+	if (s.tasks) parts.push(s.tasks);
 	return parts.join(' · ');
 }

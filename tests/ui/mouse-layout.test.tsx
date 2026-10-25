@@ -40,7 +40,6 @@ function setup({title = false, vim = false} = {}) {
 			print() {},
 			close() {},
 			scrub: makeScrub(s => s),
-			credentialLabel: 'API key',
 			host,
 			...(vim && {inputMode: () => 'vim' as const}),
 		}),
@@ -73,7 +72,7 @@ for (const title of [false, true]) {
 		await t.h.settle();
 		t.h.press(paste('alpha\nbravo\ncharlie'));
 		await t.h.settle();
-		assert.equal(t.frame().some(l => l.includes('API key')), !title, 'the status bar is in the view only without setTitle');
+		assert.equal(t.frame().some(l => l === 'idle'), !title, 'the status bar is in the view only without setTitle');
 		assert.equal(t.clickOn('bravo', 2), true);
 		t.h.press('X');
 		await t.h.settle();

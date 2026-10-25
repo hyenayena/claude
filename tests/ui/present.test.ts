@@ -45,7 +45,7 @@ test('every field type is scrubbed and only constants add SGR', () => {
 		formatOut({kind: 'api-error', code: dirty}, scrub),
 		...liveTail(dirty, scrub, 10, 80),
 		statusBarText(
-			{credentialLabel: dirty, model: dirty, sessionId: dirty, phase: 'idle'},
+			{model: dirty, sessionId: dirty, phase: 'idle', limit: dirty},
 			scrub,
 		),
 	];
@@ -101,9 +101,14 @@ test('the working line and the mode hint', () => {
 	assert.equal(modeHint('plan'), '⏸ plan mode on (shift+tab to cycle)');
 });
 
-test('status bar shows cost only when positive and truncates the session id', () => {
-	const base = {credentialLabel: 'API key', model: 'm', sessionId: '0123456789abc', phase: 'running' as const};
-	assert.equal(statusBarText(base, scrub), 'API key · m · 01234567 · running');
+test('status bar: truncated session first, then model, limit, phase and running tasks', () => {
+	const base = {model: 'm', sessionId: '0123456789abc', phase: 'running' as const};
+	assert.equal(statusBarText(base, scrub), '01234567 · m · running');
+	assert.equal(
+		statusBarText({...base, phase: 'idle', limit: '5h limit 85%, resets 15:00', tasks: '3 in background'}, scrub),
+		'01234567 · m · 5h limit 85%, resets 15:00 · idle · 3 in background',
+	);
+	assert.equal(statusBarText({model: undefined, sessionId: undefined, phase: 'idle', tasks: ''}, scrub), 'idle');
 });
 
 test('status line texts', () => {
@@ -153,10 +158,10 @@ test('tool results: Edit and Write summarise, refusals show denied, Bash keeps t
 	assert.ok(!block('AskUserQuestion', {questions: [{question: 'Which?'}]}, false, 'secret-answer').includes('secret-answer'));
 });
 
-test('status bar shows the mode and awaiting approval', () => {
-	const base = {credentialLabel: 'API key', model: undefined, sessionId: undefined};
-	assert.equal(statusBarText({...base, phase: 'running', mode: 'acceptEdits', pending: 0}, scrub), 'API key · running · mode: accept edits');
-	assert.equal(statusBarText({...base, phase: 'running', mode: 'default', pending: 2}, scrub), 'API key · awaiting approval · mode: default');
+test('status bar shows awaiting approval instead of the phase', () => {
+	const base = {model: undefined, sessionId: undefined};
+	assert.equal(statusBarText({...base, phase: 'running', pending: 0}, scrub), 'running');
+	assert.equal(statusBarText({...base, phase: 'running', pending: 2}, scrub), 'awaiting approval');
 });
 
 test('audit summaries use the reveal function so they match what was approved', () => {
@@ -166,9 +171,8 @@ test('audit summaries use the reveal function so they match what was approved', 
 	assert.ok(!line.includes(`${ESC}[31m`));
 });
 
-test('status bar appends the limit segment after the mode', () => {
-	const base = {credentialLabel: 'API key', model: 'm', sessionId: undefined, phase: 'idle' as const, mode: 'default' as const};
-	assert.equal(statusBarText({...base, limit: '5h limit 85% · resets 15:00'}, scrub), 'API key · m · idle · mode: default · 5h limit 85% · resets 15:00');
+test('status bar scrubs the limit segment', () => {
+	const base = {model: 'm', sessionId: undefined, phase: 'idle' as const};
 	assert.equal(statusBarText({...base, limit: `x${SECRET}`}, scrub).includes(SECRET), false);
 });
 

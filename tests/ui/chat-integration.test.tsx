@@ -83,7 +83,6 @@ function build(script: Script) {
 			close={() => {}}
 			scrub={scrub}
 			reveal={reveal}
-			credentialLabel="API key"
 			armMs={ARM}
 			projectDir={proj}
 		/>,

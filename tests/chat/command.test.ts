@@ -150,7 +150,7 @@ test('a missing module that names the SDK keeps the SDK message even when ink is
 });
 
 test('mounts once, passes props without the secret, prints the subscription notice once', async () => {
-	const s = await setup({run: async p => assert.equal(p.credentialLabel, 'subscription token')});
+	const s = await setup({run: async () => {}});
 	await s.command.run(['chat'], s.ctx);
 	assert.equal(s.mounts(), 1);
 	assert.equal(s.printed.filter(l => l.startsWith('Notice:')).length, 1);
@@ -1098,12 +1098,12 @@ test('claude tasks lists the chat tasks and stops the picked running one; claude
 	await running;
 });
 
-test('chat with a Claude Code login: no credentials in the child env, login label', async () => {
-	const labels: string[] = [];
+test('chat with a Claude Code login: no credentials in the child env', async () => {
+	let runs = 0;
 	const s = await setup({
 		deps: {env: {PATH: '/bin'}, login: {probe: async () => ({loggedIn: true, method: 'claude.ai', subscriptionType: 'max'})}},
 		run: async p => {
-			labels.push(p.credentialLabel);
+			runs++;
 			const done = turnDone(p);
 			p.controller.send('hello');
 			await done;
@@ -1113,7 +1113,7 @@ test('chat with a Claude Code login: no credentials in the child env, login labe
 	await mkdir(join(s.dataDir, 'config'), {recursive: true});
 	await writeFile(join(s.dataDir, 'config', '.credentials.json'), JSON.stringify({claudeAiOauth: {accessToken: 'A', refreshToken: 'R'}}));
 	await s.command.run(['chat'], s.ctx);
-	assert.deepEqual(labels, ['subscription login']);
+	assert.equal(runs, 1);
 	const env = s.q.calls[0]!.options.env as Record<string, string | undefined>;
 	assert.equal(env.ANTHROPIC_API_KEY, undefined);
 	assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);

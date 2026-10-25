@@ -28,7 +28,7 @@ function setup(queued?: string[]) {
 }
 
 function mount(controller: ReturnType<typeof setup>) {
-	const h = mountHarness(createElement(ChatView, {controller, print() {}, close() {}, scrub, credentialLabel: 'API key'}));
+	const h = mountHarness(createElement(ChatView, {controller, print() {}, close() {}, scrub}));
 	cleanup.push(() => h.unmount());
 	return h;
 }

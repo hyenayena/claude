@@ -129,13 +129,13 @@ export const limitIndicator = (info: RateLimitInfo | undefined, clock: Clock): s
 	if (info.resetsAt !== undefined && clock.now() >= info.resetsAt * 1000) return undefined;
 	const label = info.type ? SHORT_LABELS[info.type] : 'usage limit';
 	const zone = zoneOf(clock);
-	const resets = info.resetsAt === undefined ? '' : ` · resets ${clockText(info.resetsAt, clock, zone)}`;
+	const resets = info.resetsAt === undefined ? '' : `, resets ${clockText(info.resetsAt, clock, zone)}`;
 	if (info.status === 'allowed_warning') {
 		const pct =
 			info.utilization === undefined ? '' : ` ${Math.min(999, Math.max(0, Math.round(info.utilization * 100)))}%`;
 		return `${label}${pct}${resets}`;
 	}
-	return info.usingOverage ? `${label} reached · extra usage` : `${label} reached${resets}`;
+	return info.usingOverage ? `${label} reached, extra usage` : `${label} reached${resets}`;
 };
 
 const oneLine = (text: string, cap: number): string => {

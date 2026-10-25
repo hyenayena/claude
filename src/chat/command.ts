@@ -62,7 +62,6 @@ export type ChatRunDeps = {
 	registerAbort?: (c: AbortController) => () => void;
 	store: {read: () => Promise<ClaudeState>; update: (patch: Partial<ClaudeState>) => Promise<unknown>};
 	showNoticeOnce: (cred: CredentialInfo, ctx: CommandContext) => Promise<void>;
-	kindLabel: (cred: CredentialInfo) => string;
 	// Detects a Claude Code login; only consulted when no environment credential is set.
 	probeLogin?: LoginProbe;
 	isMissingModule: (err: unknown) => boolean;
@@ -447,7 +446,6 @@ const runLocked = async (
 				scrub,
 				reveal,
 				projectDir: paths.projectDir,
-				credentialLabel: deps.kindLabel(cred),
 				...(initialModel !== undefined && {initialModel}),
 				...(resume && !source.fork && {initialSessionId: resume}),
 				...(draft && {initialDraft: draft}),

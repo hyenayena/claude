@@ -26,7 +26,6 @@ async function enterOn(request: ToolRequest, rows: number) {
 			close={() => {}}
 			scrub={scrub}
 			reveal={reveal}
-			credentialLabel="API key"
 			armMs={20}
 			projectDir="/app"
 		/>,

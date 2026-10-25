@@ -33,7 +33,7 @@ await show('Frame', React.createElement(Frame, {rows: [{text: 'frame-ok', tone: 
 await show('Spinner', React.createElement(Spinner, {frames: SPINNERS.squareCorners, intervalMs: 180}));
 await show('InputLine', React.createElement(InputLine, {text: 'input-ok', cursor: 2, columns: 80, running: false, maxRows: 5}));
 await show('LiveTools', React.createElement(LiveTools, {tools: [{id: 't', name: 'Bash', input: {command: 'tools-ok'}, elapsedSeconds: 0}], scrub: s => s, maxRows: 4}));
-await show('ChatView', React.createElement(ChatView, {controller: fakeController(), print() {}, close() {}, scrub: s => s, credentialLabel: 'chat-ok'}));
+await show('ChatView', React.createElement(ChatView, {controller: fakeController(), print() {}, close() {}, scrub: s => s}));
 const reveal = s => s;
 const layout = layoutPrompt(24, 80);
 const tr = toolReq({input: {command: 'perm-ok'}});
@@ -42,7 +42,7 @@ await show('PermissionPrompt', React.createElement(PermissionPrompt, {request: t
 await show('QuestionPrompt', React.createElement(QuestionPrompt, {request: qr, state: initQuestionPrompt(qr, 0), layout, reveal, position: 1, total: 1}));
 const pending = fakeController();
 pending.pendingPermissions.push(toolReq({input: {command: 'modal-ok'}}));
-await show('ChatViewModal', React.createElement(ChatView, {controller: pending, print() {}, close() {}, scrub: s => s, reveal, credentialLabel: 'chat-ok'}));
+await show('ChatViewModal', React.createElement(ChatView, {controller: pending, print() {}, close() {}, scrub: s => s, reveal}));
 process.stdout.write('FRAMES:' + JSON.stringify(frames));
 process.exit(0);
 `;
@@ -62,7 +62,7 @@ test('ui components render under tsx run from the host root', () => {
 	assert.match(frames['Spinner'] as string, /[◰◳◲◱]/);
 	assert.match(frames['InputLine'] as string, /input-ok/);
 	assert.match(frames['LiveTools'] as string, /Bash\(tools-ok\)/);
-	assert.match(frames['ChatView'] as string, /chat-ok/);
+	assert.match(frames['ChatView'] as string, /idle$/);
 	assert.match(frames['PermissionPrompt'] as string, /perm-ok/);
 	assert.match(frames['QuestionPrompt'] as string, /Which color\?/);
 	assert.match(frames['ChatViewModal'] as string, /modal-ok/);

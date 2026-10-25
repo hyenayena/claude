@@ -16,7 +16,7 @@ afterEach(() => {
 const open = async (req: Parameters<ReturnType<typeof fakeController>['request']>[0], rows: number, columns = 80) => {
 	const controller = fakeController();
 	const h = mountHarness(
-		<ChatView controller={controller} print={() => {}} close={() => {}} scrub={s => s} reveal={reveal} credentialLabel="API key" armMs={ARM} projectDir="/app" />,
+		<ChatView controller={controller} print={() => {}} close={() => {}} scrub={s => s} reveal={reveal} armMs={ARM} projectDir="/app" />,
 		{columns, rows},
 	);
 	cleanup.push(() => h.unmount());

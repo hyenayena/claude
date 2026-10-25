@@ -22,7 +22,7 @@ afterEach(() => {
 	cleanup = [];
 });
 
-function setup(size?: {columns: number; rows: number}, label = 'API key', extra: Partial<ChatViewProps> = {}) {
+function setup(size?: {columns: number; rows: number}, extra: Partial<ChatViewProps> = {}) {
 	const controller: FakeController = fakeController();
 	const printed: string[] = [];
 	// Every print in order, the empty gap lines between blocks included.
@@ -37,7 +37,6 @@ function setup(size?: {columns: number; rows: number}, label = 'API key', extra:
 			},
 			close: () => closed.count++,
 			scrub,
-			credentialLabel: label,
 			...extra,
 		}),
 		size,
@@ -49,11 +48,11 @@ function setup(size?: {columns: number; rows: number}, label = 'API key', extra:
 test('createChatElement returns a renderable element', async () => {
 	const controller = fakeController();
 	const h = mountHarness(
-		createChatElement({controller, print() {}, close() {}, scrub, credentialLabel: 'API key'}) as never,
+		createChatElement({controller, print() {}, close() {}, scrub}) as never,
 	);
 	cleanup.push(() => h.unmount());
 	await h.settle();
-	assert.match(h.lastFrame(), /API key/);
+	assert.match(h.lastFrame(), /idle$/);
 });
 
 test('typing builds the buffer and Enter sends and echoes', async () => {
@@ -192,14 +191,14 @@ test('turn errors are printed and the chat stays usable', async () => {
 	assert.deepEqual(t.controller.calls.sent, ['again']);
 });
 
-test('status bar shows the label and never a secret', async () => {
-	const t = setup(undefined, `subscription token ${SECRET}`);
+test('status bar starts with the session and never shows a secret', async () => {
+	const t = setup();
 	t.controller.ui({kind: 'session', sessionId: 'abcdef123456', model: `model-${SECRET}`});
 	t.controller.ui({kind: 'result', ok: true, subtype: 'success', costUsd: 0.0123});
 	await t.settle();
 	const frame = t.lastFrame();
 	assert.ok(!frame.includes(SECRET));
-	assert.match(frame, /\[redacted\] · abcdef12 · idle/);
+	assert.match(frame, /abcdef12 · model-\[redacted\] · idle/);
 });
 
 test('live height stays below rows - 2 after a 50 KB stream at 24 rows', async () => {
@@ -297,7 +296,7 @@ async function typeText(t: {press: (s: string) => unknown; settle: (ms?: number)
 }
 
 async function withPrompt(req: PermissionRequest = toolReq(), size?: {columns: number; rows: number}) {
-	const t = setup(size, 'API key', armed);
+	const t = setup(size, armed);
 	await t.settle();
 	t.controller.request(req);
 	await t.settle(ARM + 50);
@@ -305,7 +304,7 @@ async function withPrompt(req: PermissionRequest = toolReq(), size?: {columns: n
 }
 
 test('the modal takes focus: keys never reach the draft and Enter never submits it', async () => {
-	const t = setup(undefined, 'API key', armed);
+	const t = setup(undefined, armed);
 	await t.settle();
 	t.press('draft text');
 	await t.settle();
@@ -378,7 +377,7 @@ test('r opens the reason editor; Enter sends it, Esc returns', async () => {
 
 test('s and Ctrl+C deny everything and interrupt the turn without leaving', async () => {
 	for (const key of ['s', '\u0003']) {
-		const t = setup(undefined, 'API key', armed);
+		const t = setup(undefined, armed);
 		t.controller.setState('running');
 		await t.settle();
 		t.controller.request(toolReq({id: 'a'}));
@@ -413,7 +412,7 @@ test('a defaultToNo request opens on Deny and ignores the y and a shortcuts', as
 });
 
 test('typeahead within the arming window is ignored; paste is ignored', async () => {
-	const t = setup(undefined, 'API key', {reveal, projectDir: '/app'});
+	const t = setup(undefined, {reveal, projectDir: '/app'});
 	await t.settle();
 	t.controller.request(toolReq());
 	await t.settle(100);
@@ -432,7 +431,7 @@ test('typeahead within the arming window is ignored; paste is ignored', async ()
 });
 
 test('a double-tapped Enter cannot approve two queued prompts', async () => {
-	const t = setup(undefined, 'API key', armed);
+	const t = setup(undefined, armed);
 	await t.settle();
 	t.controller.request(toolReq({id: 'a'}));
 	t.controller.request(toolReq({id: 'b'}));
@@ -472,7 +471,7 @@ test('long lines wrap and large commands and diffs fit the live region', async (
 		const command = Array.from({length: 100}, (_, i) => `echo line ${i}`).join('\n');
 		const bash = await withPrompt(toolReq({input: {command}}), {columns: 80, rows});
 		assert.ok(frameRows(bash.lastFrame()) <= rows - 2, `bash rows=${rows} h=${frameRows(bash.lastFrame())}`);
-		assert.match(bash.lastFrame(), /API key/);
+		assert.match(bash.lastFrame(), /awaiting approval$/);
 
 		const preview = {
 			rows: Array.from({length: 500}, (_, i) => ({kind: (i % 2 ? 'add' : 'del') as 'add' | 'del', text: `line ${i}`, no: i + 1})),
@@ -486,7 +485,7 @@ test('long lines wrap and large commands and diffs fit the live region', async (
 			{columns: 80, rows},
 		);
 		assert.ok(frameRows(edit.lastFrame()) <= rows - 2, `edit rows=${rows} h=${frameRows(edit.lastFrame())}`);
-		assert.match(edit.lastFrame(), /API key/);
+		assert.match(edit.lastFrame(), /awaiting approval$/);
 	}
 });
 
@@ -506,7 +505,7 @@ test('v opens the pager and Esc returns', async () => {
 });
 
 test('Shift+Tab asks for confirmation before accept-edits; Enter applies it', async () => {
-	const t = setup(undefined, 'API key', armed);
+	const t = setup(undefined, armed);
 	await t.settle();
 	t.press(SHIFT_TAB);
 	await t.settle(ARM + 50);
@@ -515,12 +514,12 @@ test('Shift+Tab asks for confirmation before accept-edits; Enter applies it', as
 	t.press(ENTER);
 	await t.settle();
 	assert.deepEqual(t.controller.calls.modes, ['acceptEdits']);
-	assert.match(t.lastFrame(), /mode: accept edits/);
+	assert.match(t.lastFrame(), /accept edits on/);
 	assert.ok(t.printed.some(p => p.includes('auto-accept edits (this chat only)')));
 	t.press(SHIFT_TAB);
 	await t.settle();
 	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'plan'], 'plan needs no confirmation');
-	assert.match(t.lastFrame(), /mode: plan/);
+	assert.match(t.lastFrame(), /plan mode on/);
 	t.press(SHIFT_TAB);
 	await t.settle(ARM + 50);
 	assert.match(t.lastFrame().replace(/\s+/g, ' '), /Let a model classifier approve or deny tool calls/);
@@ -528,16 +527,16 @@ test('Shift+Tab asks for confirmation before accept-edits; Enter applies it', as
 	t.press(ENTER);
 	await t.settle();
 	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'plan', 'auto']);
-	assert.match(t.lastFrame(), /mode: auto/);
+	assert.match(t.lastFrame(), /auto mode on/);
 	assert.ok(t.printed.some(p => p.includes('Mode: auto (a classifier approves')));
 	t.press(SHIFT_TAB);
 	await t.settle();
 	assert.deepEqual(t.controller.calls.modes, ['acceptEdits', 'plan', 'auto', 'default']);
-	assert.match(t.lastFrame(), /mode: default/);
+	assert.doesNotMatch(t.lastFrame(), /mode on|mode:/);
 });
 
 test('any other key cancels the accept-edits confirmation and Enter before arming does not apply it', async () => {
-	const t = setup(undefined, 'API key', {reveal, projectDir: '/app'});
+	const t = setup(undefined, {reveal, projectDir: '/app'});
 	await t.settle();
 	t.press(SHIFT_TAB);
 	await t.settle(40);
@@ -553,7 +552,7 @@ test('any other key cancels the accept-edits confirmation and Enter before armin
 });
 
 test('audit entries are printed once, without content', async () => {
-	const t = setup(undefined, 'API key', armed);
+	const t = setup(undefined, armed);
 	await t.settle();
 	t.controller.emit({type: 'audit', entry: {outcome: 'allowed', toolName: 'Bash', summary: 'ls -la'}});
 	t.controller.emit({type: 'audit', entry: {outcome: 'auto-accepted', toolName: 'Edit', summary: '/app/a.ts (+2 -1)'}});
@@ -579,7 +578,7 @@ test('leaving and unmounting with a pending prompt cancel it', async () => {
 });
 
 test('the approval-fatigue counter appears from the fourth request of a turn', async () => {
-	const t = setup(undefined, 'API key', armed);
+	const t = setup(undefined, armed);
 	t.controller.setState('running');
 	await t.settle();
 	for (let i = 1; i <= 4; i++) {
@@ -667,7 +666,7 @@ function fakeHost(columns = 50) {
 
 test('with a host: input is read only while focused', async () => {
 	const f = fakeHost();
-	const t = setup(undefined, 'API key', {host: f.host});
+	const t = setup(undefined, {host: f.host});
 	await t.settle();
 	f.set({focused: false});
 	await t.settle();
@@ -683,7 +682,7 @@ test('with a host: input is read only while focused', async () => {
 
 test('with a host: the host key is never typed, → on an empty draft moves focus, Esc idle stays', async () => {
 	const f = fakeHost();
-	const t = setup(undefined, 'API key', {host: f.host});
+	const t = setup(undefined, {host: f.host});
 	await t.settle();
 	t.press('ab');
 	await t.settle();
@@ -709,7 +708,7 @@ test('with a host: the host key is never typed, → on an empty draft moves focu
 
 test('with a host: lines fit the width the host gives', async () => {
 	const f = fakeHost(30);
-	const t = setup({columns: 100, rows: 24}, 'API key', {host: f.host});
+	const t = setup({columns: 100, rows: 24}, {host: f.host});
 	await t.settle();
 	t.press('x'.repeat(80));
 	await t.settle();
@@ -720,7 +719,7 @@ test('with a host: Esc never opens the console (double Shift does that in core);
 	const f = fakeHost();
 	let toggles = 0;
 	const host = {...f.host, togglePanel: () => (toggles++, true)};
-	const t = setup(undefined, 'API key', {host});
+	const t = setup(undefined, {host});
 	await t.settle();
 	t.press(ESC);
 	await t.settle(40);
@@ -745,10 +744,10 @@ test('with a host title bar: the chat name and status go up there, without a pri
 	const f = fakeHost();
 	const bars: Array<[string | undefined, string | undefined]> = [];
 	const host = {...f.host, setTitle: (title: string | undefined, detail?: string) => void bars.push([title, detail])};
-	const t = setup(undefined, 'API key', {host});
+	const t = setup(undefined, {host});
 	await t.settle();
-	assert.deepEqual(bars.at(-1), ['New chat', 'API key · idle · mode: default']);
-	assert.doesNotMatch(t.lastFrame(), /API key · idle/);
+	assert.deepEqual(bars.at(-1), ['New chat', 'idle']);
+	assert.doesNotMatch(t.lastFrame(), /idle$/);
 	(t.controller as {title?: string}).title = 'Build fix';
 	t.controller.emit({type: 'title', title: 'Build fix'});
 	t.controller.ui({kind: 'result', ok: true, subtype: 'success', costUsd: 0.5});
@@ -760,7 +759,7 @@ test('with a host title bar: the chat name and status go up there, without a pri
 test(':q in the chat quits through the host, or leaves the chat without one; it is never sent', async () => {
 	const f = fakeHost();
 	let quits = 0;
-	const t = setup(undefined, 'API key', {host: {...f.host, quit: () => void quits++}});
+	const t = setup(undefined, {host: {...f.host, quit: () => void quits++}});
 	await t.settle();
 	t.press(':q');
 	await t.settle();
@@ -919,7 +918,7 @@ test('Ctrl+R finds an earlier message; Enter puts it in the input without sendin
 });
 
 test('@ shows matching project files; Tab completes the mention', async () => {
-	const t = setup(undefined, 'API key', {files: () => ['src/app.tsx', 'src/api.ts', 'README.md']});
+	const t = setup(undefined, {files: () => ['src/app.tsx', 'src/api.ts', 'README.md']});
 	await t.settle();
 	t.press('look at @ap');
 	await t.settle();
@@ -935,7 +934,7 @@ test('@ shows matching project files; Tab completes the mention', async () => {
 
 test('Ctrl+G edits the draft in an external editor', async () => {
 	const seen: string[] = [];
-	const t = setup(undefined, 'API key', {openEditor: async text => (seen.push(text), `${text} (edited)`)});
+	const t = setup(undefined, {openEditor: async text => (seen.push(text), `${text} (edited)`)});
 	await t.settle();
 	t.press('draft');
 	await t.settle();
@@ -946,7 +945,7 @@ test('Ctrl+G edits the draft in an external editor', async () => {
 });
 
 test('vim mode: Esc to NORMAL, dw deletes a word, i types again, Enter sends', async () => {
-	const t = setup(undefined, 'API key', {inputMode: () => 'vim'});
+	const t = setup(undefined, {inputMode: () => 'vim'});
 	await t.settle();
 	t.press('one two');
 	await t.settle();
@@ -972,7 +971,7 @@ test('vim mode: Esc to NORMAL, dw deletes a word, i types again, Enter sends', a
 
 test('Ctrl+O shows the full transcript with scrolling; Esc closes it', async () => {
 	const lines = Array.from({length: 60}, (_v, i) => `row ${i}`);
-	const t = setup({columns: 80, rows: 24}, 'API key', {loadTranscript: async () => lines});
+	const t = setup({columns: 80, rows: 24}, {loadTranscript: async () => lines});
 	await t.settle();
 	t.press('\u000f');
 	await t.settle(60);
@@ -988,7 +987,7 @@ test('Ctrl+O shows the full transcript with scrolling; Esc closes it', async () 
 	t.press(ESC);
 	await t.settle(60);
 	assert.doesNotMatch(t.lastFrame(), /Transcript/);
-	assert.match(t.lastFrame(), /API key/);
+	assert.match(t.lastFrame(), /idle$/);
 });
 
 function mouseFakeHost() {
@@ -1012,7 +1011,7 @@ function mouseFakeHost() {
 
 test('mouse: a click on the input moves the cursor there; malformed events are ignored', async () => {
 	const m = mouseFakeHost();
-	const t = setup(undefined, 'API key', {host: m.host});
+	const t = setup(undefined, {host: m.host});
 	await t.settle();
 	assert.equal(m.listeners.length, 1);
 	t.press('hello world');
@@ -1035,7 +1034,7 @@ test('mouse: a click on the input moves the cursor there; malformed events are i
 
 test('mouse: in vim NORMAL the input sits above its rule and the mode line, and the cursor stays on a character', async () => {
 	const m = mouseFakeHost();
-	const t = setup(undefined, 'API key', {host: m.host, inputMode: () => 'vim'});
+	const t = setup(undefined, {host: m.host, inputMode: () => 'vim'});
 	await t.settle();
 	t.press('abc');
 	await t.settle();
@@ -1057,7 +1056,7 @@ test('mouse: in vim NORMAL the input sits above its rule and the mode line, and 
 test('mouse: the wheel is taken only while the transcript viewer is open', async () => {
 	const m = mouseFakeHost();
 	const lines = Array.from({length: 60}, (_v, i) => `row ${i}`);
-	const t = setup({columns: 80, rows: 24}, 'API key', {host: m.host, loadTranscript: async () => lines});
+	const t = setup({columns: 80, rows: 24}, {host: m.host, loadTranscript: async () => lines});
 	await t.settle();
 	assert.equal(m.send({kind: 'wheel', wheel: 'up', x: 1, y: 1}), false);
 	t.press('\u000f');
@@ -1078,7 +1077,7 @@ test('mouse: the wheel is taken only while the transcript viewer is open', async
 
 test('mouse: clicks during a permission prompt or while waiting for the answer are not taken', async () => {
 	const m = mouseFakeHost();
-	const t = setup(undefined, 'API key', {...armed, host: m.host});
+	const t = setup(undefined, {...armed, host: m.host});
 	await t.settle();
 	t.press('draft');
 	await t.settle();
@@ -1098,7 +1097,7 @@ test('mouse: clicks during a permission prompt or while waiting for the answer a
 
 test('mouse: a host without subscribeMouse changes nothing', async () => {
 	const f = fakeHost();
-	const t = setup(undefined, 'API key', {host: f.host});
+	const t = setup(undefined, {host: f.host});
 	await t.settle();
 	t.press('abc');
 	await t.settle();
@@ -1124,7 +1123,7 @@ function limitSetup(clock: {now: () => number; timeZone?: string}) {
 	const f = fakeHost();
 	const bars: Array<[string | undefined, string | undefined]> = [];
 	const host = {...f.host, setTitle: (title: string | undefined, detail?: string) => void bars.push([title, detail])};
-	const t = setup(undefined, 'API key', {host, clock});
+	const t = setup(undefined, {host, clock});
 	return {...t, bars};
 }
 
@@ -1136,7 +1135,7 @@ test('the limit indicator shows in the status, clears on allowed and on expiry',
 	await t.settle();
 	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed_warning', type: 'five_hour', utilization: 0.85, resetsAt}});
 	await t.settle();
-	assert.match(t.bars.at(-1)![1] ?? '', /mode: default · 5h limit 85% · resets 11:00/);
+	assert.match(t.bars.at(-1)![1] ?? '', /^5h limit 85%, resets 11:00 · idle$/);
 	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed'}});
 	await t.settle();
 	assert.doesNotMatch(t.bars.at(-1)![1] ?? '', /limit/);
@@ -1210,7 +1209,7 @@ const plainLen = (s: string) => [...s.replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g
 
 test('assistant tables are printed within the host width, and the last width is kept while it reads 0', async () => {
 	const f = fakeHost(40);
-	const t = setup(undefined, 'API key', {host: f.host});
+	const t = setup(undefined, {host: f.host});
 	await t.settle();
 	t.controller.ui({kind: 'text', messageId: 'm1', text: TABLE_TEXT});
 	await t.settle();
@@ -1271,7 +1270,7 @@ function commandFakeHost() {
 
 test('"/command" runs a yena command in the console; other slash lines and "//" go to Claude', async () => {
 	const c = commandFakeHost();
-	const t = setup(undefined, 'API key', {host: c.host});
+	const t = setup(undefined, {host: c.host});
 	await t.settle();
 	t.press('/project list');
 	await t.settle();
@@ -1297,7 +1296,7 @@ test('"/command" runs a yena command in the console; other slash lines and "//" 
 
 test('typing "/" lists matching commands; Tab or Enter takes the highlighted one, a full name runs', async () => {
 	const c = commandFakeHost();
-	const t = setup(undefined, 'API key', {host: c.host});
+	const t = setup(undefined, {host: c.host});
 	await t.settle();
 	t.press('/');
 	await t.settle();
@@ -1328,7 +1327,7 @@ test('typing "/" lists matching commands; Tab or Enter takes the highlighted one
 
 test('after "/claude " the hints list its subcommands; Tab takes one, Enter after a space runs the line', async () => {
 	const c = commandFakeHost();
-	const t = setup(undefined, 'API key', {host: c.host});
+	const t = setup(undefined, {host: c.host});
 	await t.settle();
 	t.press('/cla');
 	await t.settle();
@@ -1365,7 +1364,7 @@ test('Tab with nothing to complete opens or closes the console; with suggestions
 	const c = commandFakeHost();
 	let toggles = 0;
 	const host = {...c.host, togglePanel: () => (toggles++, true)};
-	const t = setup(undefined, 'API key', {host});
+	const t = setup(undefined, {host});
 	await t.settle();
 	t.press('\t');
 	await t.settle();
@@ -1404,7 +1403,7 @@ test('a send refused because another session works keeps the text in the input',
 });
 
 test('initialSend goes out once when the view mounts, shown as the user line', async () => {
-	const t = setup(undefined, 'API key', {initialSend: 'hello from the scheduler'});
+	const t = setup(undefined, {initialSend: 'hello from the scheduler'});
 	await t.settle();
 	assert.deepEqual(t.controller.calls.sent, ['hello from the scheduler']);
 	assert.ok(t.printed.some(l => l.includes('hello from the scheduler')));
