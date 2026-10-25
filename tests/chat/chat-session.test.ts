@@ -316,10 +316,11 @@ test('turn lifecycle is logged without prompt or response text', async () => {
 	queries[0]?.emit({type: 'result', subtype: 'success', is_error: false, result: 'ASSISTANT-SENTINEL-2', session_id: 'sess-1'});
 	await tick();
 	const msgs = log.records.map(r => r.msg);
-	assert.deepEqual(msgs, ['sdk session spawned', 'turn started', 'turn ended']);
+	assert.deepEqual(msgs, ['sdk session spawned', 'turn started', 'first output', 'turn ended']);
 	assert.deepEqual(log.records[1]!.fields, {chars: 'PROMPT-SENTINEL-1'.length});
-	assert.equal(log.records[2]!.fields.outcome, 'ok');
-	assert.equal(typeof log.records[2]!.fields.ms, 'number');
+	assert.equal(log.records[2]!.fields.warm, false, 'the first message starts Claude Code');
+	assert.equal(log.records[3]!.fields.outcome, 'ok');
+	assert.equal(typeof log.records[3]!.fields.ms, 'number');
 	assert.ok(!JSON.stringify(log.records).includes('SENTINEL'));
 });
 

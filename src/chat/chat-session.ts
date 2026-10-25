@@ -23,6 +23,8 @@ import {
 	sdkPermissionMode,
 } from './permission.js';
 
+const FIRST_OUTPUT: ReadonlySet<UiEvent['kind']> = new Set(['text-delta', 'text', 'thinking', 'thinking-tokens', 'tool-input', 'tool-use']);
+
 export const MAX_TURNS_MESSAGE = 'Reached the maximum number of turns for one request';
 
 export type ChatSessionOptions = {
@@ -149,6 +151,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private readonly meter = new UsageMeter();
 	// The meter's totals when the current turn started; the turn's share is logged when it ends.
 	private turnUsageFrom: ChatUsage | undefined;
+	// A sent turn waiting for Claude's first output; `warm`: the Claude Code process was already running.
+	private firstOutput: {at: number; warm: boolean} | undefined;
 	private lockHeld = false;
 	private idleTimer: NodeJS.Timeout | undefined;
 	// Bumped when the counter is reset, so a release from an earlier turn cannot touch the next one.
@@ -290,6 +294,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			this.lockHeld = true;
 		}
 		this.clearIdleTimer();
+		const warm = this.handle !== undefined;
 		let handle: Handle;
 		try {
 			handle = this.handle ?? this.spawn();
@@ -297,6 +302,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			this.settleIdle();
 			throw err;
 		}
+		this.firstOutput = {at: Date.now(), warm};
 		this.authFailed = false;
 		this.turnError = undefined;
 		this.pending = undefined;
@@ -602,6 +608,11 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private onUi(event: UiEvent, handle: Handle): void {
 		let ev = event;
 		if (ev.kind === 'cli-state' && ev.state === 'running') this.beginCliTurn(handle);
+		if (this.firstOutput && FIRST_OUTPUT.has(ev.kind)) {
+			// How long a reply takes to start, with a running process and after a respawn (IDLE_CLOSE_MS).
+			this.log.info('first output', {ms: Date.now() - this.firstOutput.at, warm: this.firstOutput.warm});
+			this.firstOutput = undefined;
+		}
 		if (ev.kind === 'session') {
 			this._sessionId = ev.sessionId;
 			this._model = ev.model ?? this._model;
@@ -738,6 +749,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 
 	private endTurn(outcome: TurnOutcome, error?: string, failure?: FailureKind): void {
 		if (this._state !== 'running') return;
+		this.firstOutput = undefined;
 		this.clearTimers();
 		this.pending = undefined;
 		this.setState('idle');
