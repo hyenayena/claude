@@ -358,6 +358,10 @@ export function statusLineText(status: StatusLine): string {
 	switch (status.kind) {
 		case 'thinking':
 			return 'Thinking…';
+		case 'tool-input': {
+			const name = status.name.replace(/[^\w:.-]/g, '').slice(0, 40);
+			return name ? `Writing ${name}…` : 'Writing…';
+		}
 		case 'compacting':
 			return 'Compacting…';
 		case 'retry':
@@ -365,11 +369,27 @@ export function statusLineText(status: StatusLine): string {
 	}
 }
 
+export const formatDuration = (seconds: number): string => {
+	const s = Math.max(0, Math.floor(seconds));
+	return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+};
+
+const formatTokens = (n: number): string => (n < 1000 ? `${Math.round(n)}` : `${(n / 1000).toFixed(1)}k`);
+
+// Silence longer than this is shown, so a long think can be told from a hang.
+export const QUIET_NOTICE_S = 60;
+
 /** The line under the live output while a turn runs: what is happening, for how long, how to stop it. */
-export function workingText(phase: Phase, status: StatusLine, seconds: number): string {
+export function workingText(phase: Phase, status: StatusLine, seconds: number, quietSeconds = 0): string {
 	if (phase === 'interrupting') return 'Interrupting…';
 	const what = statusLineText(status) || 'Working…';
-	return `${what} (${Math.max(0, Math.floor(seconds))}s · esc to interrupt)`;
+	const parts = [formatDuration(seconds)];
+	// Tool input is JSON: about four characters a token.
+	const tokens = status?.kind === 'thinking' ? status.tokens : status?.kind === 'tool-input' && status.chars > 0 ? status.chars / 4 : undefined;
+	if (tokens !== undefined && tokens > 0) parts.push(`↓ ${formatTokens(tokens)} tokens`);
+	if (quietSeconds >= QUIET_NOTICE_S) parts.push(`no response for ${formatDuration(quietSeconds)}`);
+	parts.push('esc to interrupt');
+	return `${what} (${parts.join(' · ')})`;
 }
 
 const MODE_HINT: Record<ChatMode, string> = {

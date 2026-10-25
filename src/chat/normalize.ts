@@ -84,6 +84,10 @@ const fromSystem = (msg: Loose): UiEvent[] => {
 			const s = msg['state'];
 			return s === 'running' || s === 'idle' || s === 'requires_action' ? [{kind: 'cli-state', state: s}] : [];
 		}
+		case 'thinking_tokens': {
+			const tokens = num(msg['estimated_tokens']);
+			return tokens === undefined ? [] : [{kind: 'thinking-tokens', tokens}];
+		}
 		case 'status': {
 			const s = msg['status'];
 			if (s === null || s === 'compacting' || s === 'requesting') return [{kind: 'status', status: s}];
@@ -115,11 +119,16 @@ const fromStream = (msg: Loose): UiEvent[] => {
 			const text = str(d['text']);
 			return text ? [{kind: 'text-delta', text}] : [];
 		}
+		if (isRecord(d) && d['type'] === 'input_json_delta') {
+			const chars = str(d['partial_json'])?.length ?? 0;
+			return chars > 0 ? [{kind: 'tool-input-delta', chars}] : [];
+		}
 		return [];
 	}
 	if (ev['type'] === 'content_block_start') {
 		const b = ev['content_block'];
 		if (isRecord(b) && (b['type'] === 'thinking' || b['type'] === 'redacted_thinking')) return [{kind: 'thinking'}];
+		if (isRecord(b) && b['type'] === 'tool_use') return [{kind: 'tool-input', name: str(b['name']) ?? ''}];
 	}
 	return [];
 };

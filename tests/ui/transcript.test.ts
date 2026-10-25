@@ -161,3 +161,29 @@ test('the rate-limit report is kept and survives resetTranscript', () => {
 	assert.deepEqual(resetTranscript(r.state).limit, info);
 	assert.equal(resetTranscript(initialTranscript()).limit, undefined);
 });
+
+test('the status line follows thinking estimates and tool input until the call arrives', () => {
+	const thinking = run([
+		{type: 'state', state: 'running'},
+		ui({kind: 'thinking'}),
+		ui({kind: 'thinking-tokens', tokens: 50}),
+		ui({kind: 'thinking'}),
+		ui({kind: 'thinking-tokens', tokens: 227}),
+	]);
+	assert.deepEqual(thinking.state.status, {kind: 'thinking', tokens: 227});
+	const input = run([
+		{type: 'state', state: 'running'},
+		ui({kind: 'tool-input', name: 'Edit'}),
+		ui({kind: 'tool-input-delta', chars: 30}),
+		ui({kind: 'tool-input-delta', chars: 12}),
+	]);
+	assert.deepEqual(input.state.status, {kind: 'tool-input', name: 'Edit', chars: 42});
+	const called = run([
+		{type: 'state', state: 'running'},
+		ui({kind: 'tool-input', name: 'Edit'}),
+		ui({kind: 'tool-use', toolUseId: 't1', name: 'Edit', input: {}}),
+		ui({kind: 'tool-input-delta', chars: 5}),
+	]);
+	assert.equal(called.state.status, null, 'a stray delta after the call changes nothing');
+	assert.deepEqual(run([ui({kind: 'cli-state', state: 'running'})]).out, []);
+});

@@ -21,13 +21,13 @@ test('system status and api_retry', () => {
 	);
 });
 
-test('stream events: only text_delta and thinking start map', () => {
+test('stream events: text, thinking start and tool input map', () => {
 	const ev = (event: unknown) => n({type: 'stream_event', event, parent_tool_use_id: null});
 	assert.deepEqual(ev({type: 'content_block_delta', index: 0, delta: {type: 'text_delta', text: 'hi'}}), [{kind: 'text-delta', text: 'hi'}]);
 	assert.deepEqual(ev({type: 'content_block_start', index: 0, content_block: {type: 'thinking'}}), [{kind: 'thinking'}]);
 	assert.deepEqual(ev({type: 'content_block_start', index: 0, content_block: {type: 'text', text: ''}}), []);
 	assert.deepEqual(ev({type: 'content_block_delta', index: 0, delta: {type: 'thinking_delta', thinking: 'x'}}), []);
-	assert.deepEqual(ev({type: 'content_block_delta', index: 0, delta: {type: 'input_json_delta', partial_json: '{'}}), []);
+	assert.deepEqual(ev({type: 'content_block_delta', index: 0, delta: {type: 'input_json_delta', partial_json: '{'}}), [{kind: 'tool-input-delta', chars: 1}]);
 	for (const type of ['content_block_stop', 'message_start', 'message_delta', 'message_stop']) assert.deepEqual(ev({type}), []);
 });
 
@@ -131,4 +131,19 @@ test('task_started carries tool_use_id and task_type', () => {
 		n({type: 'system', subtype: 'task_started', task_id: 'bx1', tool_use_id: 'tu1', task_type: 'local_bash', is_backgrounded: false, description: 'sleep'}),
 		[{kind: 'task', id: 'bx1', status: 'running', description: 'sleep', toolUseId: 'tu1', taskType: 'local_bash'}],
 	);
+});
+
+test('session state and thinking token reports', () => {
+	assert.deepEqual(normalize({type: 'system', subtype: 'session_state_changed', state: 'running'} as never), [{kind: 'cli-state', state: 'running'}]);
+	assert.deepEqual(normalize({type: 'system', subtype: 'session_state_changed', state: 'weird'} as never), []);
+	assert.deepEqual(normalize({type: 'system', subtype: 'thinking_tokens', estimated_tokens: 227, estimated_tokens_delta: 177} as never), [
+		{kind: 'thinking-tokens', tokens: 227},
+	]);
+});
+
+test('tool input streaming', () => {
+	const ev = (event: unknown) => normalize({type: 'stream_event', event, parent_tool_use_id: null} as never);
+	assert.deepEqual(ev({type: 'content_block_start', content_block: {type: 'tool_use', name: 'Edit', id: 't'}}), [{kind: 'tool-input', name: 'Edit'}]);
+	assert.deepEqual(ev({type: 'content_block_delta', delta: {type: 'input_json_delta', partial_json: '{"a":'}}), [{kind: 'tool-input-delta', chars: 5}]);
+	assert.deepEqual(ev({type: 'content_block_delta', delta: {type: 'input_json_delta', partial_json: ''}}), []);
 });

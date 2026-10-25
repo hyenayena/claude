@@ -25,7 +25,10 @@ export interface RunningTool {
 }
 
 export type StatusLine =
-	| {kind: 'thinking'}
+	// tokens: Claude Code's estimate of the thinking so far.
+	| {kind: 'thinking'; tokens?: number}
+	// Claude is writing the input of a tool call; chars of JSON so far.
+	| {kind: 'tool-input'; name: string; chars: number}
 	| {kind: 'compacting'}
 	| {kind: 'retry'; attempt: number; maxRetries: number; delayMs: number}
 	| null;
@@ -152,7 +155,14 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 				out: [{kind: 'assistant', text: e.text, interrupted: e.aborted === true}],
 			};
 		case 'thinking':
-			return {state: {...state, status: {kind: 'thinking'}}, out: []};
+			return {state: {...state, status: state.status?.kind === 'thinking' ? state.status : {kind: 'thinking'}}, out: []};
+		case 'thinking-tokens':
+			return {state: {...state, status: {kind: 'thinking', tokens: e.tokens}}, out: []};
+		case 'tool-input':
+			return {state: {...state, status: {kind: 'tool-input', name: e.name, chars: 0}}, out: []};
+		case 'tool-input-delta':
+			if (state.status?.kind !== 'tool-input') return {state, out: []};
+			return {state: {...state, status: {...state.status, chars: state.status.chars + e.chars}}, out: []};
 		case 'cli-state':
 			return {state, out: []};
 		case 'task':

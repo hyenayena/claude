@@ -11,6 +11,9 @@ export type UiEvent =
 	// The text of a finished thinking block (empty when the API omits it).
 	| {kind: 'thinking-text'; text: string}
 	| {kind: 'tool-use'; toolUseId: string; name: string; input: unknown}
+	// Claude started writing the input of a tool call (shown until the call itself arrives).
+	| {kind: 'tool-input'; name: string}
+	| {kind: 'tool-input-delta'; chars: number}
 	| {kind: 'tool-result'; toolUseId: string; isError: boolean; text: string}
 	| {kind: 'tool-progress'; toolUseId: string; name: string; elapsedSeconds: number}
 	// What a subagent started by tool `toolUseId` is doing now (its latest tool call).
@@ -19,6 +22,8 @@ export type UiEvent =
 	// Claude Code's own turn state (CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS): it also starts turns itself,
 	// e.g. to read the notification of a background task that finished.
 	| {kind: 'cli-state'; state: 'running' | 'idle' | 'requires_action'}
+	// Estimated thinking tokens of the current reply so far (the thinking text itself is mostly omitted).
+	| {kind: 'thinking-tokens'; tokens: number}
 	| {kind: 'retry'; attempt: number; maxRetries: number; delayMs: number; errorCode?: string}
 	| {kind: 'api-error'; code: string; detail?: string}
 	| {kind: 'rate-limit'; info: RateLimitInfo}

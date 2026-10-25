@@ -20,7 +20,7 @@ for (const m of messages) {
 const collapse = (events: UiEvent[]): string[] => {
 	const out: string[] = [];
 	for (const e of events) {
-		if (e.kind === 'text-delta' && out.at(-1) === 'text-delta') continue;
+		if ((e.kind === 'text-delta' || e.kind === 'tool-input-delta') && out.at(-1) === e.kind) continue;
 		out.push(e.kind);
 	}
 	return out;
@@ -36,6 +36,8 @@ test('normalize turns the real first turn into session, tool and text events', (
 	assert.deepEqual(collapse(events), [
 		'session',
 		'status',
+		'tool-input',
+		'tool-input-delta',
 		'tool-use',
 		'tool-result',
 		'status',

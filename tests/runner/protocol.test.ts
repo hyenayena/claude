@@ -101,3 +101,18 @@ test('open, applyLive and stateUpdate frames keep only known fields', () => {
 	const [upd] = createDecoder('toClient').push(line({v: 1, type: 'stateUpdate', patch: {lastSessionId: 's', chatModel: 'x'}}));
 	assert.deepEqual(upd, {v: 1, type: 'stateUpdate', patch: {lastSessionId: 's'}});
 });
+
+test('live status events cross the protocol; a bad state does not', () => {
+	for (const event of [
+		{kind: 'cli-state', state: 'running'},
+		{kind: 'thinking-tokens', tokens: 1200},
+		{kind: 'tool-input', name: 'Edit'},
+		{kind: 'tool-input-delta', chars: 40},
+	] as const) {
+		const frame: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event}};
+		const [back] = createDecoder('toClient').push(encodeFrame(frame));
+		assert.deepEqual(back, frame);
+	}
+	const broken = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'cli-state', state: 'asleep'}}};
+	assert.throws(() => createDecoder('toClient').push(line(broken)), ProtocolError);
+});

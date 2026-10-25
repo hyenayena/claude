@@ -423,6 +423,12 @@ const readUiEvent = (v: unknown): UiEvent => {
 			};
 		case 'agent-activity':
 			return {kind: 'agent-activity', toolUseId: str(o.toolUseId, 'toolUseId', 256), name: str(o.name, 'name', 256), input: o.input};
+		case 'tool-input':
+			return {kind: 'tool-input', name: str(o.name, 'name', 256)};
+		case 'tool-input-delta':
+			return {kind: 'tool-input-delta', chars: num(o.chars, 'chars')};
+		case 'thinking-tokens':
+			return {kind: 'thinking-tokens', tokens: num(o.tokens, 'tokens')};
 		case 'cli-state':
 			return {kind: 'cli-state', state: oneOf(o.state, ['running', 'idle', 'requires_action'] as const, 'state')};
 		case 'status':

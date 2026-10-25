@@ -157,6 +157,7 @@ export function ChatView(props: ChatViewProps) {
 	);
 	// When the running turn started, for the seconds on the working line.
 	const sinceRef = useRef(Date.now());
+	const lastEventRef = useRef(Date.now());
 	const reveal = props.reveal ?? scrub;
 	const armMs = props.armMs ?? ARM_MS;
 	const terminal = useWindowSize();
@@ -247,6 +248,7 @@ export function ChatView(props: ChatViewProps) {
 	const feed = useCallback(
 		(event: ChatEvent) => {
 			if (closedRef.current) return;
+			lastEventRef.current = Date.now();
 			if (event.type === 'sent') {
 				print(formatUserLine(event.text, scrub));
 				return;
@@ -1003,7 +1005,7 @@ export function ChatView(props: ChatViewProps) {
 				</Text>
 			))}
 			<LiveTools tools={tools} scrub={scrub} maxRows={toolRows} />
-			{workingRows > 0 && <WorkingLine phase={t.phase} status={t.status} since={sinceRef.current} />}
+			{workingRows > 0 && <WorkingLine phase={t.phase} status={t.status} since={sinceRef.current} lastEventAt={t.pending > 0 ? undefined : lastEventRef.current} />}
 			{todos.map((line, i) => (
 				<Text key={`todo-${i}`} wrap="truncate">
 					{line}

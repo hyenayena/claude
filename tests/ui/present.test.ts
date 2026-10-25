@@ -91,6 +91,11 @@ test('the working line and the mode hint', () => {
 	assert.equal(workingText('running', null, 12.7), 'Working… (12s · esc to interrupt)');
 	assert.equal(workingText('running', {kind: 'thinking'}, 0), 'Thinking… (0s · esc to interrupt)');
 	assert.equal(workingText('interrupting', null, 3), 'Interrupting…');
+	assert.equal(workingText('running', {kind: 'thinking', tokens: 3400}, 72), 'Thinking… (1m 12s · ↓ 3.4k tokens · esc to interrupt)');
+	assert.equal(workingText('running', {kind: 'tool-input', name: 'Edit', chars: 800}, 5), 'Writing Edit… (5s · ↓ 200 tokens · esc to interrupt)');
+	assert.equal(workingText('running', {kind: 'tool-input', name: 'Ed\u001bit', chars: 0}, 5), 'Writing Edit… (5s · esc to interrupt)');
+	assert.equal(workingText('running', null, 130, 59), 'Working… (2m 10s · esc to interrupt)');
+	assert.equal(workingText('running', null, 130, 75), 'Working… (2m 10s · no response for 1m 15s · esc to interrupt)');
 	assert.equal(modeHint('default'), '');
 	assert.equal(modeHint('acceptEdits'), '⏵⏵ accept edits on (shift+tab to cycle)');
 	assert.equal(modeHint('plan'), '⏸ plan mode on (shift+tab to cycle)');
