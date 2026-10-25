@@ -175,6 +175,8 @@ export function buildEnv(
 	env.CLAUDE_CONFIG_DIR = paths.configDir;
 	env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1';
 	env.DISABLE_AUTOUPDATER = '1';
+	// Turn start and end as Claude Code sees them, including the turns it starts itself.
+	env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
 	if (onPath('rg', base.PATH)) {
 		env.USE_BUILTIN_RIPGREP = '0';
 	}

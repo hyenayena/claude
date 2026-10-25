@@ -153,10 +153,13 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 			};
 		case 'thinking':
 			return {state: {...state, status: {kind: 'thinking'}}, out: []};
+		case 'cli-state':
+			return {state, out: []};
 		case 'task':
 			// A background task reports once, when it settles; foreground ones show as their tool call.
-			if (e.status === 'running' || !e.background) return {state, out: []};
-			return {state, out: [{kind: 'task', status: e.status, description: e.description ?? 'task', ...(e.summary !== undefined && {summary: e.summary})}]};
+			// A new state object either way: the status bar counts tasks and must render again.
+			if (e.status === 'running' || !e.background) return {state: {...state}, out: []};
+			return {state: {...state}, out: [{kind: 'task', status: e.status, description: e.description ?? 'task', ...(e.summary !== undefined && {summary: e.summary})}]};
 		case 'thinking-text':
 			return {state, out: [{kind: 'thinking', text: e.text}]};
 		case 'tool-use': {

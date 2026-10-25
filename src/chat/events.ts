@@ -16,6 +16,9 @@ export type UiEvent =
 	// What a subagent started by tool `toolUseId` is doing now (its latest tool call).
 	| {kind: 'agent-activity'; toolUseId: string; name: string; input: unknown}
 	| {kind: 'status'; status: 'compacting' | 'requesting' | null}
+	// Claude Code's own turn state (CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS): it also starts turns itself,
+	// e.g. to read the notification of a background task that finished.
+	| {kind: 'cli-state'; state: 'running' | 'idle' | 'requires_action'}
 	| {kind: 'retry'; attempt: number; maxRetries: number; delayMs: number; errorCode?: string}
 	| {kind: 'api-error'; code: string; detail?: string}
 	| {kind: 'rate-limit'; info: RateLimitInfo}
@@ -55,7 +58,7 @@ export interface ChatController {
 	readonly mode: ChatMode;
 	readonly title: string | undefined;
 	// Background tasks and subagents of this chat (newest first), when the controller tracks them.
-	readonly tasks?: readonly {status: string; background: boolean}[];
+	readonly tasks?: readonly {status: string; background: boolean; taskType?: string}[];
 	backgroundTasks?(): Promise<boolean>;
 	readonly pendingPermissions: readonly PermissionRequest[];
 	// Closing only leaves a chat that lives in another process: its pending permissions stay pending.

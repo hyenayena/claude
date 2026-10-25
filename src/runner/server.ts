@@ -24,6 +24,9 @@ import {accepts, runnerSocketPath} from './spawn.js';
 export const NO_ATTACH_MS = 10_000;
 // Bound for a detached runner that keeps an unsent queue after a failed turn, waiting for the user.
 export const LINGER_MS = 30 * 60_000;
+// After a background task ends Claude Code usually starts a turn to read its notification; a detached
+// runner waits this long for it before it decides nothing is left.
+export const TASK_SETTLE_MS = 5000;
 const LOG_RING = 200;
 const MAX_CLIENTS = 8;
 const HELLO_MS = 5000;
@@ -84,6 +87,7 @@ export type RunnerOptions = {
 	log?: Logger;
 	noAttachMs?: number;
 	lingerMs?: number;
+	taskSettleMs?: number;
 	now?: () => number;
 };
 
@@ -356,6 +360,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 		if (closing || client || !engine) return;
 		const s = engine.session;
 		if (s.state === 'running' || s.pendingPermissions.length > 0) return;
+		if (s.tasks.some(t => t.status === 'running')) return;
 		if (queued.length === 0) void shutdown('idle');
 		else armLinger();
 	};
@@ -389,6 +394,10 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 		const id = engine?.session.sessionId;
 		if (id && id !== lastSessionId) lastSessionId = id;
 		if (e.type === 'turn-end') onTurnEnd(e.outcome);
+		if (e.type === 'ui' && e.event.kind === 'task' && e.event.status !== 'running' && !client) {
+			const t = setTimeout(settleDetached, opts.taskSettleMs ?? TASK_SETTLE_MS);
+			t.unref();
+		}
 	};
 
 	const shutdown = (reason: string, byeReason = reason): Promise<RunnerExit> => {

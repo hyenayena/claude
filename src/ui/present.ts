@@ -388,6 +388,17 @@ export function toolRunningText(tool: RunningTool, scrub: Scrub): string {
 	return `${toolHeader(tool.name, tool.input, scrub)}${secs > 0 ? ` ${secs}s` : ''}${activity}`;
 }
 
+/** Running work for the status bar: subagents (foreground and background) and other background tasks. */
+export function tasksBarText(tasks: readonly {status: string; background: boolean; taskType?: string}[]): string {
+	const running = tasks.filter(t => t.status === 'running');
+	const agents = running.filter(t => t.taskType === 'local_agent').length;
+	const background = running.filter(t => t.background).length;
+	const parts: string[] = [];
+	if (agents > 0) parts.push(`${agents} ${agents === 1 ? 'agent' : 'agents'}`);
+	if (background > 0) parts.push(`${background} in background`);
+	return parts.join(' · ');
+}
+
 export function statusBarText(
 	s: {
 		credentialLabel: string;

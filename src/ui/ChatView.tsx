@@ -18,6 +18,7 @@ import {
 	liveTail,
 	modeHint,
 	statusBarText,
+	tasksBarText,
 	todoLines,
 	queuedLines,
 	type Scrub,
@@ -888,8 +889,8 @@ export function ChatView(props: ChatViewProps) {
 		},
 		scrub,
 	);
-	const runningBackground = controller.tasks?.filter(x => x.background && x.status === 'running').length ?? 0;
-	const barStatusFull = runningBackground > 0 ? `${barStatus} · ${runningBackground} in background` : barStatus;
+	const taskText = tasksBarText(controller.tasks ?? []);
+	const barStatusFull = taskText ? `${barStatus} · ${taskText}` : barStatus;
 	// A host with a title bar shows the chat's name and this status above the chat instead.
 	const barTitle = scrub(controller.title ?? NEW_CHAT_TITLE);
 	const statusBar = host?.setTitle ? null : <StatusBar text={barStatusFull} />;

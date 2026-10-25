@@ -62,6 +62,8 @@ export type TaskInfo = {
 	background: boolean;
 	startedAt: number;
 	summary?: string;
+	// Claude Code's task type: local_agent for a subagent, local_bash for a shell command, …
+	taskType?: string;
 };
 const MAX_TASKS = 100;
 
@@ -528,6 +530,33 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		return handle;
 	}
 
+	/**
+	 * Claude Code started a turn on its own (a background task finished and it reads the notification):
+	 * the chat works like after a send, so the idle close cannot end the process mid-turn.
+	 */
+	private beginCliTurn(handle: Handle): void {
+		if (this._state !== 'idle' || this.handle !== handle) return;
+		this.clearIdleTimer();
+		if (!this.lockHeld && this.opts.turnLock) {
+			try {
+				this.opts.turnLock.acquire();
+				this.lockHeld = true;
+			} catch {
+				// Another session took the lock meanwhile; the turn is Claude Code's already and goes on.
+				this.log.warn('turn lock busy for a Claude Code turn');
+			}
+		}
+		this.authFailed = false;
+		this.turnError = undefined;
+		this.pending = undefined;
+		this.switches = 0;
+		this.setState('running');
+		this.turnStartedAt = Date.now();
+		this.log.info('turn started', {origin: 'claude-code'});
+		this.turnHandle = handle;
+		this.armTurnTimer(this.timeoutMs);
+	}
+
 	private async pump(handle: Handle): Promise<void> {
 		try {
 			for await (const msg of handle.q) {
@@ -560,6 +589,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 
 	private onUi(event: UiEvent, handle: Handle): void {
 		let ev = event;
+		if (ev.kind === 'cli-state' && ev.state === 'running') this.beginCliTurn(handle);
 		if (ev.kind === 'session') {
 			this._sessionId = ev.sessionId;
 			this._model = ev.model ?? this._model;
@@ -579,6 +609,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 				background: ev.background ?? known?.background ?? false,
 				startedAt: known?.startedAt ?? Date.now(),
 				...((ev.summary ?? known?.summary) !== undefined && {summary: ev.summary ?? known?.summary}),
+				...((ev.taskType ?? known?.taskType) !== undefined && {taskType: ev.taskType ?? known?.taskType}),
 			});
 			if (this._tasks.size > MAX_TASKS) this._tasks.delete(this._tasks.keys().next().value!);
 			const t = this._tasks.get(ev.id)!;

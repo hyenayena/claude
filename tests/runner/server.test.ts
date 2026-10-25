@@ -711,3 +711,42 @@ test('the runner adds no process-level listeners during its life or after it end
 	await r.handle.stop();
 	assert.deepEqual(counts(), before);
 });
+
+test('keep on: a detached runner waits for background tasks and the turn Claude Code starts after them', async () => {
+	const r = await rig({taskSettleMs: 40});
+	const c = await attach(r, {keep: true});
+	r.session.send('start a server');
+	const tasks: Array<{id: string; status: string; background: boolean}> = [{id: 'b1', status: 'running', background: true}];
+	(r.session as unknown as {tasks: typeof tasks}).tasks = tasks;
+	c.socket.destroy();
+	await tick(30);
+	r.session.endTurn('ok');
+	let finished = false;
+	void r.handle.done.then(() => (finished = true));
+	await tick(80);
+	assert.equal(finished, false, 'the background task still runs');
+	tasks[0]!.status = 'completed';
+	r.session.emit({type: 'ui', event: {kind: 'task', id: 'b1', status: 'completed', background: true}});
+	await tick(10);
+	r.session.state = 'running';
+	r.session.emit({type: 'state', state: 'running'});
+	await tick(80);
+	assert.equal(finished, false, 'the notification turn runs');
+	r.session.endTurn('ok');
+	assert.equal((await r.handle.done).reason, 'idle');
+});
+
+test('keep on: a background task that ends with no turn after it lets the runner go', async () => {
+	const r = await rig({taskSettleMs: 30});
+	const c = await attach(r, {keep: true});
+	r.session.send('x');
+	const tasks = [{id: 'b1', status: 'running', background: true}];
+	(r.session as unknown as {tasks: typeof tasks}).tasks = tasks;
+	c.socket.destroy();
+	await tick(30);
+	r.session.endTurn('ok');
+	await tick(50);
+	tasks[0]!.status = 'stopped';
+	r.session.emit({type: 'ui', event: {kind: 'task', id: 'b1', status: 'stopped', background: true}});
+	assert.equal((await r.handle.done).reason, 'idle');
+});

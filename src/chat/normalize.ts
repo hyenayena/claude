@@ -80,6 +80,10 @@ const fromSystem = (msg: Loose): UiEvent[] => {
 			if (!content || msg['level'] === 'info') return [];
 			return [{kind: 'text', messageId: str(msg['uuid']) ?? 'local', text: content}];
 		}
+		case 'session_state_changed': {
+			const s = msg['state'];
+			return s === 'running' || s === 'idle' || s === 'requires_action' ? [{kind: 'cli-state', state: s}] : [];
+		}
 		case 'status': {
 			const s = msg['status'];
 			if (s === null || s === 'compacting' || s === 'requesting') return [{kind: 'status', status: s}];

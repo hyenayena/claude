@@ -503,6 +503,7 @@ export class RemoteChatSession implements ChatHandle {
 					background: ev.background ?? known?.background ?? false,
 					startedAt: known?.startedAt ?? Date.now(),
 					...((ev.summary ?? known?.summary) !== undefined && {summary: ev.summary ?? known?.summary}),
+					...((ev.taskType ?? known?.taskType) !== undefined && {taskType: ev.taskType ?? known?.taskType}),
 				});
 				if (this._tasks.size > MAX_TASKS) this._tasks.delete(this._tasks.keys().next().value!);
 				return;

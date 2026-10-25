@@ -1155,3 +1155,58 @@ test('a message before the idle close keeps the same process', async () => {
 	assert.equal(queries.length, 1);
 	assert.equal(queries[0]?.closed, 0, 'a running turn is never closed');
 });
+
+const cliState = (state: 'running' | 'idle') => ({type: 'system', subtype: 'session_state_changed', state, session_id: 'sess-1'});
+
+test('a turn Claude Code starts itself (a background task finished) runs like a sent one', async () => {
+	const t = fakeTurnLock();
+	const {session, queries, events, ends} = setup({turnLock: t.lock, idleCloseMs: 20} as never);
+	session.send('start a server');
+	const q = queries[0]!;
+	q.emit(cliState('running'));
+	q.emit(init());
+	q.emit(task('b1', 'task_started'));
+	q.emit(ok());
+	q.emit(cliState('idle'));
+	await tick();
+	assert.equal(session.state, 'idle');
+	q.emit(task('b1', 'task_notification', 'completed'));
+	await tick();
+	await tick();
+	assert.deepEqual(t.calls, ['acquire', 'release']);
+	q.emit(cliState('running'));
+	await tick();
+	assert.equal(session.state, 'running', 'the notification turn shows as work');
+	assert.deepEqual(t.calls, ['acquire', 'release', 'acquire']);
+	await new Promise(r => setTimeout(r, 40));
+	assert.equal(q.closed, 0, 'the idle close never ends a running turn');
+	q.emit(ok());
+	q.emit(cliState('idle'));
+	await tick();
+	assert.equal(session.state, 'idle');
+	assert.deepEqual(ends().map(e => e.type === 'turn-end' && e.outcome), ['ok', 'ok']);
+	assert.ok(!events.some(e => e.type === 'sent' && e.text !== 'start a server'), 'nothing was sent for it');
+	assert.deepEqual(t.calls, ['acquire', 'release', 'acquire', 'release']);
+	await new Promise(r => setTimeout(r, 40));
+	assert.equal(q.closed, 1, 'closed once idle again');
+});
+
+test('a running state report during a sent turn changes nothing', async () => {
+	const {session, queries, ends} = setup();
+	session.send('one');
+	queries[0]?.emit(cliState('running'));
+	queries[0]?.emit(ok());
+	await tick();
+	assert.equal(session.state, 'idle');
+	assert.equal(ends().length, 1);
+});
+
+test('a message sent while Claude Code runs its own turn is refused, so the view queues it', async () => {
+	const {session, queries} = setup();
+	session.send('one');
+	queries[0]?.emit(ok());
+	await tick();
+	queries[0]?.emit(cliState('running'));
+	await tick();
+	assert.throws(() => session.send('two'), /already running/);
+});

@@ -14,6 +14,7 @@ import {
 	SGR,
 	statusBarText,
 	statusLineText,
+	tasksBarText,
 	modeHint,
 	workingText,
 } from '../../src/ui/present.js';
@@ -183,4 +184,19 @@ const plainCells = (s: string) => [...s.replace(new RegExp(`${String.fromCharCod
 test('formatOut lays assistant tables out to the given width', () => {
 	const out = formatOut({kind: 'assistant', text: TABLE, interrupted: false}, scrub, scrub, 40);
 	for (const line of out.split('\n')) assert.ok(plainCells(line) <= 39, line);
+});
+
+test('the status bar counts running agents and background work', () => {
+	assert.equal(tasksBarText([]), '');
+	assert.equal(tasksBarText([{status: 'running', background: false, taskType: 'local_agent'}]), '1 agent');
+	assert.equal(
+		tasksBarText([
+			{status: 'running', background: false, taskType: 'local_agent'},
+			{status: 'running', background: true, taskType: 'local_agent'},
+			{status: 'running', background: true, taskType: 'local_bash'},
+			{status: 'completed', background: true, taskType: 'local_agent'},
+		]),
+		'2 agents · 2 in background',
+	);
+	assert.equal(tasksBarText([{status: 'running', background: true}]), '1 in background');
 });

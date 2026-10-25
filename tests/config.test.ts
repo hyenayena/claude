@@ -67,6 +67,7 @@ describe('buildEnv', () => {
 		assert.equal(env.CLAUDE_CONFIG_DIR, '/data/claude/config');
 		assert.equal(env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD, '1');
 		assert.equal(env.DISABLE_AUTOUPDATER, '1');
+		assert.equal(env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS, '1');
 	});
 
 	it('sets USE_BUILTIN_RIPGREP only when rg is on PATH', () => {
