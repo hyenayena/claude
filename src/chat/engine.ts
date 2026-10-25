@@ -17,6 +17,7 @@ import {makeReveal} from './reveal.js';
 import {bashHighlights} from './risk.js';
 import {makeScrub} from './scrub.js';
 import {ensureShellTmp} from './shell-tmp.js';
+import {createProcessStatus, statusLine} from './process-status.js';
 import {readSessionTitle, titleFromPrompt, transcriptFile} from './title.js';
 
 const TITLE_RETRY_MS = [3_000, 10_000];
@@ -269,6 +270,16 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		if (e.type === 'turn-end' && (e.outcome === 'ok' || e.outcome === 'limit' || e.outcome === 'context')) refreshTitleSoon();
 	});
 
+	const status = createProcessStatus(env.YENA_STATUS_DIR, log);
+	const writeStatus = (): void => {
+		if (session.state === 'closed') return status.clear();
+		status.set(statusLine({state: session.state, sessionId: session.sessionId, tasks: session.tasks}));
+	};
+	writeStatus();
+	session.subscribe(e => {
+		if (e.type === 'state' || (e.type === 'ui' && (e.event.kind === 'task' || e.event.kind === 'session'))) writeStatus();
+	});
+
 	session.subscribe(e => {
 		if (e.type !== 'turn-end' || session.needsNewSession) return;
 		const lastSessionId = session.sessionId;
@@ -300,6 +311,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			for (const timer of titleTimers) clearTimeout(timer);
 			titleTimers.clear();
 			session.close();
+			status.clear();
 		},
 		flush: () => saving,
 	};

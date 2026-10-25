@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {existsSync, readFileSync} from 'node:fs';
 import {mkdir, mkdtemp, readFile, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -178,6 +179,28 @@ test('first successful turn persists state; resume and --new', async () => {
 	assert.equal(s.props[1]!.initialSessionId, SID2);
 	await s.command.run(['chat', '--new'], s.ctx);
 	assert.equal(s.props[2]!.initialSessionId, undefined);
+});
+
+test('an open chat keeps its state in YENA_STATUS_DIR/<pid> for ./yena kill and removes it when it closes', async () => {
+	const statusDir = join(await mkdtemp(join(tmpdir(), 'claude-status-')), 'status');
+	const file = join(statusDir, String(process.pid));
+	const seen: string[] = [];
+	const s = await setup({
+		deps: {env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH, YENA_STATUS_DIR: statusDir}},
+		run: async p => {
+			seen.push(await readFile(file, 'utf8'));
+			p.controller.subscribe(e => {
+				if (e.type === 'state' && e.state === 'running') seen.push(readFileSync(file, 'utf8'));
+			});
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+			seen.push(await readFile(file, 'utf8'));
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	assert.deepEqual(seen, ['chat new: idle\n', 'chat new: working\n', 'chat 33333333: idle\n']);
+	assert.equal(existsSync(file), false);
 });
 
 test('resume uses lastSessionId on the first send', async () => {
