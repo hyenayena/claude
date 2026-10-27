@@ -13,11 +13,11 @@ test('clampLines limits lines and line length', () => {
 	assert.equal(clampLines('x'.repeat(30), 3, 10), `${'x'.repeat(10)}…`);
 });
 
-test('summarizeResult shows 3 lines of at most 200 chars', () => {
+test('summarizeResult shows 3 whole lines', () => {
 	const out = summarizeResult(`${'y'.repeat(500)}\n2\n3\n4\n5`);
 	const lines = out.split('\n');
 	assert.equal(lines.length, 4);
-	assert.equal(lines[0]?.length, 201);
+	assert.equal(lines[0], 'y'.repeat(500));
 	assert.equal(lines[3], '… +2 lines (ctrl+o to expand)');
 });
 

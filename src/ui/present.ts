@@ -43,7 +43,6 @@ const paint = (style: string, text: string): string =>
 		.join('\n');
 
 const RESULT_INPUT_CAP = 64 * 1024;
-const ARGS_MAX = 100;
 const ARGS_PRE_CAP = 4096;
 
 export function formatUserLine(text: string, scrub: Scrub): string {
@@ -151,9 +150,7 @@ const displayName = (name: string): string => DISPLAY_NAMES[name] ?? name;
 export function toolArgs(name: string, input: unknown, scrub: Scrub): string {
 	const custom = ARGS_REGISTRY[name]?.(input);
 	const raw = custom ? custom.replace(/\s+/g, ' ').slice(0, ARGS_PRE_CAP) : summarizeArgs(name, input, ARGS_PRE_CAP);
-	// Redact before clamping so a secret straddling the cut cannot leave a visible prefix
-	const clean = scrub(raw);
-	return clean.length > ARGS_MAX ? `${clean.slice(0, ARGS_MAX - 1)}…` : clean;
+	return scrub(raw);
 }
 
 export function toolHeader(name: string, input: unknown, scrub: Scrub): string {
@@ -188,7 +185,7 @@ const countLines = (s: string): number => {
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 const pathOf = (t: ToolResult, scrub: Scrub): string | undefined => {
 	const p = field('file_path')(t.input);
-	return p === '' ? undefined : clampChars(scrub(p), ARGS_MAX);
+	return p === '' ? undefined : scrub(p);
 };
 
 // Claude Code's one-line summaries; Bash and the other tools fall through to the clamped output.
@@ -275,12 +272,7 @@ export function formatNotice(message: string, scrub: Scrub): string {
 	return paint(SGR.dim, scrub(message));
 }
 
-const AUDIT_MAX = 100;
-
-const auditText = (raw: string, show: Scrub): string => {
-	const first = show(raw).split('\n')[0] ?? '';
-	return first.length > AUDIT_MAX ? `${first.slice(0, AUDIT_MAX - 1)}…` : first;
-};
+const auditText = (raw: string, show: Scrub): string => show(raw).split('\n')[0] ?? '';
 
 const pluralQuestions = (summary: string): string => {
 	const m = /^(\d+) question\(s\)$/.exec(summary);

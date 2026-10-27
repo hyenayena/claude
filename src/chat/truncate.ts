@@ -1,6 +1,5 @@
 const RESULT_INPUT_CAP = 64 * 1024;
 const RESULT_LINES = 3;
-const RESULT_LINE_CHARS = 200;
 const ARGS_CAP = 100;
 export const BLOCK_DISPLAY_CAP = 100 * 1024;
 export const LIVE_BUFFER_CAP = 200 * 1024;
@@ -55,6 +54,6 @@ export const summarizeArgs = (name: string, input: unknown, cap = ARGS_CAP): str
 	return s.length > cap ? `${s.slice(0, cap - 1)}…` : s;
 };
 
-/** Data-only: first 64 KiB, 3 lines of at most 200 chars, "… +N lines (ctrl+o to expand)". */
+/** Data-only: first 64 KiB, 3 whole lines (the view wraps them), "… +N lines (ctrl+o to expand)". */
 export const summarizeResult = (text: string): string =>
-	clampLines(text.slice(0, RESULT_INPUT_CAP), RESULT_LINES, RESULT_LINE_CHARS);
+	clampLines(text.slice(0, RESULT_INPUT_CAP), RESULT_LINES, Number.POSITIVE_INFINITY);

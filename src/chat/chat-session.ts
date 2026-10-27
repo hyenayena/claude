@@ -92,7 +92,6 @@ type Entry = {
 };
 
 const MAX_APPROVED = 100;
-const AUDIT_SUMMARY_MAX = 100;
 
 const toolNameOf = (req: PermissionRequest): string => (req.kind === 'tool' ? req.toolName : 'AskUserQuestion');
 
@@ -107,8 +106,7 @@ const summaryOf = (req: PermissionRequest): string => {
 				: typeof req.input.command === 'string'
 					? req.input.command
 					: '';
-	const flat = raw.replace(/\s+/g, ' ').trim();
-	return flat.length > AUDIT_SUMMARY_MAX ? `${flat.slice(0, AUDIT_SUMMARY_MAX)}…` : flat;
+	return raw.replace(/\s+/g, ' ').trim();
 };
 
 const outcomeOf = (req: PermissionRequest, d: PermissionDecision): AuditEntry['outcome'] => {

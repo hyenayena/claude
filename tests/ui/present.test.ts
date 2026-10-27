@@ -132,8 +132,7 @@ test('formatAudit produces one dim line per decision, clamped and scrubbed', () 
 	assert.equal(strip(formatModeLine('acceptEdits')), 'Mode: auto-accept edits (this chat only)');
 
 	const long = line('allowed', 'Bash', `${'x'.repeat(300)}`);
-	assert.ok(long.length <= 'Allowed Bash: '.length + 100);
-	assert.ok(long.endsWith('…'));
+	assert.equal(long, `Allowed Bash: ${'x'.repeat(300)}`);
 	const dirtyLine = formatAudit({outcome: 'allowed', toolName: 'Bash', summary: `a${ESC}]0;x\u0007 ${SECRET}\nsecond`}, scrub);
 	assert.ok(onlyConstantEscapes(dirtyLine), JSON.stringify(dirtyLine));
 	assert.ok(!dirtyLine.includes(SECRET));
