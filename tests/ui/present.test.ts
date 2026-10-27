@@ -57,13 +57,37 @@ test('every field type is scrubbed and only constants add SGR', () => {
 
 test('escape split across deltas is caught because the tail scrubs the whole', () => {
 	const tail = liveTail(`ab${ESC}[3`.concat('1mcd'), scrub, 5, 80).join('\n');
-	assert.equal(tail, 'abcd');
+	assert.equal(tail, '● abcd');
 });
 
 test('liveTail returns at most the requested rows', () => {
 	const tail = liveTail('line\n'.repeat(100), scrub, 7, 40);
 	assert.equal(tail.length, 7);
 	assert.deepEqual(liveTail('', scrub, 7, 40), []);
+	assert.deepEqual(liveTail('text', scrub, 0, 40), []);
+});
+
+const plain = (s: string) => s.replace(/\u001b\[[\d;]*m/g, '');
+
+test('liveTail renders Markdown while it streams, like the finished block', () => {
+	const raw = '# Title\n\nSome **bold** text\n- item\n```ts\nconst x = 1;';
+	const tail = liveTail(raw, scrub, 30, 80);
+	assert.ok(tail.join('\n').includes(`${SGR.bold}bold`));
+	assert.deepEqual(tail.map(plain), ['● Title', '', '  Some bold text', '  • item', '  ╭─ ts', '  │ const x = 1;', '  ╰─']);
+	assert.deepEqual(tail.map(plain).slice(0, 4), formatAssistantBlock(raw, scrub, false, 79).split('\n').map(plain).slice(0, 4));
+});
+
+test('liveTail keeps rows off the last column', () => {
+	const tail = liveTail('word '.repeat(200), scrub, 30, 41);
+	assert.ok(tail.length > 1);
+	for (const row of tail) assert.ok(plain(row).length <= 40, row);
+});
+
+test('liveTail keeps framing code whose fence opened before the window', () => {
+	const raw = `intro\n\`\`\`py\n${'x = 1\n'.repeat(4000)}tail_line`;
+	const tail = liveTail(raw, scrub, 3, 80).map(plain);
+	assert.deepEqual(tail, ['  │ x = 1', '  │ tail_line', '  ╰─']);
+	assert.ok(!liveTail(raw, scrub, 200, 80).some(r => r.startsWith('●')));
 });
 
 test('tool block collapses to three result lines with a footer', () => {

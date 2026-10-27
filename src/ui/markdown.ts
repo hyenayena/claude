@@ -91,7 +91,7 @@ export function renderMarkdownBlocks(text: string, options: MarkdownOptions = {}
 	const lines = text.split('\n');
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i]!;
-		const open = /^\s*(```+|~~~+)\s*([\w+#.-]*)\s*$/.exec(line);
+		const open = FENCE.exec(line);
 		if (fence) {
 			if (open && open[1]!.startsWith(fence.marker[0]!) && open[1]!.length >= fence.marker.length && open[2] === '') {
 				closeFence(fence);
@@ -144,4 +144,18 @@ export function renderMarkdownBlocks(text: string, options: MarkdownOptions = {}
 	}
 	if (fence) closeFence(fence);
 	return {text: out.join('\n'), codeBlocks};
+}
+
+const FENCE = /^\s*(```+|~~~+)\s*([\w+#.-]*)\s*$/;
+
+/** The opening line of the code fence still open at the end of `text`, if any. */
+export function openFenceLine(text: string): string | undefined {
+	let open: {line: string; marker: string} | undefined;
+	for (const line of text.split('\n')) {
+		const m = FENCE.exec(line);
+		if (!m) continue;
+		if (!open) open = {line, marker: m[1]!};
+		else if (m[1]!.startsWith(open.marker[0]!) && m[1]!.length >= open.marker.length && m[2] === '') open = undefined;
+	}
+	return open?.line;
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {clampChars, clampLines, summarizeArgs, summarizeResult, tailRows} from '../../src/chat/truncate.js';
+import {clampChars, clampLines, summarizeArgs, summarizeResult} from '../../src/chat/truncate.js';
 
 test('clampChars adds a footer only when over the cap', () => {
 	assert.equal(clampChars('abc', 5), 'abc');
@@ -38,17 +38,6 @@ test('summarizeArgs per tool', () => {
 
 test('summarizeArgs caps at 100 chars', () => {
 	assert.equal(summarizeArgs('Read', {file_path: 'p'.repeat(300)}).length, 100);
-});
-
-test('tailRows returns the last rows with approximate wrapping', () => {
-	assert.deepEqual(tailRows('a\nb\nc', 2, 10), ['b', 'c']);
-	assert.deepEqual(tailRows('abcdefghij', 2, 4), ['efgh', 'ij']);
-	assert.deepEqual(tailRows('', 3, 10), ['']);
-});
-
-test('tailRows cuts a very long live line at whitespace', () => {
-	const rows = tailRows(`${'w'.repeat(50)} ${'v'.repeat(30)}`, 5, 10);
-	assert.ok(rows.join('').length <= 40);
 });
 
 test('summarizeArgs honours a custom cap', () => {

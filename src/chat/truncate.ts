@@ -15,26 +15,6 @@ export const clampLines = (text: string, maxLines: number, maxChars: number): st
 	return shown.join('\n');
 };
 
-/** Last `rows` display rows, wrapping lines approximately at `columns`. */
-export const tailRows = (text: string, rows: number, columns: number): string[] => {
-	const width = Math.max(1, columns);
-	const out: string[] = [];
-	const lines = text.split('\n');
-	for (let i = lines.length - 1; i >= 0 && out.length < rows; i--) {
-		let line = lines[i] ?? '';
-		if (line.length > width * 4) {
-			const cut = line.slice(-width * 4);
-			const ws = cut.search(/\s/);
-			line = ws >= 0 ? cut.slice(ws + 1) : cut;
-		}
-		const parts: string[] = [];
-		for (let o = 0; o < line.length; o += width) parts.push(line.slice(o, o + width));
-		if (parts.length === 0) parts.push('');
-		for (let j = parts.length - 1; j >= 0 && out.length < rows; j--) out.push(parts[j] as string);
-	}
-	return out.reverse();
-};
-
 const one = (v: unknown): string => (typeof v === 'string' ? v : JSON.stringify(v) ?? '');
 
 /** Data-only one-line summary (<= 100 chars); callers scrub it. */

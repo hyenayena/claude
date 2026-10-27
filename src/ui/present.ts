@@ -3,14 +3,13 @@ import {
 	clampChars,
 	summarizeArgs,
 	summarizeResult,
-	tailRows,
 } from '../chat/truncate.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
 import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
 import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
 import {wrapRows} from '../kit.js';
 import type {PrintAction} from '../../../../src/api.js';
-import {renderMarkdownBlocks} from './markdown.js';
+import {openFenceLine, renderMarkdownBlocks} from './markdown.js';
 import {LIVE, parseTodos, type Out, type Phase, type RunningTool, type StatusLine, type Todo} from './transcript.js';
 
 export type Scrub = (s: string) => string;
@@ -362,15 +361,37 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 	}
 }
 
+let tailCache: {raw: string; scrub: Scrub; columns: number; rows: string[]} | undefined;
+
+/** The streaming answer, rendered like the finished block it becomes; its last `maxRows` rows. */
 export function liveTail(liveRaw: string, scrub: Scrub, maxRows: number, columns: number): string[] {
-	if (liveRaw === '') return [];
+	if (liveRaw === '' || maxRows <= 0) return [];
+	const cached = tailCache;
+	const rows =
+		cached && cached.raw === liveRaw && cached.scrub === scrub && cached.columns === columns
+			? cached.rows
+			: renderTail(liveRaw, scrub, columns);
+	tailCache = {raw: liveRaw, scrub, columns, rows};
+	return rows.slice(-maxRows);
+}
+
+function renderTail(liveRaw: string, scrub: Scrub, columns: number): string[] {
 	let window = liveRaw;
+	let cut = false;
 	if (window.length > LIVE.tailChars) {
-		window = window.slice(-LIVE.tailChars);
-		const nl = window.indexOf('\n');
-		if (nl >= 0) window = window.slice(nl + 1);
+		const start = liveRaw.length - LIVE.tailChars;
+		const nl = liveRaw.indexOf('\n', start);
+		const from = nl >= 0 ? nl + 1 : start;
+		window = liveRaw.slice(from);
+		// A fence opened before the window still frames the code inside it.
+		const fence = openFenceLine(liveRaw.slice(0, from));
+		if (fence !== undefined) window = `${fence}\n${window}`;
+		cut = true;
 	}
-	return tailRows(scrub(window), maxRows, columns);
+	// The live area keeps the terminal's last column empty.
+	const rows = assistantBlock(window, scrub, false, Math.max(1, columns - 1), false).text.split('\n');
+	if (cut && rows[0]?.startsWith('● ')) rows[0] = `${' '.repeat(BLOCK_INDENT)}${rows[0].slice(2)}`;
+	return rows;
 }
 
 export function statusLineText(status: StatusLine): string {
