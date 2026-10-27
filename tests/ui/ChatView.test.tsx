@@ -1448,3 +1448,16 @@ test('onInbox hands out a sender that sends when idle, queues while answering, a
 	t.unmount();
 	assert.equal(deliver, undefined);
 });
+
+test('a long message being typed wraps over rows: every word stays visible, nothing reaches the last column', async () => {
+	const t = setup({columns: 40, rows: 24});
+	await t.settle();
+	const text = 'please look at the console panel where long error lines push the prompt off the screen';
+	t.press(text);
+	await t.settle(60);
+	const rows = t.lastFrame().replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;?]*[A-Za-z]', 'g'), '').split('\n');
+	const input = rows.filter(r => r.startsWith('> ') || r.startsWith('  ')).join(' ');
+	for (const w of text.split(' ')) assert.ok(input.split(/\s+/).includes(w), `"${w}" is visible in the input`);
+	assert.doesNotMatch(input, /…/);
+	assert.ok(rows.every(r => [...r].length <= 39), 'no row reaches the last column');
+});

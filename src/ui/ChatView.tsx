@@ -7,7 +7,7 @@ import {MODE_CYCLE, QUESTION_LIMITS, REASON_MAX} from '../chat/permission.js';
 import type {ChatMode, PermissionDecision, PermissionRequest} from '../chat/permission.js';
 import {sanitizeMultilineInput, wrapLines} from '../kit.js';
 import {editorReduce, emptyEditor, MAX_INPUT, type EditorAction, type EditorState} from './editor.js';
-import {cursorFromClick, InputLine} from './InputLine.js';
+import {cursorFromClick, InputLine, inputRowsNeeded} from './InputLine.js';
 import {LiveTools, toolLayout} from './LiveTools.js';
 import {PermissionPrompt} from './PermissionPrompt.js';
 import {
@@ -1001,7 +1001,7 @@ export function ChatView(props: ChatViewProps) {
 	rem -= ruleRows;
 	const hintRows = hint && rem >= 4 ? 1 : 0;
 	rem -= hintRows;
-	const inputRows = Math.min(LIVE.maxInputRows, ed.text.split('\n').length, Math.max(1, Math.floor(rem / 2)));
+	const inputRows = Math.min(LIVE.maxInputRows, inputRowsNeeded(ed.text, columns), Math.max(1, Math.floor(rem / 2)));
 	rem -= inputRows;
 	const noticeNeeded = noticeText ? Math.ceil(noticeText.length / Math.max(1, columns)) : 0;
 	const noticeRows = Math.min(noticeNeeded, 2, Math.max(0, rem));

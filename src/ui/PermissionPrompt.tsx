@@ -11,7 +11,12 @@ import {
 	type Tone,
 	type ToolPromptState,
 } from './prompt-state.js';
-import {Frame} from './kit.js';
+import {truncateCells, wrapRows} from '../kit.js';
+import {Frame, LabeledInput, labeledInputRows} from './kit.js';
+
+const REASON = 'Reason: ';
+const MAX_REASON_ROWS = 3;
+const MAX_HEADER_ROWS = 3;
 
 // Colours of the full-view pager rows (the bordered Frame is the kit's).
 const PAGER_TONE: Record<Tone, {color?: string; dim?: boolean}> = {
@@ -67,7 +72,17 @@ export function PermissionPrompt(props: PermissionPromptProps) {
 			</Text>
 		);
 	}
-	const bodyMax = state.view === 'reason' && layout.compactChoices ? Math.max(1, layout.bodyRows - 1) : layout.bodyRows;
+	const headerAll = wrapRows(header, layout.width);
+	const headerRows =
+		headerAll.length > MAX_HEADER_ROWS
+			? [...headerAll.slice(0, MAX_HEADER_ROWS - 1), truncateCells(headerAll.slice(MAX_HEADER_ROWS - 1).join(' '), layout.width)]
+			: headerAll;
+	const reasonRows = state.view === 'reason' ? Math.min(MAX_REASON_ROWS, labeledInputRows(REASON, state.reason, layout.width)) : 0;
+	// Extra header and reason rows come out of the body, so the prompt keeps its height.
+	const hintRows = layout.showHint && state.view === 'choose' ? wrapRows(props.notice ?? hintText(request), layout.width).slice(0, 2) : [];
+	const extraRows = headerRows.length - 1 + Math.max(0, reasonRows - 1) + Math.max(0, hintRows.length - 1);
+	const baseMax = state.view === 'reason' && layout.compactChoices ? Math.max(1, layout.bodyRows - 1) : layout.bodyRows;
+	const bodyMax = Math.max(1, baseMax - extraRows);
 	const body = clipBody(all, bodyMax, layout.bodyHidden);
 
 	if (state.view === 'full') {
@@ -110,11 +125,7 @@ export function PermissionPrompt(props: PermissionPromptProps) {
 					</Text>
 				)}
 				{state.view === 'reason' ? (
-					<Text wrap="truncate">
-						<Text color="yellow">Reason: </Text>
-						{state.reason}
-						<Text inverse> </Text>
-					</Text>
+					<LabeledInput label={REASON} labelColor="yellow" text={state.reason} columns={layout.width} maxRows={1} />
 				) : (
 					<Text wrap="truncate">{footerText}</Text>
 				)}
@@ -126,11 +137,7 @@ export function PermissionPrompt(props: PermissionPromptProps) {
 	if (state.view === 'reason') {
 		footer = (
 			<>
-				<Text wrap="truncate">
-					<Text color="yellow">Reason: </Text>
-					{state.reason}
-					<Text inverse> </Text>
-				</Text>
+				<LabeledInput label={REASON} labelColor="yellow" text={state.reason} columns={layout.width} maxRows={reasonRows} />
 				<Text dimColor wrap="truncate">Enter sends the denial · Esc goes back</Text>
 			</>
 		);
@@ -164,19 +171,20 @@ export function PermissionPrompt(props: PermissionPromptProps) {
 		);
 	}
 
-	const hint = props.notice ?? hintText(request);
 	return (
 		<Box flexDirection="column">
-			<Text color="yellow" bold wrap="truncate">
-				{header}
-			</Text>
+			{headerRows.map((text, i) => (
+				<Text key={i} color="yellow" bold wrap="truncate">
+					{text}
+				</Text>
+			))}
 			<Frame rows={body} width={layout.width} />
 			{footer}
-			{layout.showHint && state.view === 'choose' && (
-				<Text dimColor={props.notice === undefined} color={props.notice === undefined ? undefined : 'yellow'} wrap="truncate">
-					{hint}
+			{hintRows.map((text, i) => (
+				<Text key={`n${i}`} dimColor={props.notice === undefined} color={props.notice === undefined ? undefined : 'yellow'} wrap="truncate">
+					{text}
 				</Text>
-			)}
+			))}
 		</Box>
 	);
 }

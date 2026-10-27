@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {cursorFromClick, inputRows} from '../../src/ui/InputLine.js';
+import {cursorFromClick, inputRows, inputRowsNeeded} from '../../src/ui/InputLine.js';
 
 const FAMILY = '\u{1f468}‍\u{1f469}‍\u{1f467}';
 
@@ -38,26 +38,26 @@ test('combining marks belong to their base character', () => {
 	assert.equal(cursorFromClick(text, 0, 80, 1, 0, 4), 3);
 });
 
-test('the scrolled cursor row shows a left cut marker and maps from the first shown grapheme', () => {
+test('a long input wraps instead of scrolling; clicks map into the wrapped row', () => {
 	const text = 'abcdefghijkl';
+	assert.deepEqual(inputRows(text, 12, 11, 3).map(r => r.before), ['abcdefg', 'hijkl']);
 	const [row] = inputRows(text, 12, 11, 1);
-	assert.equal(row?.before, '…ghijkl');
-	assert.equal(row?.leftCut, true);
-	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 2), 6, 'the marker maps to the first shown grapheme');
-	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 3), 6);
-	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 4), 7);
-	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 9), 12);
+	assert.equal(row?.before, 'hijkl');
+	assert.equal(row?.leftCut, false);
+	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 2), 7);
+	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 4), 9);
+	assert.equal(cursorFromClick(text, 12, 11, 1, 0, 40), 12);
+	assert.equal(inputRowsNeeded(text, 11), 2);
 });
 
-test('other rows are cut with a right marker while the cursor row scrolls', () => {
+test('every line is shown in full over as many rows as it needs', () => {
 	const text = 'abcdefghij\nabcdefghijkl';
-	const rows = inputRows(text, text.length, 11, 2);
-	assert.equal(rows[0]?.before, 'abcdefg…');
-	assert.equal(rows[0]?.rightCut, true);
-	assert.equal(cursorFromClick(text, text.length, 11, 2, 0, 3), 1);
-	assert.equal(cursorFromClick(text, text.length, 11, 2, 0, 40), 10);
-	assert.equal(cursorFromClick(text, text.length, 11, 2, 1, 2), 17);
-	assert.equal(cursorFromClick(text, text.length, 11, 2, 1, 4), 18);
+	const rows = inputRows(text, text.length, 11, 4);
+	assert.deepEqual(rows.map(r => r.before), ['abcdefg', 'hij', 'abcdefg', 'hijkl']);
+	assert.ok(rows.every(r => !r.rightCut));
+	assert.equal(cursorFromClick(text, text.length, 11, 4, 0, 3), 1);
+	assert.equal(cursorFromClick(text, text.length, 11, 4, 1, 40), 10);
+	assert.equal(cursorFromClick(text, text.length, 11, 4, 3, 2), 18);
 });
 
 test('with the first lines scrolled off, row 0 is the first shown line', () => {
@@ -75,9 +75,9 @@ test('rows that are not shown give undefined', () => {
 	assert.equal(cursorFromClick('abc', 0, 80, 1, 0.5, 2), undefined);
 });
 
-test('a window never starts inside a surrogate pair', () => {
+test('a wrapped row never starts inside a surrogate pair', () => {
 	const text = 'a\u{1f600}bcdefg';
-	assert.equal(inputRows(text, text.length, 11, 1)[0]?.before, '…bcdefg');
-	assert.equal(cursorFromClick(text, text.length, 11, 1, 0, 2), 3);
-	assert.equal(cursorFromClick(text, text.length, 11, 1, 0, 4), 4);
+	assert.deepEqual(inputRows(text, text.length, 11, 3).map(r => r.before + (r.cell ?? '') + r.after), ['a\u{1f600}bcde', 'fg ']);
+	assert.equal(cursorFromClick(text, text.length, 11, 3, 1, 2), 7);
+	assert.equal(cursorFromClick(text, text.length, 11, 3, 0, 4), 1);
 });

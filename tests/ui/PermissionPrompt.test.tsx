@@ -4,7 +4,8 @@ import React from 'react';
 import {makeReveal} from '../../src/chat/reveal.js';
 import {PermissionPrompt, toolHeader} from '../../src/ui/PermissionPrompt.js';
 import {initQuestionPrompt, initToolPrompt, layoutPrompt, type ToolPromptState} from '../../src/ui/prompt-state.js';
-import {QuestionPrompt} from '../../src/ui/QuestionPrompt.js';
+import {optionWindow, QuestionPrompt} from '../../src/ui/QuestionPrompt.js';
+import {stringCells} from '../../src/kit.js';
 import {mountHarness, questionReq, toolReq} from './testkit.js';
 
 const reveal = makeReveal(s => s);
@@ -37,7 +38,7 @@ const tool = (req = toolReq(), over: Partial<React.ComponentProps<typeof Permiss
 test('Bash prompt: fixed header, bordered content, five choices and a hint', async () => {
 	const frame = await show(tool(toolReq({description: 'lists files', highlights: [{level: 'info', text: 'non-ASCII'}]})));
 	const lines = frame.split('\n');
-	assert.equal(lines[0], 'Bash: run this command as root in /app (network access, can modify the project)?');
+	assert.equal(lines.slice(0, 2).join(' '), 'Bash: run this command as root in /app (network access, can modify the project)?', 'a long header wraps instead of being cut');
 	assert.match(frame, /│ ls -la/);
 	assert.match(frame, /│ cwd: \/app/);
 	assert.match(frame, /│ Notable: non-ASCII/);
@@ -194,4 +195,50 @@ test('Command prompt: header shows the console line and there is no always optio
 	assert.ok(frame.includes('Run console command: mod remove x?'));
 	assert.ok(frame.includes('mod remove x'));
 	assert.equal(/a always/.test(frame), false);
+});
+
+const CSI = new RegExp(String.fromCharCode(27) + '\\[[0-9;?]*[A-Za-z]', 'g');
+const plainRows = (frame: string) => frame.replace(CSI, '').split('\n');
+const words = (frame: string) => plainRows(frame).join(' ').replace(/[│❯]/g, ' ').split(/\s+/).filter(Boolean);
+const LONG = 'the quick brown fox jumps over the lazy dog and keeps running far beyond the right edge of a narrow terminal window';
+
+test('long question options wrap instead of ending in an ellipsis, within the width and height', async () => {
+	const req = questionReq({
+		questions: [{question: 'Which?', header: 'H', multiSelect: false, options: [{label: 'First', description: LONG}, {label: 'Second', description: 'short'}]}],
+	});
+	const frame = await show(
+		<QuestionPrompt request={req} state={initQuestionPrompt(req, 0)} layout={layoutPrompt(24, 60)} reveal={reveal} position={1} total={1} />,
+		{columns: 60, rows: 24},
+	);
+	const rows = plainRows(frame);
+	for (const w of LONG.split(' ')) assert.ok(words(frame).includes(w), `"${w}" is shown`);
+	assert.doesNotMatch(frame, /…/, "neither the options nor the key hint are cut");
+	assert.ok(words(frame).includes("stop"), "the key hint keeps its last key");
+	assert.match(frame, /2 Second — short/);
+	assert.ok(rows.every(r => stringCells(r) <= 59), 'no row reaches the last column');
+	assert.ok(rows.length <= 24);
+});
+
+test('a long typed Other answer and denial reason stay visible over several rows', async () => {
+	const req = questionReq();
+	const other = await show(
+		<QuestionPrompt request={req} state={{...initQuestionPrompt(req, 0), view: 'other', other: LONG}} layout={layoutPrompt(24, 60)} reveal={reveal} position={1} total={1} />,
+		{columns: 60, rows: 24},
+	);
+	for (const w of LONG.split(' ')) assert.ok(words(other).includes(w), `answer word "${w}" is shown`);
+	assert.match(other, /Your answer: the quick/);
+	assert.match(other, /Enter confirms · Esc goes back/);
+
+	const reason: ToolPromptState = {...initToolPrompt(toolReq(), 0), view: 'reason', reason: LONG};
+	const denied = await show(tool(toolReq(), {state: reason, layout: layoutPrompt(24, 60)}), {columns: 60, rows: 24});
+	for (const w of LONG.split(' ')) assert.ok(words(denied).includes(w), `reason word "${w}" is shown`);
+	assert.ok(plainRows(denied).length <= 24);
+});
+
+test('optionWindow keeps the cursor option and fills the room around it', () => {
+	assert.deepEqual(optionWindow([1, 1, 1, 1], 0, 2), [0, 1]);
+	assert.deepEqual(optionWindow([1, 1, 1, 1], 3, 2), [2, 3]);
+	assert.deepEqual(optionWindow([3, 1, 1], 1, 3), [1, 2]);
+	assert.deepEqual(optionWindow([5, 1], 0, 2), [0, 0], 'a tall cursor option is still shown');
+	assert.deepEqual(optionWindow([], 0, 3), [0, -1]);
 });

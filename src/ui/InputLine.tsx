@@ -1,6 +1,6 @@
 import React from 'react';
 import {Box, Text} from 'ink';
-import {inputWindow, offsetAtCell} from '../kit.js';
+import {inputRowCount, inputWindow, offsetAtCell} from '../kit.js';
 
 interface Row {
 	before: string;
@@ -12,6 +12,11 @@ interface Row {
 
 const PREFIX_CELLS = 2;
 const maxCells = (columns: number): number => Math.max(8, columns - 3);
+
+/** Screen rows the input needs to show all of `text` (soft-wrapped) at this width. */
+export function inputRowsNeeded(text: string, columns: number): number {
+	return inputRowCount(text, maxCells(columns));
+}
 
 export function inputRows(text: string, cursor: number, columns: number, maxRows: number): Row[] {
 	return inputWindow(text, cursor, maxCells(columns), maxRows).map(({before, cell, after, leftCut, rightCut}) => ({

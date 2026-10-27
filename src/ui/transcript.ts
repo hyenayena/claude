@@ -6,7 +6,7 @@ export const LIVE = {
 	maxRawChars: 2_000_000,
 	tailChars: 16_000,
 	maxTools: 4,
-	maxInputRows: 5,
+	maxInputRows: 10,
 	maxTodoRows: 8,
 	minTailRows: 3,
 	maxTailRows: 30,
