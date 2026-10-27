@@ -208,7 +208,7 @@ test('Edit and Write outside, guard and secret paths are denied even if the prom
 		const targets: Array<[string, string]> = [
 			[path.join(tmp, 'outside', 'x.txt'), POLICY_DENY.outside],
 			['../escape.txt', POLICY_DENY.outside],
-			[f('CLAUDE.md'), POLICY_DENY.guard],
+			[f('CLAUDE.local.md'), POLICY_DENY.guard],
 			[f('.claude/settings.json'), POLICY_DENY.guard],
 			[f('.env'), POLICY_DENY.secret],
 			[f('src/key.pem'), POLICY_DENY.secret],
@@ -221,6 +221,13 @@ test('Edit and Write outside, guard and secret paths are denied even if the prom
 		}
 		assert.equal(prompter.requests.length, 0);
 	}
+});
+
+test('the project CLAUDE.md is refused without a prompt, also in accept-edits mode', async () => {
+	const {call, prompter} = setup();
+	prompter.mode = 'acceptEdits';
+	assert.equal((await call('Write', {file_path: f('CLAUDE.md'), content: 'x'}))?.behavior, 'deny');
+	assert.equal(prompter.requests.length, 0);
 });
 
 test('default mode prompts for eligible edits and passes the preview and CLI note', async () => {
@@ -512,6 +519,20 @@ test('WebFetch always asks, showing the URL; bad URLs are denied without asking'
 		assert.equal(bad?.behavior === 'deny' && bad.message, POLICY_DENY.invalidInput);
 	}
 	assert.equal(prompter.requests.length, 1);
+});
+
+test('WebFetch "always" covers the host from then on, not other hosts', async () => {
+	const {call, prompter} = setup();
+	prompter.next = {kind: 'allow', always: true};
+	assert.equal((await call('WebFetch', {url: 'https://Docs.Example.com/a', prompt: 'p'}))?.behavior, 'allow');
+	const req = prompter.requests[0] as unknown as {always: {label: string}};
+	assert.equal(req.always.label, 'Yes, always for docs.example.com');
+	assert.ok(prompter.approved.has('web:docs.example.com'));
+	prompter.next = {kind: 'deny'};
+	assert.equal((await call('WebFetch', {url: 'https://docs.example.com/b?q=2', prompt: 'p'}))?.behavior, 'allow');
+	assert.equal(prompter.requests.length, 1);
+	assert.equal((await call('WebFetch', {url: 'https://other.example.com/', prompt: 'p'}))?.behavior, 'deny');
+	assert.equal(prompter.requests.length, 2);
 });
 
 test('ExitPlanMode asks to start; yes leaves plan mode, "always" goes to accept-edits, no keeps planning', async () => {

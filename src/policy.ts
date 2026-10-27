@@ -71,6 +71,10 @@ export type Scope = {
 	denied: string[];
 	/** Roots where Claude may change anything without asking, in every mode (the md hub). */
 	free?: string[];
+	/** Files inside the free roots that still need the user's approval in every mode (the hub's CLAUDE.md, SOUL.md). */
+	askFiles?: string[];
+	/** Dirs whose `.jsonl` files (session transcripts) are closed to Read, Glob and Grep. */
+	transcriptDirs?: string[];
 	/** Dirs Claude may not write into, by the given or the resolved path (yena's Claude data dir). */
 	locked?: string[];
 	/** Parts of the locked dirs that stay writable (plan mode's plans dir). */
@@ -102,6 +106,13 @@ export type PolicyPaths = {
 	/** The ssh-agent socket from yena's environment (the chat's own env drops SSH_AUTH_SOCK). */
 	agentSocket?: string;
 };
+
+// Instructions loaded into every session and agent: a change there is a persistent prompt injection, so it asks.
+export const HUB_ASK_FILES = ['CLAUDE.md', 'SOUL.md'];
+
+// Earlier sessions and the prompt history: whatever was once pasted or fetched would come back into the context.
+export const CONFIG_TRANSCRIPTS = 'projects';
+export const CONFIG_HISTORY = 'history.jsonl';
 
 // `auth login --console` writes primaryApiKey into .claude.json and its backups.
 export const CONFIG_SECRET = ['.credentials.json', '.claude.json', 'backups'];
@@ -146,9 +157,12 @@ const accountSecretRules = (paths: PolicyPaths, tool: 'Read' | 'Edit'): string[]
 const absRule = (p: string) => `/${p}`;
 
 export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
+	const hub = paths.hubDir ?? paths.mdDir;
 	return {
-		roots: [paths.projectDir, paths.hubDir ?? paths.mdDir, paths.configDir],
-		free: [paths.hubDir ?? paths.mdDir],
+		roots: [paths.projectDir, hub, paths.configDir],
+		free: [hub],
+		askFiles: HUB_ASK_FILES.map(f => path.join(hub, f)),
+		transcriptDirs: [path.join(paths.configDir, CONFIG_TRANSCRIPTS)],
 		locked: paths.dataDir ? [paths.dataDir] : [],
 		lockedExcept: [path.join(paths.configDir, PLANS_DIR)],
 		denied: [
@@ -159,6 +173,7 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 			'/proc',
 			path.join(home, '.ssh'),
 			...CONFIG_SECRET.map(x => path.join(paths.configDir, x)),
+			path.join(paths.configDir, CONFIG_HISTORY),
 			...(paths.accountSecrets?.secretDirs ?? []),
 		],
 		...(paths.accountSecrets && {shellDenied: accountShellDenied(paths.accountSecrets)}),
@@ -183,6 +198,8 @@ export function buildAskSettings(paths: PolicyPaths): {
 				`Read(${absRule(paths.configDir)}/.credentials.json)`,
 				`Read(${absRule(paths.configDir)}/.claude.json)`,
 				`Read(${absRule(paths.configDir)}/backups/**)`,
+				`Read(${absRule(paths.configDir)}/${CONFIG_HISTORY})`,
+				`Read(${absRule(paths.configDir)}/${CONFIG_TRANSCRIPTS}/**/*.jsonl)`,
 				'Read(//proc/**)',
 				'Read(~/.ssh/**)',
 				'Read(**/.env*)',
@@ -229,8 +246,12 @@ export const freeEditAllow = (paths: PolicyPaths): string[] => [`Edit(${absRule(
 // Ask rules the chat narrows: its policy hook checks the rest by name (`isSecretName`), templates and public keys excepted.
 const CHAT_NARROWED: Record<string, string> = {'Read(**/.env*)': 'Read(**/.env)', 'Read(**/id_rsa*)': 'Read(**/id_rsa)'};
 
+// Ask rules win over the hub's allow rule, so these files prompt even though the rest of the hub is free.
+export const hubAskEdit = (paths: PolicyPaths): string[] =>
+	HUB_ASK_FILES.map(f => `Edit(${absRule(path.join(paths.hubDir ?? paths.mdDir, f))})`);
+
 export function buildChatSettings(paths: PolicyPaths): {
-	permissions: {allow: string[]; deny: string[]};
+	permissions: {allow: string[]; ask: string[]; deny: string[]};
 	disableAllHooks: true;
 } {
 	// Settings rules cannot say "but not .env.example": the chat names only `.env` and `id_rsa` here and
@@ -256,6 +277,7 @@ export function buildChatSettings(paths: PolicyPaths): {
 	return {
 		permissions: {
 			allow: freeEditAllow(paths),
+			ask: hubAskEdit(paths),
 			deny: [...buildAskSettings(paths).permissions.deny.map(r => CHAT_NARROWED[r] ?? r), ...editDeny],
 		},
 		disableAllHooks: true,
@@ -316,6 +338,9 @@ export async function isPathAllowed(p: string, scope: Scope): Promise<boolean> {
 	// A root nested inside a denied dir (the md dir under .yena) stays readable.
 	const deniedLen = Math.max(-1, ...denied.filter(d => within(real, d)).map(d => d.length));
 	if (deniedLen >= rootLen) {
+		return false;
+	}
+	if (real.endsWith('.jsonl') && (await realList(scope.transcriptDirs ?? [])).some(d => within(real, d))) {
 		return false;
 	}
 	return !path
@@ -446,6 +471,16 @@ async function projectTarget(real: string, access: ProjectAccess): Promise<'read
 	return {dir, docs: within(dir, docsRoot)};
 }
 
+/** Whether a write target is one of the files that ask in every mode (checked by the given and the resolved path). */
+export async function isAskFile(filePath: string, scope: Scope): Promise<boolean> {
+	const projectDir = scope.roots[0];
+	if (projectDir === undefined || !scope.askFiles?.length) return false;
+	const lexical = path.resolve(projectDir, filePath);
+	const real = await resolveReal(lexical).catch(() => lexical);
+	const files = [...scope.askFiles.map(f => path.resolve(f)), ...(await realList(scope.askFiles))];
+	return files.includes(lexical) || files.includes(real);
+}
+
 export async function classifyEditTarget(filePath: string, scope: Scope): Promise<EditTargetClass> {
 	const projectDir = scope.roots[0];
 	if (projectDir === undefined || typeof filePath !== 'string' || filePath === '' || filePath.includes('\0')) {
@@ -478,6 +513,7 @@ export async function classifyEditTarget(filePath: string, scope: Scope): Promis
 	if (!within(real, realProject) && !promptRoots.some(r => within(real, r))) return 'deny-outside';
 	if (isGuardedPath(real, realProject)) return 'deny-guard';
 	if (!(await isPathAllowed(real, scope))) return 'deny-secret';
+	if (await isAskFile(filePath, scope)) return 'prompt-only';
 	if ((await realList(scope.free ?? [])).some(r => within(real, r))) return 'free';
 	if (!within(real, realProject) || promptRoots.some(r => within(real, r))) return 'prompt-only';
 	return noAutoAccept(path.relative(realProject, real)) ? 'prompt-only' : 'auto-eligible';

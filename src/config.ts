@@ -223,7 +223,7 @@ export function buildHint(paths: ClaudePaths): string {
 		`This project's Claude files live outside the project, in ${paths.dataDir}: ` +
 		`instructions (CLAUDE.md, SOUL.md), agents and skills in the md hub ${paths.hubDir} (use ${paths.hubDir}/CLAUDE.md wherever you would use ./CLAUDE.md, e.g. for /init or remembering things; edit hub files at this path) ` +
 		`and Claude config (settings, agents, commands, skills) in ${paths.configDir} (instead of ./.claude). ` +
-		`Never create CLAUDE.md, CLAUDE.local.md or .claude/ inside ${paths.projectDir}.`
+		`The hub's CLAUDE.md is loaded into every session from there; never create CLAUDE.md, CLAUDE.local.md or .claude/ inside ${paths.projectDir}.`
 	);
 }
 

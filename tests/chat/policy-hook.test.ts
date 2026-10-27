@@ -3,8 +3,8 @@ import {mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {after, test} from 'node:test';
-import {createPolicyHook, policyHooks} from '../../src/chat/policy-hook.js';
-import {POLICY_DENY} from '../../src/chat/permission.js';
+import {createPolicyHook, policyHooks, webKey} from '../../src/chat/policy-hook.js';
+import {POLICY_ASK, POLICY_DENY} from '../../src/chat/permission.js';
 import {buildScope} from '../../src/policy.js';
 
 const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'claude-hook-')));
@@ -51,7 +51,9 @@ test('the hook denies paths outside the policy in any mode', async () => {
 	assert.equal(await decision('Read', {file_path: '/etc/passwd'}), `deny:${POLICY_DENY.outside}`);
 	assert.equal(await decision('Grep', {pattern: 'x', path: '/etc'}), `deny:${POLICY_DENY.outside}`);
 	assert.equal(await decision('Write', {file_path: '/etc/x', content: ''}), `deny:${POLICY_DENY.outside}`);
-	assert.equal(await decision('Edit', {file_path: path.join(projectDir, 'CLAUDE.md')}), `deny:${POLICY_DENY.guard}`);
+	assert.equal(await decision('Edit', {file_path: path.join(projectDir, 'CLAUDE.local.md')}), `deny:${POLICY_DENY.guard}`);
+	assert.equal(await decision('Write', {file_path: path.join(projectDir, '.claude', 'x.md'), content: ''}), `deny:${POLICY_DENY.guard}`);
+	assert.equal(await decision('Edit', {file_path: path.join(projectDir, 'CLAUDE.md'), old_string: 'a', new_string: 'b'}), `deny:${POLICY_DENY.guard}`);
 	assert.equal(await decision('Write', {file_path: path.join(projectDir, '.env'), content: ''}), `deny:${POLICY_DENY.secret}`);
 	assert.equal(await decision('Read', {file_path: path.join(dataDir, '.token')}), `deny:${POLICY_DENY.outside}`);
 	assert.equal(await decision('Edit', {}), `deny:${POLICY_DENY.invalidInput}`);
@@ -91,7 +93,9 @@ test('the hook denies the auth files of the config dir for every tool', async ()
 	}
 	assert.equal(await decision('Glob', {pattern: '*', path: backups}), denied);
 	assert.equal(await decision('Read', {file_path: path.join(backups, '.claude.json.backup.1')}), denied);
-	assert.equal(await decision('Read', {file_path: path.join(paths.configDir, 'projects', 'x.jsonl')}), 'pass');
+	assert.equal(await decision('Read', {file_path: path.join(paths.configDir, 'projects', 'p', 'memory', 'm.md')}), 'pass');
+	assert.equal(await decision('Read', {file_path: path.join(paths.configDir, 'projects', 'x.jsonl')}), denied);
+	assert.equal(await decision('Read', {file_path: path.join(paths.configDir, 'history.jsonl')}), denied);
 });
 
 test('the hook denies Bash commands that name an auth file', async () => {
@@ -177,4 +181,39 @@ test('the hook denies the account secrets to Bash and the file tools', async () 
 	}
 	assert.notEqual(await verdict('Read', {file_path: path.join(accountDir, 'keys', 'gh')}), 'pass');
 	assert.notEqual(await verdict('Write', {file_path: path.join(accountDir, 'secrets', 'x.json'), content: ''}), 'pass');
+});
+
+test('the hook forces a prompt for the hub instructions every session loads', async () => {
+	const md = (f: string) => path.join(paths.mdDir, f);
+	writeFileSync(md('SOUL.md'), 's');
+	assert.equal(await decision('Edit', {file_path: md('CLAUDE.md'), old_string: 'a', new_string: 'b'}), `ask:${POLICY_ASK.instructions}`);
+	assert.equal(await decision('Write', {file_path: md('SOUL.md'), content: 'x'}), `ask:${POLICY_ASK.instructions}`);
+	assert.equal(await decision('Write', {file_path: md('notes.md'), content: 'x'}), 'pass');
+});
+
+test('the hook asks for the first fetch from a host until it is allowed for good', async () => {
+	const approved = new Set(['web:docs.example.com']);
+	const webHook = createPolicyHook(buildScope(paths, path.join(tmp, 'home')), paths.configDir, {approved: k => approved.has(k)});
+	const fetchDecision = async (url: unknown) => {
+		const out = (await webHook(
+			{hook_event_name: 'PreToolUse', tool_name: 'WebFetch', tool_input: {url, prompt: 'p'}, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: projectDir} as never,
+			't',
+			opts,
+		)) as {hookSpecificOutput?: {permissionDecision?: string}};
+		return out.hookSpecificOutput?.permissionDecision ?? 'pass';
+	};
+	assert.equal(await fetchDecision('https://docs.example.com/a?q=1'), 'pass');
+	assert.equal(await fetchDecision('https://DOCS.Example.com/b'), 'pass');
+	assert.equal(await fetchDecision('https://evil.example.net/?d=secret'), 'ask');
+	assert.equal(await fetchDecision('https://docs.example.com.evil.net/'), 'ask');
+	assert.equal(await fetchDecision('ftp://docs.example.com/'), 'deny');
+	assert.equal(await fetchDecision(42), 'deny');
+	assert.equal(await decision('WebFetch', {url: 'https://docs.example.com/'}), `ask:${POLICY_ASK.newHost}`);
+});
+
+test('webKey keys a fetch by its lower-case host', () => {
+	assert.equal(webKey('https://User:pw@Example.COM:8443/x'), 'web:example.com');
+	assert.equal(webKey('http://[::1]/'), 'web:[::1]');
+	assert.equal(webKey('file:///etc/passwd'), undefined);
+	assert.equal(webKey('not a url'), undefined);
 });

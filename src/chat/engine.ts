@@ -228,7 +228,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			includePartialMessages: true,
 			...(firstSpawn() && {...(fork && {forkSession: true}), ...(resumeAt && {resumeSessionAt: resumeAt})}),
 			permissionMode: sdkPermissionMode(prompter.mode),
-			hooks: policyHooks(scope, paths.configDir),
+			hooks: policyHooks(scope, paths.configDir, {approved: key => prompter.hasApproved(key)}),
 			};
 		},
 		onUsageLimit: ({reason, rateLimit}) => {

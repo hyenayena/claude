@@ -87,7 +87,7 @@ GUARD='{"permissions":{"deny":["Edit(./CLAUDE.md)","Edit(./CLAUDE.local.md)","Ed
 HINT="This project's Claude files live outside the project, in $DATA_DIR: \
 instructions (CLAUDE.md, SOUL.md), agents and skills in the md hub $HUB_DIR (use $HUB_DIR/CLAUDE.md wherever you would use ./CLAUDE.md, e.g. for /init or remembering things; edit hub files at this path) \
 and Claude config (settings, agents, commands, skills) in $CLAUDE_DIR (instead of ./.claude). \
-Never create CLAUDE.md, CLAUDE.local.md or .claude/ inside $PROJECT_DIR."
+The hub's CLAUDE.md is loaded into every session from there; never create CLAUDE.md, CLAUDE.local.md or .claude/ inside $PROJECT_DIR."
 
 cd "$PROJECT_DIR"
 exec "$BIN" --add-dir "$HUB_DIR" --settings "$GUARD" --append-system-prompt "$HINT" "$@"

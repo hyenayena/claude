@@ -39,9 +39,9 @@ function build(script: Script) {
 	mkdirSync(md, {recursive: true});
 	mkdirSync(data);
 	writeFileSync(join(proj, 'package.json'), '{}\n');
-	writeFileSync(join(proj, 'CLAUDE.md'), 'x\n');
+	writeFileSync(join(proj, 'CLAUDE.local.md'), 'x\n');
 	symlinkSync(join(proj, 'package.json'), join(proj, 'link-pkg'));
-	symlinkSync(join(proj, 'CLAUDE.md'), join(proj, 'link-claude'));
+	symlinkSync(join(proj, 'CLAUDE.local.md'), join(proj, 'link-claude'));
 	mkdirSync(join(proj, 'realdir'));
 	symlinkSync(join(proj, 'realdir'), join(proj, 'dirlink'));
 	const scope = buildScope({
@@ -148,7 +148,7 @@ test('accept-edits mode auto-accepts eligible writes only; guarded and linked ta
 		const out: string[] = [];
 		const inputs: Array<[string, string]> = [
 			['new.txt', 'a\nb'],
-			['CLAUDE.md', 'x'],
+			['CLAUDE.local.md', 'x'],
 			['link-claude', 'x'],
 			['link-pkg', 'x'],
 		];
@@ -170,10 +170,10 @@ test('accept-edits mode auto-accepts eligible writes only; guarded and linked ta
 	assert.deepEqual(pendingPaths, [join(t.proj, 'link-pkg')]);
 	t.h.press('n');
 	await wait(150);
-	assert.deepEqual(t.results[0], ['new.txt:allow', 'CLAUDE.md:deny', 'link-claude:deny', 'link-pkg:deny']);
+	assert.deepEqual(t.results[0], ['new.txt:allow', 'CLAUDE.local.md:deny', 'link-claude:deny', 'link-pkg:deny']);
 	assert.ok(!existsSync(join(t.proj, 'new.txt')));
 	assert.ok(t.printed.some(p => /^Auto-accepted Write: .*new\.txt/.test(p)));
-	assert.ok(t.printed.some(p => /^Blocked Write: .*CLAUDE\.md/.test(p)));
+	assert.ok(t.printed.some(p => /^Blocked Write: .*CLAUDE\.local\.md/.test(p)));
 });
 
 test('a write through a directory symlink shows where it resolves and audits both paths', async () => {

@@ -23,7 +23,8 @@ import {
 	REASON_MAX,
 	toolUnavailableMessage,
 } from './permission.js';
-import {sanitizeBlock} from '../kit.js';
+import {sanitizeBlock, sanitizeText} from '../kit.js';
+import {WEB_KEY_PREFIX, webKey} from './policy-hook.js';
 
 export type PermissionBridgeDeps = {
 	scope: Scope;
@@ -321,13 +322,20 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		return denyFor(d, b.id);
 	};
 
-	// A fetch sends a URL out of the container, so it always asks (in auto mode only when the classifier is unsure).
+	// A fetch sends a URL out of the container, so it asks until the user allows its host for good
+	// (the policy hook makes auto mode ask for a new host too).
 	const handleWebFetch = async (input: Record<string, unknown>, opts: Opts): Promise<PermissionResult> => {
 		const b = base(opts);
 		const {url} = input;
-		if (typeof url !== 'string' || !/^https?:\/\//i.test(url) || url.length > 4096 || url.includes('\0')) {
+		const key = webKey(url);
+		if (typeof url !== 'string' || !/^https?:\/\//i.test(url) || url.length > 4096 || url.includes('\0') || key === undefined) {
 			return policyDeny('WebFetch', POLICY_DENY.invalidInput, 'invalid input', b.id);
 		}
+		if (!b.defaultToNo && prompter.hasApproved(key)) {
+			prompter.audit({outcome: 'always-allowed', toolName: 'WebFetch', summary: key});
+			return {behavior: 'allow', updatedInput: input, toolUseID: b.id};
+		}
+		const host = key.slice(WEB_KEY_PREFIX.length);
 		const d = await ask(
 			{
 				kind: 'tool',
@@ -340,12 +348,15 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 				...(b.cliNote && {cliNote: b.cliNote}),
 				highlights: [],
 				defaultToNo: b.defaultToNo,
-				always: false,
+				always: b.defaultToNo ? false : {label: `Yes, always for ${sanitizeText(host, 253)}`},
 				oversize: false,
 			},
 			opts.signal,
 		);
-		if (d.kind === 'allow') return {behavior: 'allow', updatedInput: input, toolUseID: b.id};
+		if (d.kind === 'allow') {
+			if (d.always === true && !b.defaultToNo) prompter.remember(key);
+			return {behavior: 'allow', updatedInput: input, toolUseID: b.id};
+		}
 		return denyFor(d, b.id);
 	};
 

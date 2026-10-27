@@ -1,9 +1,9 @@
 import type {HookCallback, HookCallbackMatcher, HookJSONOutput} from '@anthropic-ai/claude-agent-sdk';
 import path from 'node:path';
-import {classifyEditTarget, createCanUseTool, PLANS_DIR, resolveReal, type Scope} from '../policy.js';
+import {classifyEditTarget, createCanUseTool, isAskFile, PLANS_DIR, resolveReal, type Scope} from '../policy.js';
 import {agentDenial} from './agent-policy.js';
 import {addsPrivilegedFrontmatter, isDefinitionPath} from './definition-guard.js';
-import {POLICY_DENY} from './permission.js';
+import {POLICY_ASK, POLICY_DENY} from './permission.js';
 
 // Heuristic that over-denies on purpose: a shell command naming an auth file is refused in every mode.
 const AUTH_FILE = /credentials\.json|\.claude\.json|config\/backups|accounts\.json|claude\/accounts\b/;
@@ -22,12 +22,35 @@ const denyWith = (reason: string): HookJSONOutput => ({
 	hookSpecificOutput: {hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason},
 });
 
+// "ask" forces the permission prompt even where an allow rule or auto mode's classifier would let the call through.
+const askWith = (reason: string): HookJSONOutput => ({
+	hookSpecificOutput: {hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: reason},
+});
+
+export const WEB_KEY_PREFIX = 'web:';
+/** The "always" key of a fetch: its host, lower-case. Undefined for anything that is not an http(s) URL. */
+export function webKey(url: unknown): string | undefined {
+	if (typeof url !== 'string') return undefined;
+	try {
+		const u = new URL(url);
+		if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined;
+		return u.hostname === '' ? undefined : `${WEB_KEY_PREFIX}${u.hostname.toLowerCase()}`;
+	} catch {
+		return undefined;
+	}
+}
+
+export type PolicyHookOptions = {
+	/** Whether the user approved fetches from this "always" key (`webKey`) for good. */
+	approved?: (key: string) => boolean;
+};
+
 /**
  * Hard path policy that holds in every permission mode. In auto mode the classifier can
  * approve a call without asking `canUseTool`, so the checks are repeated here; the hook
  * never allows anything itself, it only denies.
  */
-export function createPolicyHook(scope: Scope, configDir?: string): HookCallback {
+export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: PolicyHookOptions = {}): HookCallback {
 	const config = configDir ? path.resolve(configDir) : undefined;
 	const plans = config ? path.join(config, PLANS_DIR) : undefined;
 	const inside = (p: string, dir: string) => p === dir || p.startsWith(dir + path.sep);
@@ -71,7 +94,13 @@ export function createPolicyHook(scope: Scope, configDir?: string): HookCallback
 				) {
 					return denyWith(POLICY_DENY.privileged);
 				}
-				return allow;
+				return (await isAskFile(args.file_path, scope)) ? askWith(POLICY_ASK.instructions) : allow;
+			}
+			// A fetch carries data out in its URL: the first one to a host asks, in auto mode too.
+			case 'WebFetch': {
+				const key = webKey(args.url);
+				if (key === undefined) return denyWith(POLICY_DENY.invalidInput);
+				return hookOpts.approved?.(key) ? allow : askWith(POLICY_ASK.newHost);
 			}
 			case 'Bash': {
 				if (args.dangerouslyDisableSandbox) return denyWith(POLICY_DENY.background);
@@ -93,6 +122,10 @@ export function createPolicyHook(scope: Scope, configDir?: string): HookCallback
 	};
 }
 
-export const policyHooks = (scope: Scope, configDir?: string): {PreToolUse: HookCallbackMatcher[]} => ({
-	PreToolUse: [{hooks: [createPolicyHook(scope, configDir)]}],
+export const policyHooks = (
+	scope: Scope,
+	configDir?: string,
+	hookOpts: PolicyHookOptions = {},
+): {PreToolUse: HookCallbackMatcher[]} => ({
+	PreToolUse: [{hooks: [createPolicyHook(scope, configDir, hookOpts)]}],
 });

@@ -128,5 +128,10 @@ export const POLICY_DENY = {
 	invalidInput: 'The tool input is invalid.',
 	unknownTool: 'That tool is not available in the chat.',
 } as const;
+// Shown in the prompt when the policy hook forces one.
+export const POLICY_ASK = {
+	instructions: 'CLAUDE.md and SOUL.md are loaded into every session: changes to them always need approval.',
+	newHost: 'First fetch from this host: a URL can carry data out.',
+} as const;
 export const toolUnavailableMessage = (name: string): string =>
 	`Tool "${name}" is not available in the chat`;

@@ -46,6 +46,10 @@ import {stopHolder} from './sessions/stop.js';
 import {createStore, isModelId} from './store.js';
 import type {ChatQueryFn, Credential, CredentialInfo, QueryFn} from './types.js';
 
+// Saved "always" rules: a Bash command, or a prefixed key for an MCP tool or a fetched host.
+const ruleKind = (rule: string): string =>
+	rule.startsWith('mcp:') ? 'MCP tool allowed with "always"' : rule.startsWith('web:') ? 'Host WebFetch may reach without asking' : 'Bash command allowed with "always"';
+
 const LIMIT_KINDS = new Set(['usage-limit', 'rate-limit', 'billing', 'context']);
 const MAX_ASK_SWITCHES = 8;
 const LIMIT_HOLD_S = 5 * 3600;
@@ -610,7 +614,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			settings: rules.map((rule, i) => ({
 				key: `rule:${i}`,
 				label: rule.length > 80 ? `${rule.slice(0, 79)}…` : rule,
-				description: 'Bash command allowed with "always"',
+				description: ruleKind(rule),
 				options: [
 					{value: 'keep', label: 'Allowed'},
 					{value: 'remove', label: 'Remove', description: 'ask again next time'},

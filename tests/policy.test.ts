@@ -14,6 +14,7 @@ import {
 	createCanUseTool,
 	DISALLOWED_TOOLS,
 	GUARD_DENY,
+	isAskFile,
 	isGuardedPath,
 	isPathAllowed,
 } from '../src/policy.js';
@@ -100,7 +101,7 @@ describe('isPathAllowed', () => {
 		]) {
 			assert.ok(!(await isPathAllowed(p, scope)), p);
 		}
-		assert.ok(await isPathAllowed(path.join(paths.configDir, 'projects', 'p', 's.jsonl'), scope));
+		assert.ok(await isPathAllowed(path.join(paths.configDir, 'projects', 'p', 'memory', 'm.md'), scope));
 		assert.ok(await isPathAllowed(path.join(paths.configDir, 'settings.json'), scope));
 	});
 
@@ -192,6 +193,8 @@ describe('ask policy snapshot', () => {
 					`Read(/${paths.configDir}/.credentials.json)`,
 					`Read(/${paths.configDir}/.claude.json)`,
 					`Read(/${paths.configDir}/backups/**)`,
+					`Read(/${paths.configDir}/history.jsonl)`,
+					`Read(/${paths.configDir}/projects/**/*.jsonl)`,
 					'Read(//proc/**)',
 					'Read(~/.ssh/**)',
 					'Read(**/.env*)',
@@ -226,10 +229,14 @@ describe('chat static policy', () => {
 	it('extends the ask deny list with Edit denies', () => {
 		const s = buildChatSettings(paths);
 		assert.equal(s.disableAllHooks, true);
-		assert.ok(!('ask' in s.permissions));
 		assert.deepEqual(s.permissions.allow, [`Edit(/${paths.mdDir}/**)`]);
 		const hubbed = buildChatSettings({...paths, hubDir: '/data/md'}).permissions;
 		assert.deepEqual(hubbed.allow, ['Edit(//data/md/**)']);
+		// Ask rules win over the hub's allow rule: the instructions loaded into every session prompt.
+		assert.deepEqual(hubbed.ask, ['Edit(//data/md/CLAUDE.md)', 'Edit(//data/md/SOUL.md)']);
+		assert.ok(s.permissions.deny.includes('Edit(./CLAUDE.md)'));
+		assert.ok(s.permissions.deny.includes(`Read(/${paths.configDir}/history.jsonl)`));
+		assert.ok(s.permissions.deny.includes(`Read(/${paths.configDir}/projects/**/*.jsonl)`));
 		// Claude Code resolves symlinks in rule paths: no deny rule may name the md link or the linked config folders.
 		for (const rule of hubbed.deny) {
 			assert.ok(!rule.startsWith(`Edit(/${paths.mdDir}`), rule);
@@ -294,9 +301,43 @@ describe('locked data dir', () => {
 		assert.equal(await cls(path.join(paths.configDir, 'plans', 'p.md')), 'prompt-only');
 	});
 
-	it('leaves the hub free at its own path', async () => {
-		assert.equal(await cls(path.join(hub, 'CLAUDE.md')), 'free');
+	it('leaves the hub free at its own path, except the instructions every session loads', async () => {
+		assert.equal(await cls(path.join(hub, 'notes.md')), 'free');
 		assert.equal(await cls(path.join(hub, 'agents', 'new', 'x.md')), 'free');
+		assert.equal(await cls(path.join(hub, 'CLAUDE.md')), 'prompt-only');
+		assert.equal(await cls(path.join(hub, 'SOUL.md')), 'prompt-only');
+		assert.equal(await cls(path.join(hub, 'projects', 'x', 'CLAUDE.md')), 'free');
+		assert.equal(await isAskFile(path.join(hub, 'SOUL.md'), lscope), true);
+		assert.equal(await isAskFile(path.join(hub, 'notes.md'), lscope), false);
+	});
+
+	it('asks for the instructions through a link into the hub', async () => {
+		const link = path.join(tmp, 'soul-link.md');
+		writeFileSync(path.join(hub, 'SOUL.md'), 's');
+		symlinkSync(path.join(hub, 'SOUL.md'), link);
+		assert.equal(await isAskFile(link, lscope), true);
+	});
+});
+
+describe('session transcripts', () => {
+	const projects = path.join(paths.configDir, 'projects', '-app');
+	mkdirSync(path.join(projects, 'memory'), {recursive: true});
+	writeFileSync(path.join(projects, 's.jsonl'), '{}');
+	writeFileSync(path.join(projects, 'memory', 'MEMORY.md'), 'm');
+	writeFileSync(path.join(paths.configDir, 'history.jsonl'), '{}');
+
+	it('closes old transcripts and the prompt history to the read tools', async () => {
+		assert.ok(!(await isPathAllowed(path.join(projects, 's.jsonl'), scope)));
+		assert.ok(!(await isPathAllowed(path.join(projects, 'sub', 'subagents', 'a.jsonl'), scope)));
+		assert.ok(!(await isPathAllowed(path.join(paths.configDir, 'history.jsonl'), scope)));
+		assert.equal((await run('Read', {file_path: path.join(projects, 's.jsonl')})).behavior, 'deny');
+	});
+
+	it('keeps memory, tool results and plain jsonl files elsewhere readable', async () => {
+		assert.ok(await isPathAllowed(path.join(projects, 'memory', 'MEMORY.md'), scope));
+		assert.ok(await isPathAllowed(path.join(projects, 'sess', 'tool-results', 'r.txt'), scope));
+		assert.ok(await isPathAllowed(path.join(projectDir, 'data.jsonl'), scope));
+		assert.ok(await isPathAllowed(path.join(paths.configDir, 'agents', 'x.jsonl'), scope));
 	});
 });
 
