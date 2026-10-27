@@ -243,16 +243,37 @@ test('yena console tools are shown as Yena with the command line', async () => {
 	assert.equal(toolHeader('mcp__other__run_command', {command: 'x'}, id), 'mcp__other__run_command(command)');
 });
 
-test('formatAssistantBlockWithCopy points each action at its header row after wrapping and indent', async () => {
-	const {formatAssistantBlockWithCopy, formatAssistantBlock} = await import('../../src/ui/present.js');
+test('assistantPrint points each action at its header row after wrapping and indent', async () => {
+	const {assistantPrint, formatAssistantBlock} = await import('../../src/ui/present.js');
 	const id = (s: string) => s;
 	const strip = (s: string) => s.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '');
 	const md = `${'word '.repeat(30)}\n\n\`\`\`js\nlet x = 1;\n\`\`\``;
-	const block = formatAssistantBlockWithCopy(md, id, false, 40);
+	const block = assistantPrint(md, id, {width: 40, copyLabel: true});
 	const rows = block.text.split('\n').map(strip);
-	assert.equal(block.actions.length, 1);
-	assert.equal(rows[block.actions[0]!.line]!.trim(), '╭─ js · copy');
-	assert.equal(block.actions[0]!.copy, 'let x = 1;');
+	const actions = block.options.actions ?? [];
+	assert.equal(actions.length, 1);
+	assert.equal(rows[actions[0]!.line]!.trim(), '╭─ js · copy');
+	assert.equal(actions[0]!.copy, 'let x = 1;');
 	assert.equal(strip(formatAssistantBlock(md, id, false, 40)).includes('copy'), false);
-	assert.deepEqual(formatAssistantBlockWithCopy('no code here', id).actions, []);
+	assert.equal(assistantPrint('no code here', id, {copyLabel: true}).options.actions, undefined);
+});
+
+test('assistantPrint lays the block out again for each width, with actions for that layout', async () => {
+	const {assistantPrint} = await import('../../src/ui/present.js');
+	const id = (s: string) => s;
+	const strip = (s: string) => s.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '');
+	const md = `${'word '.repeat(30)}\n\n\`\`\`js\nlet x = 1;\n\`\`\``;
+	const block = assistantPrint(md, id, {width: 40, copyLabel: true});
+	const render = block.options.render!;
+	for (const width of [30, 60, 120]) {
+		const out = render(width);
+		assert.equal(typeof out, 'object');
+		const {text, actions} = out as {text: string; actions?: {line: number; copy: string}[]};
+		const rows = text.split('\n').map(strip);
+		for (const row of rows) assert.ok(row.length <= width, `${width}: ${row}`);
+		assert.equal(actions?.length, 1);
+		assert.equal(rows[actions![0]!.line]!.trim(), '╭─ js · copy');
+	}
+	assert.ok(strip((render(120) as {text: string}).text).split('\n')[0]!.length > 40);
+	assert.deepEqual(assistantPrint('plain', id).options.render!(50), {text: '● plain'});
 });

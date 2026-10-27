@@ -8,7 +8,7 @@ import type {AuditEntry, ChatMode} from '../chat/permission.js';
 import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
 import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
 import {wrapRows} from '../kit.js';
-import type {PrintAction} from '../../../../src/api.js';
+import type {PrintAction, PrintOptions} from '../../../../src/api.js';
 import {openFenceLine, renderMarkdownBlocks} from './markdown.js';
 import {LIVE, parseTodos, type Out, type Phase, type RunningTool, type StatusLine, type Todo} from './transcript.js';
 
@@ -70,9 +70,28 @@ export function formatAssistantBlock(text: string, scrub: Scrub, interrupted = f
 	return assistantBlock(text, scrub, interrupted, width, false).text;
 }
 
-/** The answer block with a "copy" label on each code block header and the print actions behind them. */
-export function formatAssistantBlockWithCopy(text: string, scrub: Scrub, interrupted = false, width?: number): {text: string; actions: PrintAction[]} {
-	return assistantBlock(text, scrub, interrupted, width, true);
+/**
+ * An answer block for `print`: laid out for `width` now, and again by the transcript for each width it
+ * shows (`render`), so the block fills the chat after a resize or when the console closes. With
+ * `copyLabel` each code block header reads "· copy" and carries the action that copies it.
+ */
+export function assistantPrint(
+	text: string,
+	scrub: Scrub,
+	opts: {interrupted?: boolean; width?: number | undefined; copyLabel?: boolean} = {},
+): {text: string; options: PrintOptions} {
+	const draw = (width: number | undefined) => assistantBlock(text, scrub, opts.interrupted === true, width, opts.copyLabel === true);
+	const now = draw(opts.width);
+	return {
+		text: now.text,
+		options: {
+			...(now.actions.length > 0 && {actions: now.actions}),
+			render: width => {
+				const block = draw(width);
+				return block.actions.length > 0 ? block : {text: block.text};
+			},
+		},
+	};
 }
 
 function assistantBlock(text: string, scrub: Scrub, interrupted: boolean, width: number | undefined, copyLabel: boolean): {text: string; actions: PrintAction[]} {

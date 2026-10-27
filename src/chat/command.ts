@@ -11,7 +11,7 @@ import type {LockInfo} from '../sessions/lock.js';
 import type {ClaudeState, ChatQueryFn, Credential, CredentialInfo} from '../types.js';
 import type {ChatViewProps, ListPickerProps, WaitingViewProps} from '../ui/mount.js';
 import {formatBanner} from '../ui/banner.js';
-import {formatAssistantBlock, formatNotice, formatUserLine} from '../ui/present.js';
+import {assistantPrint, formatNotice, formatUserLine} from '../ui/present.js';
 import {readHistory, readTranscriptDetail} from './history.js';
 import {listProjectFiles} from './files.js';
 import {editInEditor} from '../terminal.js';
@@ -475,7 +475,13 @@ const runLocked = async (
 			for (const m of earlier) {
 				// One empty line before each message, as in the live chat.
 				print(' ');
-				print(m.role === 'user' ? formatUserLine(m.text, scrub) : formatAssistantBlock(m.text, scrub, false, chatHost?.columns() || undefined));
+				if (m.role === 'user') {
+					print(formatUserLine(m.text, scrub));
+					continue;
+				}
+				const columns = chatHost?.columns() ?? 0;
+				const block = assistantPrint(m.text, scrub, {width: columns > 1 ? columns - 1 : undefined});
+				print(block.text, block.options);
 			}
 			if (earlier.length > 0) print(formatNotice('Resumed — earlier messages above.', scrub));
 		}

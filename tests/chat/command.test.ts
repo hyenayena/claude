@@ -640,7 +640,8 @@ test('a new chat opens with the yena banner sized to the view; a resumed one doe
 			close: () => {},
 			print: (t, o) => {
 				printed.push(t);
-				if (o?.render) renders.push(o.render);
+				// The banner renders plain text.
+				if (o?.render) renders.push(o.render as (width: number) => string);
 			},
 			host,
 		});

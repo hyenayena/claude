@@ -1424,7 +1424,24 @@ test('an answer with a code block is printed with a copy action on its header ro
 	assert.match(answer.text.split('\n')[action.line]!, /copy/);
 	t.controller.ui({kind: 'text', messageId: 'm2', text: 'plain answer'});
 	await t.settle();
-	assert.equal(prints.find(p => p.text.includes('plain answer'))!.options, undefined);
+	const plain = prints.find(p => p.text.includes('plain answer'))!.options!;
+	assert.equal(plain.actions, undefined);
+	assert.equal(typeof plain.render, 'function');
+});
+
+test('an answer is laid out again at the width the transcript shows', async () => {
+	const prints: {text: string; options?: PrintOptions}[] = [];
+	const t = setup(undefined, {print: (text, options) => void prints.push({text, ...(options && {options})})});
+	await t.settle();
+	t.controller.ui({kind: 'text', messageId: 'm1', text: 'word '.repeat(60)});
+	await t.settle();
+	const answer = prints.find(p => p.text.includes('word'))!;
+	const rowsAt = (w: number) => {
+		const out = answer.options!.render!(w);
+		return (typeof out === 'string' ? out : out.text).split('\n');
+	};
+	assert.ok(rowsAt(120).length < rowsAt(40).length);
+	for (const row of rowsAt(40)) assert.ok(row.length <= 40, row);
 });
 
 test('onInbox hands out a sender that sends when idle, queues while answering, and is withdrawn on unmount', async () => {

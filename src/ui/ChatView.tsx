@@ -13,7 +13,7 @@ import {PermissionPrompt} from './PermissionPrompt.js';
 import {
 	formatError,
 	formatNotice,
-	formatAssistantBlockWithCopy,
+	assistantPrint,
 	formatOut,
 	formatUserLine,
 	liveTail,
@@ -274,8 +274,10 @@ export function ChatView(props: ChatViewProps) {
 			for (const out of step.out) {
 				if (out.kind === 'blank') continue;
 				if (out.kind === 'assistant') {
-					const block = formatAssistantBlockWithCopy(out.text, scrub, out.interrupted, lastWidthRef.current || undefined);
-					print(block.text, block.actions.length > 0 ? {actions: block.actions} : undefined);
+					// The transcript keeps a row's last column empty, so the first layout leaves it too.
+					const width = lastWidthRef.current > 1 ? lastWidthRef.current - 1 : undefined;
+					const block = assistantPrint(out.text, scrub, {interrupted: out.interrupted, width, copyLabel: true});
+					print(block.text, block.options);
 					continue;
 				}
 				const text = formatOut(out, scrub, reveal, lastWidthRef.current || undefined);
