@@ -2,10 +2,19 @@ import type {HookCallback, HookCallbackMatcher, HookJSONOutput} from '@anthropic
 import path from 'node:path';
 import {classifyEditTarget, createCanUseTool, PLANS_DIR, resolveReal, type Scope} from '../policy.js';
 import {agentDenial} from './agent-policy.js';
+import {addsPrivilegedFrontmatter, isDefinitionPath} from './definition-guard.js';
 import {POLICY_DENY} from './permission.js';
 
 // Heuristic that over-denies on purpose: a shell command naming an auth file is refused in every mode.
 const AUTH_FILE = /credentials\.json|\.claude\.json|config\/backups|accounts\.json|claude\/accounts\b/;
+
+// The host's ssh-agent signs with the user's own keys; git goes out through the account keys instead.
+const AGENT_VAR = /\bSSH_AUTH_SOCK\b|\bssh-add\b/;
+const usesAgent = (command: string, socket: string | undefined): boolean =>
+	AGENT_VAR.test(command) || (socket !== undefined && socket !== '' && (command.includes(socket) || command.includes(path.dirname(socket) + '/')));
+
+// A process's start-up environment (/proc/<pid>/environ) still holds the credentials yena and the CLI got.
+const PROC_ENV = /\benviron\b/;
 
 const allow: HookJSONOutput = {continue: true};
 
@@ -52,14 +61,30 @@ export function createPolicyHook(scope: Scope, configDir?: string): HookCallback
 				}
 				if (cls === 'deny-guard') return denyWith(POLICY_DENY.guard);
 				if (cls === 'deny-secret') return denyWith(POLICY_DENY.secret);
+				// A skill's allowed-tools or an agent's permissionMode would let later calls skip the prompts.
+				const lexical = path.resolve(scope.roots[0] ?? '/', args.file_path);
+				const real = await resolveReal(lexical).catch(() => lexical);
+				const hubs = await Promise.all((scope.free ?? []).map(d => resolveReal(d).catch(() => path.resolve(d))));
+				if (
+					(isDefinitionPath(real, hubs) || isDefinitionPath(lexical, hubs)) &&
+					(await addsPrivilegedFrontmatter(real, tool, args))
+				) {
+					return denyWith(POLICY_DENY.privileged);
+				}
 				return allow;
 			}
-			case 'Bash':
+			case 'Bash': {
 				if (args.dangerouslyDisableSandbox) return denyWith(POLICY_DENY.background);
-				if (typeof args.command !== 'string') return allow;
-				if (AUTH_FILE.test(args.command)) return denyWith(POLICY_DENY.authFiles);
-				// Same heuristic for the project module's data dir, whose state decides which projects are writable.
-				return projectData && args.command.includes(projectData) ? denyWith(POLICY_DENY.projectState) : allow;
+				const command = args.command;
+				if (typeof command !== 'string') return allow;
+				if (AUTH_FILE.test(command)) return denyWith(POLICY_DENY.authFiles);
+				// Same heuristic for the account module's secrets and keys.
+				if (scope.shellDenied?.some(s => command.includes(s))) return denyWith(POLICY_DENY.accountSecrets);
+				if (PROC_ENV.test(command)) return denyWith(POLICY_DENY.procEnv);
+				if (usesAgent(command, scope.agentSocket)) return denyWith(POLICY_DENY.sshAgent);
+				// And for the project module's data dir, whose state decides which projects are writable.
+				return projectData && command.includes(projectData) ? denyWith(POLICY_DENY.projectState) : allow;
+			}
 			default: {
 				const denial = agentDenial(tool, args);
 				return denial ? denyWith(denial) : allow;

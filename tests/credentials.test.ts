@@ -117,6 +117,26 @@ test('makeRedactor masks the credential, every other secret and the key pattern'
 	assert.deepEqual(allSecrets({env: {ANTHROPIC_API_KEY: KEY}, dataDir: dir}).sort(), [KEY, KEY2].sort());
 });
 
+test('makeRedactor masks common secret shapes but not words about tokens', () => {
+	const r = makeRedactor();
+	const pem = ['-----BEGIN OPENSSH PRIVATE KEY-----', 'b3BlbnNzaC1rZXktdjEAAAAA', '-----END OPENSSH PRIVATE KEY-----'].join('\n');
+	assert.equal(r(`a ${pem} b`), 'a [redacted] b');
+	assert.equal(r(`t ghp_${'x'.repeat(36)} u`), 't [redacted] u');
+	assert.equal(r(`t github_pat_${'Y'.repeat(40)}`), 't [redacted]');
+	assert.equal(r('aws AKIAABCDEFGHIJKLMNOP.'), 'aws [redacted].');
+	assert.equal(r(`openai sk-${'z'.repeat(32)}`), 'openai [redacted]');
+	for (const text of ['token: the next step', 'api_key = process.env.X', 'mask-ghp_ prefix', 'task-123 desk-top']) {
+		assert.equal(r(text), text);
+	}
+});
+
+test('refreshAccountSecretValues leaves nothing when the account dir has no accounts', async () => {
+	const {accountSecretValues, refreshAccountSecretValues} = await import('../src/deps/account.js');
+	const dir = join(await tmp(), 'claude');
+	await refreshAccountSecretValues(dir);
+	assert.deepEqual(accountSecretValues(), []);
+});
+
 test('storing refuses the wrong kind and garbage without echoing it', async () => {
 	const dir = await tmp();
 	for (const bad of [OAUTH, 'garbage-TESTVALUE', 'sk-ant-x']) {

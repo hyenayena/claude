@@ -4,6 +4,7 @@ import type {LoginProbe} from '../claude-login.js';
 import {clockTime} from '../clock-time.js';
 import {resolvePaths, type ClaudePaths} from '../config.js';
 import {allSecrets, makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
+import {refreshAccountSecretValues} from '../deps/account.js';
 import {clip, errClass, noopLog} from '../log.js';
 import type {spawnRunner} from '../runner/spawn.js';
 import type {LockInfo} from '../sessions/lock.js';
@@ -270,6 +271,7 @@ const openRemote = async (
 		throw err;
 	}
 	registerLogRedaction(log, cred);
+	await refreshAccountSecretValues(deps.dataDir);
 	const redact = makeRedactor(cred, allSecrets({env: deps.env, dataDir: deps.dataDir}));
 	const scrub = makeScrub(redact);
 	await deps.showNoticeOnce(cred, ctx);

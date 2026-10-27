@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync} from 'node:fs';
+import {chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {after, describe, it} from 'node:test';
@@ -12,6 +12,7 @@ import {
 	buildOptions,
 	cliEnv,
 	ensureMdLinks,
+	restrictDataDirs,
 	GUARD_DENY,
 	resolvePaths,
 	runtimeInfo,
@@ -493,5 +494,30 @@ describe('soulSection', () => {
 		assert.ok(s.endsWith('# SOUL\nWarm and brief.'));
 		writeFileSync(path.join(mdDir, 'SOUL.md'), 'x'.repeat(40_000));
 		assert.ok(soulSection({mdDir}).length < 17_000);
+	});
+});
+
+describe('restrictDataDirs', () => {
+	it('closes the data and config dirs to other users, leaves symlinks and missing dirs alone', () => {
+		const root = mkdtempSync(path.join(tmpdir(), 'claude-perm-'));
+		try {
+			const dataDir = path.join(root, 'claude');
+			const configDir = path.join(dataDir, 'config');
+			mkdirSync(configDir, {recursive: true});
+			chmodSync(dataDir, 0o755);
+			chmodSync(configDir, 0o775);
+			const target = path.join(root, 'shared');
+			mkdirSync(target, {mode: 0o755});
+			chmodSync(target, 0o755);
+			restrictDataDirs({dataDir, configDir});
+			assert.equal(lstatSync(dataDir).mode & 0o777, 0o700);
+			assert.equal(lstatSync(configDir).mode & 0o777, 0o700);
+			const linked = path.join(root, 'linked');
+			symlinkSync(target, linked);
+			restrictDataDirs({dataDir: linked, configDir: path.join(root, 'missing')});
+			assert.equal(lstatSync(target).mode & 0o777, 0o755);
+		} finally {
+			rmSync(root, {recursive: true, force: true});
+		}
 	});
 });

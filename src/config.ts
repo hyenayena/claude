@@ -1,4 +1,4 @@
-import {accessSync, constants, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, symlinkSync} from 'node:fs';
+import {accessSync, chmodSync, constants, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, symlinkSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {CanUseTool, McpServerConfig, Options} from '@anthropic-ai/claude-agent-sdk';
@@ -16,6 +16,7 @@ import {
 } from './policy.js';
 import {CONSOLE_SERVER_NAME} from './chat/console-tools.js';
 import {ensureHub, HUB_DIRS, hubDirFor} from './deps/md.js';
+import {loadAccountSecretPaths, type AccountSecretPaths} from './deps/account.js';
 import {loadProjectAccess, type ProjectAccessReader} from './deps/project.js';
 import {applyTuning, type ChatTuning} from './chat-prefs.js';
 import type {Credential} from './types.js';
@@ -37,6 +38,8 @@ export type ClaudePaths = {
 	loginFile: string;
 	/** The project module's access reader, when it is installed (see withProjects). */
 	projects?: ProjectAccessReader;
+	/** Where the account module keeps secrets, when it is installed (see withProjects). */
+	accountSecrets?: AccountSecretPaths;
 };
 
 export type RuntimeInfo = {
@@ -68,10 +71,14 @@ export function resolvePaths(dataDir: string, moduleDir?: string): ClaudePaths {
  */
 export const MD_LINKED_DIRS = ['agents', 'skills', 'commands', 'output-styles'] as const;
 
-/** The paths plus the project module's access reader (optional dependency, loaded at runtime). */
+/**
+ * The paths plus what the optional modules tell the policy (loaded at runtime): the project module's
+ * access reader and the account module's secret dirs.
+ */
 export async function withProjects(paths: ClaudePaths): Promise<ClaudePaths> {
 	const projects = await loadProjectAccess(paths.dataDir, paths.hubDir);
-	return projects ? {...paths, projects} : paths;
+	const accountSecrets = await loadAccountSecretPaths(paths.dataDir);
+	return {...paths, ...(projects && {projects}), ...(accountSecrets && {accountSecrets})};
 }
 
 const lexists = (p: string): boolean => {
@@ -146,6 +153,20 @@ export function ensureMdLinks(paths: Pick<ClaudePaths, 'hubDir' | 'mdDir' | 'con
 			if (lexists(link)) continue;
 			mkdirSync(paths.configDir, {recursive: true});
 			symlinkSync(path.relative(paths.configDir, hubSub), link, 'dir');
+		} catch {}
+	}
+}
+
+/**
+ * Closes yena's Claude data dir and the Claude Code config dir to other users: transcripts, file
+ * history and shell snapshots inside are created world-readable by Claude Code. Only real dirs are
+ * changed (never through a symlink); a failed chmod (some bind mounts) is ignored.
+ */
+export function restrictDataDirs(paths: Pick<ClaudePaths, 'dataDir' | 'configDir'>): void {
+	for (const dir of [paths.dataDir, paths.configDir]) {
+		try {
+			const st = lstatSync(dir, {throwIfNoEntry: false});
+			if (st?.isDirectory() && (st.mode & 0o077) !== 0) chmodSync(dir, st.mode & 0o700);
 		} catch {}
 	}
 }

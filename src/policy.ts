@@ -2,6 +2,7 @@ import {realpath} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import type {CanUseTool} from '@anthropic-ai/claude-agent-sdk';
+import type {AccountSecretPaths} from './deps/account.js';
 import type {ProjectAccess, ProjectAccessReader} from './deps/project.js';
 
 export const ALLOWED_TOOLS = ['Read', 'Glob', 'Grep'];
@@ -78,6 +79,10 @@ export type Scope = {
 	projects?: () => Promise<ProjectAccess | undefined>;
 	/** The project module's data dir (its state decides what is writable); shell commands naming it are refused. */
 	projectDataDir?: string;
+	/** What a shell command must not name: the account module's data dir and the tails of its secret dirs. */
+	shellDenied?: string[];
+	/** The ssh-agent socket yena was started with (compose forwards the host's); shell commands naming it are refused. */
+	agentSocket?: string;
 };
 
 export type PolicyPaths = {
@@ -92,6 +97,10 @@ export type PolicyPaths = {
 	credentialsFile: string;
 	/** The project module's access reader; projects are read-only unless it isolates them. */
 	projects?: ProjectAccessReader;
+	/** The account module's secret dirs; denied to every tool. */
+	accountSecrets?: AccountSecretPaths;
+	/** The ssh-agent socket from yena's environment (the chat's own env drops SSH_AUTH_SOCK). */
+	agentSocket?: string;
 };
 
 // `auth login --console` writes primaryApiKey into .claude.json and its backups.
@@ -120,6 +129,19 @@ const accountPaths = (paths: PolicyPaths): [string, string] => {
 	return [path.join(dir, 'accounts.json'), path.join(dir, 'accounts')];
 };
 
+/**
+ * Strings a shell command naming the account secrets would contain: the data dir and each secret dir's
+ * last two segments ("account/keys"), which also catch a relative path after a cd.
+ */
+export function accountShellDenied(secrets: AccountSecretPaths | undefined): string[] {
+	if (!secrets) return [];
+	const tails = secrets.secretDirs.map(d => path.join(path.basename(path.dirname(d)), path.basename(d)));
+	return [path.resolve(secrets.dataDir), ...tails];
+}
+
+const accountSecretRules = (paths: PolicyPaths, tool: 'Read' | 'Edit'): string[] =>
+	(paths.accountSecrets?.secretDirs ?? []).map(d => `${tool}(${absRule(d)}/**)`);
+
 // Claude Code permission rules: "//path" is absolute, "~/" is the home directory.
 const absRule = (p: string) => `/${p}`;
 
@@ -137,7 +159,10 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 			'/proc',
 			path.join(home, '.ssh'),
 			...CONFIG_SECRET.map(x => path.join(paths.configDir, x)),
+			...(paths.accountSecrets?.secretDirs ?? []),
 		],
+		...(paths.accountSecrets && {shellDenied: accountShellDenied(paths.accountSecrets)}),
+		...(paths.agentSocket && {agentSocket: paths.agentSocket}),
 		...(paths.projects && {projects: () => paths.projects!.read()}),
 		...(paths.projects?.dataDir && {projectDataDir: paths.projects.dataDir}),
 	};
@@ -164,6 +189,7 @@ export function buildAskSettings(paths: PolicyPaths): {
 				'Read(**/*.pem)',
 				'Read(**/id_rsa*)',
 				'Read(./.yena/**)',
+				...accountSecretRules(paths, 'Read'),
 			],
 		},
 		disableAllHooks: true,
@@ -224,6 +250,7 @@ export function buildChatSettings(paths: PolicyPaths): {
 		'Edit(**/*.pem)',
 		'Edit(**/id_rsa)',
 		'Edit(./.yena/**)',
+		...accountSecretRules(paths, 'Edit'),
 		...(paths.projects?.dataDir ? [`Edit(${absRule(paths.projects.dataDir)}/**)`] : []),
 	];
 	return {

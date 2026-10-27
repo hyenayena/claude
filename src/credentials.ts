@@ -16,9 +16,19 @@ import {
 	prepareAccount,
 	removeAllAccounts,
 } from './accounts.js';
+import {accountSecretValues} from './deps/account.js';
 import type {Credential, CredentialInfo, CredentialKind, CredentialSource} from './types.js';
 
-const SECRET_PATTERN = /sk-ant-[A-Za-z0-9_-]{8,}/g;
+// Secret shapes masked in everything the chat shows. Unlike the host log's redactor there is no
+// "token: <rest of line>" rule here: chat text talks about tokens and keys all the time.
+const SECRET_PATTERNS = [
+	/-----BEGIN [A-Z ]{0,30}PRIVATE KEY-----[\s\S]{0,8192}?(?:-----END [A-Z ]{0,30}PRIVATE KEY-----|$)/g,
+	/sk-ant-[A-Za-z0-9_-]{8,}/g,
+	/\bsk-[A-Za-z0-9]{20,}/g,
+	/\bgh[pousr]_[A-Za-z0-9]{30,}/g,
+	/\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+	/\bAKIA[0-9A-Z]{16}\b/g,
+];
 
 const makeCredential = (kind: CredentialKind, source: CredentialSource, value: string, account?: string): Credential => {
 	const cred = {kind, source, ...(account !== undefined && {account})};
@@ -150,12 +160,17 @@ export const makeRedactor = (cred?: Credential, others: readonly string[] = []):
 	return text => {
 		let out = text;
 		for (const v of values) out = out.split(v).join('[redacted]');
-		return out.replace(SECRET_PATTERN, '[redacted]');
+		for (const re of SECRET_PATTERNS) out = out.replace(re, '[redacted]');
+		return out;
 	};
 };
 
-/** Every secret yena may hand to Claude Code (stored accounts and the environment variables), for redaction. */
+/**
+ * Every secret yena may hand to Claude Code (stored accounts and the environment variables) and the
+ * account module's secrets as last read by refreshAccountSecretValues, for redaction.
+ */
 export const allSecrets = (opts: CredentialOpts): string[] => [
+	...accountSecretValues(),
 	...accountSecrets(accountsCtx(opts)),
 	...[opts.env.ANTHROPIC_API_KEY, opts.env.CLAUDE_CODE_OAUTH_TOKEN].flatMap(v => (v?.trim() ? [v.trim()] : [])),
 ];

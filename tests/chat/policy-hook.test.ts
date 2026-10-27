@@ -110,3 +110,71 @@ test('the hook denies Bash commands that name an auth file', async () => {
 		assert.equal(await decision('Bash', {command}), 'pass', command);
 	}
 });
+
+test('the hook denies permission frontmatter in skills, agents and commands, also through the config links', async () => {
+	const skills = path.join(paths.mdDir, 'skills');
+	mkdirSync(path.join(skills, 's'), {recursive: true});
+	symlinkSync(skills, path.join(paths.configDir, 'skills'));
+	const denied = `deny:${POLICY_DENY.privileged}`;
+	const skill = '---\nname: s\nallowed-tools: Bash\n---\n';
+	assert.equal(await decision('Write', {file_path: path.join(skills, 's', 'SKILL.md'), content: skill}), denied);
+	assert.equal(await decision('Write', {file_path: path.join(paths.configDir, 'skills', 's', 'SKILL.md'), content: skill}), denied);
+	assert.equal(await decision('Write', {file_path: path.join(paths.mdDir, 'agents', 'a.md'), content: '---\npermissionMode: auto\n---\n'}), denied);
+	assert.equal(await decision('Write', {file_path: path.join(projectDir, 'src', '.claude', 'skills', 'x', 'SKILL.md'), content: skill}), denied);
+	assert.equal(await decision('Write', {file_path: path.join(skills, 's', 'SKILL.md'), content: '---\nname: s\n---\nBody\n'}), 'pass');
+	assert.equal(await decision('Write', {file_path: path.join(paths.mdDir, 'notes.md'), content: skill}), 'pass');
+	writeFileSync(path.join(skills, 's', 'SKILL.md'), skill);
+	assert.equal(await decision('Edit', {file_path: path.join(skills, 's', 'SKILL.md'), old_string: 'name: s', new_string: 'name: t'}), 'pass');
+	assert.equal(await decision('Edit', {file_path: path.join(skills, 's', 'SKILL.md'), old_string: 'Bash', new_string: 'Bash Write'}), denied);
+});
+
+test('the hook denies Bash commands that read process environments', async () => {
+	for (const command of ['cat /proc/1/environ', "tr '\\0' '\\n' < /proc/self/environ", 'for p in /proc/*; do cat $p/environ; done']) {
+		assert.equal(await decision('Bash', {command}), `deny:${POLICY_DENY.procEnv}`, command);
+	}
+	for (const command of ['cat /proc/cpuinfo', 'echo environment', 'grep -r environment src']) {
+		assert.equal(await decision('Bash', {command}), 'pass', command);
+	}
+});
+
+test('the hook denies Bash commands that use the host ssh-agent', async () => {
+	const sock = '/run/host-services/ssh-auth.sock';
+	const guarded = createPolicyHook(buildScope({...paths, agentSocket: sock}), paths.configDir);
+	const verdict = async (command: string) => {
+		const out = (await guarded(
+			{hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {command}, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: projectDir} as never,
+			't',
+			opts,
+		)) as {hookSpecificOutput?: {permissionDecisionReason?: string}};
+		return out.hookSpecificOutput?.permissionDecisionReason ?? 'pass';
+	};
+	for (const command of [`SSH_AUTH_SOCK=${sock} git push`, 'ls /run/host-services/', 'ssh-add -l', 'export SSH_AUTH_SOCK=/x']) {
+		assert.equal(await verdict(command), POLICY_DENY.sshAgent, command);
+	}
+	for (const command of ['git push', 'ssh -V', 'ls /run']) {
+		assert.equal(await verdict(command), 'pass', command);
+	}
+	assert.equal(await decision('Bash', {command: 'ssh-add -l'}), `deny:${POLICY_DENY.sshAgent}`);
+});
+
+test('the hook denies the account secrets to Bash and the file tools', async () => {
+	const accountDir = path.join(dataDir, 'account');
+	const secretDirs = [path.join(accountDir, 'secrets'), path.join(accountDir, 'keys')];
+	const guarded = createPolicyHook(buildScope({...paths, accountSecrets: {dataDir: accountDir, secretDirs}}), paths.configDir);
+	const verdict = async (tool_name: string, tool_input: Record<string, unknown>) => {
+		const out = (await guarded(
+			{hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: projectDir} as never,
+			't',
+			opts,
+		)) as {hookSpecificOutput?: {permissionDecisionReason?: string}};
+		return out.hookSpecificOutput?.permissionDecisionReason ?? 'pass';
+	};
+	for (const command of [`cat ${accountDir}/secrets/gh.json`, `ls ${accountDir}`, 'cd /x && cat account/keys/gh', 'tar c account/secrets']) {
+		assert.equal(await verdict('Bash', {command}), POLICY_DENY.accountSecrets, command);
+	}
+	for (const command of ['git status', 'ls modules/account/src', 'cat accounts.md']) {
+		assert.equal(await verdict('Bash', {command}), 'pass', command);
+	}
+	assert.notEqual(await verdict('Read', {file_path: path.join(accountDir, 'keys', 'gh')}), 'pass');
+	assert.notEqual(await verdict('Write', {file_path: path.join(accountDir, 'secrets', 'x.json'), content: ''}), 'pass');
+});

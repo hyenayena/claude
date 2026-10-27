@@ -14,7 +14,7 @@ import {diskCommands} from './disk-commands.js';
 import {listPrompts, listSessions, readHistory} from './chat/history.js';
 import {readSessionTitle, transcriptFile} from './chat/title.js';
 import {ago, type PickerItem} from './ui/picker-model.js';
-import {buildEnv, buildOptions, cliEnv, ensureMdLinks, resolvePaths, runtimeInfo, withProjects} from './config.js';
+import {buildEnv, buildOptions, cliEnv, ensureMdLinks, resolvePaths, restrictDataDirs, runtimeInfo, withProjects} from './config.js';
 import {LOGIN_USAGE, parseLoginArgs, probeLogin, runLogout, type LoginProbe, type LoginRequest, type LoginStatus} from './claude-login.js';
 import {
 	accountsCtx,
@@ -33,6 +33,7 @@ import {
 	storeApiKey,
 	storeOauthToken,
 } from './credentials.js';
+import {refreshAccountSecretValues} from './deps/account.js';
 import {editFile, readHidden, runInteractive, runInteractiveStatus, waitForEnter} from './terminal.js';
 import {clip, errClass, noopLog} from './log.js';
 import {openChat, runChat, type ChatOpen, type ChatRoute, type ChatRouteRequest, type ChatRunDeps, type ChatUi} from './chat/command.js';
@@ -443,6 +444,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 		registerLogRedaction(log, cred);
 		log.info('credential resolved', {kind: cred.kind, source: cred.source});
+		await refreshAccountSecretValues(dataDir);
 		const redact = makeRedactor(cred, allSecrets({env, dataDir}));
 		const scrub = makeScrub(redact);
 		await showNoticeOnce(cred, ctx);
@@ -479,6 +481,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		try {
 			const paths = await withProjects(resolvePaths(dataDir, deps.moduleDir));
 			ensureMdLinks(paths);
+			restrictDataDirs(paths);
 			let resume = fresh ? undefined : state.lastSessionId;
 			let prompt = text;
 			let result;

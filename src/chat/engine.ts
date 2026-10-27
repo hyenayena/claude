@@ -1,8 +1,9 @@
 import type {CommandBridge, Logger} from '../../../../src/api.js';
 import {withPatch, type ChatTuning, type LivePatch} from '../chat-prefs.js';
-import {buildChatOptions, buildEnv, ensureMdLinks, resolvePaths, withProjects, type ClaudePaths} from '../config.js';
+import {buildChatOptions, buildEnv, ensureMdLinks, resolvePaths, restrictDataDirs, withProjects, type ClaudePaths} from '../config.js';
 import type {LoginProbe} from '../claude-login.js';
 import {accountsCtx, allSecrets, makeRedactor, prepareCredential, registerLogRedaction, requireCredential} from '../credentials.js';
+import {refreshAccountSecretValues} from '../deps/account.js';
 import {chooseAccount, markLimited} from '../accounts.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {buildScope} from '../policy.js';
@@ -99,6 +100,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	}
 	registerLogRedaction(log, cred);
 	const credOpts = {env, dataDir};
+	await refreshAccountSecretValues(dataDir);
 	const redact = makeRedactor(cred, allSecrets(credOpts));
 	const scrub = makeScrub(redact);
 	const reveal = makeReveal(redact);
@@ -134,7 +136,8 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	const state = await store.read();
 	const paths = await withProjects(resolvePaths(dataDir, deps.moduleDir));
 	ensureMdLinks(paths);
-	const scope = buildScope(paths);
+	restrictDataDirs(paths);
+	const scope = buildScope({...paths, ...(env.SSH_AUTH_SOCK && {agentSocket: env.SSH_AUTH_SOCK})});
 	const resume = chosen ?? (fresh ? undefined : state.lastSessionId);
 	log.info('chat starting', {
 		fresh,

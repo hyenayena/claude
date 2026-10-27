@@ -118,6 +118,11 @@ export const POLICY_DENY = {
 	projectState: "The project module's data (its state decides which projects are writable) is not to be touched.",
 	locked: "Writing there is not allowed (yena's Claude data dir). Instructions, agents and skills are edited in the md hub, at its own path.",
 	authFiles: 'Access to authentication files is blocked.',
+	procEnv: 'Reading process environments is blocked: they hold credentials.',
+	sshAgent: "Using the host's ssh-agent is blocked. Git in yena repositories goes out through the account set with \"account use\".",
+	accountSecrets: "Access to the account module's secrets and keys is blocked. Use the account console commands; they never show secret values.",
+	privileged:
+		'Adding or changing allowed-tools, hooks, permissionMode or mcpServers in a skill, agent or command is not allowed in the chat: it would let tool calls skip the approval prompts. Tell the user the exact change so they can make it by hand.',
 	background: 'Background execution is not available in the chat.',
 	isolation: 'Running an agent in a worktree or remotely is not available in the chat.',
 	invalidInput: 'The tool input is invalid.',
