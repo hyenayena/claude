@@ -1217,3 +1217,25 @@ test('claude start opens a new chat that sends the message and returns while the
 	await assert.rejects(s2.command.run(['start'], s2.ctx), /Usage: claude start <message…>/);
 	release();
 });
+
+test('claude send hands the message to the open chat view, or starts a chat when none is open', async () => {
+	let release!: () => void;
+	const hold = new Promise<void>(resolve => {
+		release = resolve;
+	});
+	const s = await setup({run: () => hold});
+	await s.command.run(['send', 'first'], s.ctx);
+	assert.equal(s.props.at(-1)!.initialSend, 'first');
+	assert.ok(s.printed.includes('Started a new chat with the message.'));
+	const got: string[] = [];
+	s.props.at(-1)!.onInbox!(text => void got.push(text));
+	await s.command.run(['send', 'talk', 'about', 'TECH-1'], s.ctx);
+	assert.deepEqual(got, ['talk about TECH-1']);
+	assert.ok(s.printed.includes('Sent the message to the open chat.'));
+	s.props.at(-1)!.onInbox!(() => {
+		throw new Error('Wait for the answer or press Esc to interrupt');
+	});
+	await assert.rejects(s.command.run(['send', 'x'], s.ctx), /Wait for the answer/);
+	await assert.rejects(s.command.run(['send'], s.ctx), /Usage: claude send <message…>/);
+	release();
+});

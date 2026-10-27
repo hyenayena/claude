@@ -67,6 +67,8 @@ export interface ChatViewProps {
 	initialDraft?: string;
 	// Sent once when the view mounts, as if typed and sent.
 	initialSend?: string;
+	// Called on mount with a function that sends a message as if typed (queued while a turn runs), and with undefined on unmount.
+	onInbox?: (deliver: ((text: string) => void) | undefined) => void;
 	// Project files for @ mentions (read lazily, may be empty until loaded).
 	files?: () => readonly string[];
 	// Opens the draft in an external editor (Ctrl+G); resolves with the new text, or undefined.
@@ -447,6 +449,23 @@ export function ChatView(props: ChatViewProps) {
 		edRef.current = editorReduce(emptyEditor, {type: 'insert', text});
 		submit();
 	}, [props.initialSend, submit]);
+
+	const onInbox = props.onInbox;
+	useEffect(() => {
+		if (!onInbox) return;
+		onInbox(text => {
+			if (closedRef.current) throw new Error('The chat is closed');
+			if (tRef.current.phase !== 'idle') {
+				if (queueRef.current.length >= MAX_QUEUED) throw new Error(BUSY_HINT);
+				setQueue([...queueRef.current, text]);
+				render();
+				return;
+			}
+			controller.send(text);
+			if (controller.state === 'running') feed({type: 'state', state: 'running'});
+		});
+		return () => onInbox(undefined);
+	}, [onInbox, controller, feed, render, setQueue]);
 
 	const browseHistory = useCallback(
 		(step: -1 | 1) => {

@@ -2,8 +2,16 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {z} from 'zod';
 import type {CommandBridge, CommandInfo, CommandRunRequest, CommandRunResult} from '../../../../src/api.js';
-import {CONSOLE_MCP_TIMEOUT_MS, CONSOLE_SERVER_NAME, CONSOLE_TIMEOUT_MS, createConsoleServer, type ConsoleSdk} from '../../src/chat/console-tools.js';
-import type {PermissionDecision, PermissionPrompter, PermissionRequest} from '../../src/chat/permission.js';
+import {
+	CONSOLE_MCP_TIMEOUT_MS,
+	CONSOLE_SERVER_NAME,
+	CONSOLE_TIMEOUT_MS,
+	createConsoleFlags,
+	createConsoleServer,
+	type ConsoleFlags,
+	type ConsoleSdk,
+} from '../../src/chat/console-tools.js';
+import type {AuditEntry, ChatMode, PermissionDecision, PermissionPrompter, PermissionRequest} from '../../src/chat/permission.js';
 import {noopLog} from '../../src/log.js';
 
 type Handler = (args: Record<string, unknown>, extra: unknown) => Promise<{content: {text: string}[]; isError?: boolean}>;
@@ -31,8 +39,9 @@ const info: CommandInfo[] = [
 ];
 
 class FakePrompter implements PermissionPrompter {
-	mode = 'default' as const;
+	mode: ChatMode = 'default';
 	requests: PermissionRequest[] = [];
+	audits: AuditEntry[] = [];
 	decision: PermissionDecision = {kind: 'allow'};
 	throws = false;
 	request(req: PermissionRequest): Promise<PermissionDecision> {
@@ -41,13 +50,17 @@ class FakePrompter implements PermissionPrompter {
 	}
 	hasApproved = () => false;
 	remember = () => {};
-	audit = () => {};
+	audit = (e: AuditEntry) => void this.audits.push(e);
 }
 
-const setup = (run: (req: CommandRunRequest) => Promise<CommandRunResult>, redact = (s: string) => s) => {
+const setup = (
+	run: (req: CommandRunRequest) => Promise<CommandRunResult>,
+	redact = (s: string) => s,
+	flags?: ConsoleFlags,
+) => {
 	const prompter = new FakePrompter();
 	const bridge: CommandBridge = {list: () => info, run};
-	const server = createConsoleServer({bridge, sdk, prompter, redact, cwd: '/app', log: noopLog}) as unknown as {
+	const server = createConsoleServer({bridge, sdk, prompter, redact, cwd: '/app', log: noopLog, ...(flags && {flags})}) as unknown as {
 		name: string;
 		tools: Def[];
 	};
@@ -107,6 +120,50 @@ test('confirm maps allow to true and deny, cancel and a throwing request to fals
 	assert.equal(await confirm!(creq), false);
 	prompter.throws = true;
 	assert.equal(await confirm!(creq), false);
+});
+
+test('in auto mode confirm passes without a prompt unless the classifier flagged the line', async () => {
+	const flags = createConsoleFlags();
+	const confirms: CommandRunRequest['confirm'][] = [];
+	const {runTool, prompter} = setup(
+		async req => {
+			confirms.push(req.confirm);
+			return ok('');
+		},
+		s => s,
+		flags,
+	);
+	prompter.mode = 'auto';
+	prompter.decision = {kind: 'deny'};
+	const creq = {line: 'mod remove x', command: 'mod', caller: 'claude'};
+
+	await runTool.handler({command: 'mod remove x'}, {});
+	assert.equal(await confirms[0]!(creq), true);
+	assert.equal(prompter.requests.length, 0);
+	assert.deepEqual(prompter.audits[0], {outcome: 'auto-accepted', toolName: 'Command', summary: 'mod remove x'});
+
+	flags.flag('mod remove x');
+	await runTool.handler({command: ' mod remove x '}, {});
+	assert.equal(await confirms[1]!(creq), false);
+	assert.equal(prompter.requests.length, 1);
+
+	await runTool.handler({command: 'mod remove x'}, {});
+	assert.equal(await confirms[2]!(creq), true);
+	assert.equal(prompter.requests.length, 1);
+});
+
+test('confirm still prompts outside auto mode', async () => {
+	for (const mode of ['default', 'acceptEdits', 'plan'] as const) {
+		let confirm: CommandRunRequest['confirm'];
+		const {runTool, prompter} = setup(async req => {
+			confirm = req.confirm;
+			return ok('');
+		});
+		prompter.mode = mode;
+		await runTool.handler({command: 'mod remove x'}, {});
+		assert.equal(await confirm!({line: 'mod remove x', command: 'mod', caller: 'claude'}), true);
+		assert.equal(prompter.requests.length, 1, mode);
+	}
 });
 
 test('output is scrubbed and redacted', async () => {

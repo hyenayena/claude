@@ -74,6 +74,8 @@ export type ChatRunDeps = {
 	onSession?: (session: ChatHandle | undefined) => void;
 	// Receives the function that applies a settings change to this chat (undefined once it closes).
 	onLive?: (apply: ((patch: LivePatch) => void) | undefined) => void;
+	// Receives the open chat view's way to take a message from outside ("claude send"); undefined once it closes.
+	onInbox?: (deliver: ((text: string) => void) | undefined) => void;
 	onRulesChanged?: () => void;
 	// Private directory for Claude Code's shell output (CLAUDE_CODE_TMPDIR); throws when unusable.
 	shellTmp?: () => string;
@@ -452,6 +454,7 @@ const runLocked = async (
 				...(resume && !source.fork && {initialSessionId: resume}),
 				...(draft && {initialDraft: draft}),
 				...(send && {initialSend: send}),
+				...(deps.onInbox && {onInbox: deps.onInbox}),
 				files,
 				loadTranscript: async () => {
 					const id = session.sessionId;

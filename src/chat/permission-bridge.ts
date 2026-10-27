@@ -4,7 +4,7 @@ import path from 'node:path';
 import type {CanUseTool, PermissionResult} from '@anthropic-ai/claude-agent-sdk';
 import {classifyEditTarget, createCanUseTool, type Scope} from '../policy.js';
 import {agentDenial} from './agent-policy.js';
-import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from './console-tools.js';
+import {type ConsoleFlags, LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from './console-tools.js';
 import {
 	BASH_REVIEW_MAX,
 	CANCEL_MESSAGE,
@@ -30,6 +30,7 @@ export type PermissionBridgeDeps = {
 	projectDir: string;
 	mdDir: string;
 	prompter: PermissionPrompter;
+	consoleFlags?: ConsoleFlags;
 	preview?: (toolName: 'Edit' | 'Write', input: Record<string, unknown>, scope: Scope) => Promise<Preview | undefined>;
 	highlights?: (command: string) => Highlight[];
 	previewTimeoutMs?: number;
@@ -441,9 +442,14 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 			case 'Edit':
 			case 'Write':
 				return handleEdit(toolName, input, opts);
-			// The console tools confirm inside their handler, which holds in every mode, so they never prompt here.
-			case LIST_COMMANDS_TOOL:
+			// The console tools confirm inside their handler, so they never prompt here. In auto mode reaching
+			// this point means the classifier was unsure, so the handler is told to confirm the line.
 			case RUN_COMMAND_TOOL:
+				if (prompter.mode === 'auto' && typeof input.command === 'string') {
+					deps.consoleFlags?.flag(input.command.trim());
+				}
+				return {behavior: 'allow', updatedInput: input, toolUseID: opts.toolUseID};
+			case LIST_COMMANDS_TOOL:
 				return {behavior: 'allow', updatedInput: input, toolUseID: opts.toolUseID};
 			default:
 				if (toolName.startsWith('mcp__')) return handleMcp(toolName, input, opts);

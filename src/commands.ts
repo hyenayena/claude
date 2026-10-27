@@ -96,6 +96,7 @@ const KEY_USAGE = 'Usage: claude auth key --from-file <path> [--name <account>]'
 const CHAT_NEW_USAGE = 'Usage: chat [model]';
 const START_USAGE = 'Usage: claude start <message…>';
 const START_MAX = 20_000;
+const SEND_USAGE = 'Usage: claude send <message…>';
 const MAX_KEY_FILE_BYTES = 4096;
 const STOP_USAGE = 'Usage: claude stop [session]';
 
@@ -566,6 +567,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		onLive: apply => {
 			applyOpenChat = apply;
 		},
+		onInbox: deliver => {
+			deliverToOpenChat = deliver;
+		},
 		onRulesChanged: () => void refreshRules(),
 		inputMode: () => inputMode,
 		acquire: () => acquireShared('chat'),
@@ -574,6 +578,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	let openHandle: {close: () => void; done: Promise<void>} | undefined;
 	let openSession: ChatHandle | undefined;
 	let applyOpenChat: ((patch: LivePatch) => void) | undefined;
+	let deliverToOpenChat: ((text: string) => void) | undefined;
 
 	// Chat input editing, cached so every key can read it.
 	let inputMode: 'normal' | 'vim' = 'normal';
@@ -684,6 +689,18 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await Promise.race([up, running]);
 		log.info('chat started with a message', {chars: text.length, byCaller: ctx.signal !== undefined});
 		ctx.print('Started a new chat with the message.');
+	};
+
+	// Into the chat view that is open (queued while it answers); with none open, a new chat as "claude start".
+	const sendToChat = async (args: string[], ctx: CommandContext): Promise<void> => {
+		const text = args.join(' ').trim();
+		if (text === '') throw new Error(SEND_USAGE);
+		if (text.length > START_MAX) throw new Error(`The message is longer than ${START_MAX} characters`);
+		const deliver = deliverToOpenChat;
+		if (!deliver) return startChat(args, ctx);
+		deliver(text);
+		log.info('message sent to the open chat', {chars: text.length, byCaller: ctx.signal !== undefined});
+		ctx.print('Sent the message to the open chat.');
 	};
 
 	const newChat = async (args: string[], ctx: CommandContext, attach = false): Promise<void> => {
@@ -1251,6 +1268,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		{name: 'chat', usage: 'claude chat [--new]', description: 'Open an interactive chat (continues the last session)', agent: 'deny'},
 		{name: 'new', usage: 'claude new [model]', description: 'Start a new chat', agent: 'deny'},
 		{name: 'start', usage: 'claude start <message…>', description: 'Start a new chat and send it the message (the open chat is saved)', agent: 'confirm'},
+		{name: 'send', usage: 'claude send <message…>', description: 'Send the message to the open chat (queued while it answers); with no chat open, start one', agent: 'confirm'},
 		{name: 'resume', usage: 'claude resume [session]', description: 'Continue an earlier chat (pick from a list, or give an id prefix)', agent: 'deny'},
 		{name: 'rewind', usage: 'claude rewind', description: 'Go back to before one of your messages (files and conversation)', agent: 'deny'},
 		{name: 'fork', usage: 'claude fork', description: 'Continue the current chat on a new branch', agent: 'deny'},
@@ -1329,6 +1347,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 					return newChat(args, ctx);
 				case 'start':
 					return startChat(args, ctx);
+				case 'send':
+					return sendToChat(args, ctx);
 				case 'resume':
 					return resumeChat(args, ctx);
 				case 'rewind':

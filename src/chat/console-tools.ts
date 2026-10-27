@@ -19,10 +19,35 @@ export type ConsoleSdk = {
 	z: typeof Zod;
 };
 
+// In auto mode the classifier reviews every run_command call before it runs. A call it was unsure about
+// reaches canUseTool, which flags the line here; only flagged lines are confirmed by the user, the rest
+// run without asking (deny-level commands stay refused by the bridge in every mode).
+export type ConsoleFlags = {
+	flag(line: string): void;
+	take(line: string): boolean;
+};
+
+export function createConsoleFlags(): ConsoleFlags {
+	const counts = new Map<string, number>();
+	return {
+		flag: line => {
+			counts.set(line, (counts.get(line) ?? 0) + 1);
+		},
+		take: line => {
+			const n = counts.get(line) ?? 0;
+			if (n === 0) return false;
+			if (n === 1) counts.delete(line);
+			else counts.set(line, n - 1);
+			return true;
+		},
+	};
+}
+
 export type ConsoleServerDeps = {
 	bridge: CommandBridge;
 	sdk: ConsoleSdk;
 	prompter: PermissionPrompter;
+	flags?: ConsoleFlags;
 	redact: (s: string) => string;
 	// Working directory shown in the confirmation prompt.
 	cwd: string;
@@ -55,8 +80,12 @@ export function createConsoleServer(deps: ConsoleServerDeps): ReturnType<typeof 
 	});
 
 	const confirmWith =
-		(signal: AbortSignal | undefined) =>
+		(signal: AbortSignal | undefined, flagged: boolean) =>
 		async (req: {line: string}): Promise<boolean> => {
+			if (prompter.mode === 'auto' && !flagged) {
+				prompter.audit({outcome: 'auto-accepted', toolName: 'Command', summary: req.line});
+				return true;
+			}
 			try {
 				const d = await prompter.request(
 					{
@@ -108,13 +137,14 @@ export function createConsoleServer(deps: ConsoleServerDeps): ReturnType<typeof 
 				return text('The command is empty or invalid.', true);
 			}
 			const signal = signalOf(extra);
+			const flagged = deps.flags?.take(line) ?? false;
 			let release: (() => void) | undefined;
 			try {
 				release = deps.holdTurn?.();
 				const result = await bridge.run({
 					line,
 					caller: 'claude',
-					confirm: confirmWith(signal),
+					confirm: confirmWith(signal, flagged),
 					timeoutMs: CONSOLE_TIMEOUT_MS,
 					...(signal && {signal}),
 				});

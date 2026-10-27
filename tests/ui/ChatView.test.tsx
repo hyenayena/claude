@@ -1426,3 +1426,25 @@ test('an answer with a code block is printed with a copy action on its header ro
 	await t.settle();
 	assert.equal(prints.find(p => p.text.includes('plain answer'))!.options, undefined);
 });
+
+test('onInbox hands out a sender that sends when idle, queues while answering, and is withdrawn on unmount', async () => {
+	let deliver: ((text: string) => void) | undefined;
+	const t = setup(undefined, {onInbox: d => (deliver = d)});
+	await t.settle();
+	deliver!('discuss the task');
+	await t.settle();
+	assert.deepEqual(t.controller.calls.sent, ['discuss the task']);
+	assert.ok(t.printed.some(l => l.includes('discuss the task')));
+	t.controller.setState('running');
+	await t.settle();
+	deliver!('and one more');
+	await t.settle();
+	assert.equal(t.controller.calls.sent.length, 1);
+	assert.match(t.lastFrame(), /↳ queued: and one more/);
+	t.controller.setState('idle');
+	t.controller.emit({type: 'turn-end', outcome: 'ok'});
+	await t.settle();
+	assert.deepEqual(t.controller.calls.sent, ['discuss the task', 'and one more']);
+	t.unmount();
+	assert.equal(deliver, undefined);
+});

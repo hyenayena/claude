@@ -8,7 +8,7 @@ import {clip, errClass, noopLog} from '../log.js';
 import {buildScope} from '../policy.js';
 import type {ChatQueryFn, ClaudeState, Credential} from '../types.js';
 import {ChatSession} from './chat-session.js';
-import {createConsoleServer, type ConsoleSdk} from './console-tools.js';
+import {createConsoleFlags, createConsoleServer, type ConsoleSdk} from './console-tools.js';
 import {createChatCanUseTool} from './permission-bridge.js';
 import {sdkPermissionMode} from './permission.js';
 import {policyHooks} from './policy-hook.js';
@@ -190,6 +190,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		buildOptions: (abortController, id, prompter) => {
 			cred = prepareCredential(credOpts);
 			registerLogRedaction(log, cred);
+			const consoleFlags = createConsoleFlags();
 			return {
 			...buildChatOptions({
 				paths,
@@ -204,6 +205,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 						bridge: io.commandBridge,
 						sdk: consoleSdk,
 						prompter,
+						flags: consoleFlags,
 						redact,
 						cwd: paths.projectDir,
 						log,
@@ -215,6 +217,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 					projectDir: paths.projectDir,
 					mdDir: paths.mdDir,
 					prompter,
+					consoleFlags,
 					preview: (tool, input, sc) => buildPreview(tool, input, sc),
 					highlights: bashHighlights,
 				}),

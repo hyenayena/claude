@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {after, test} from 'node:test';
 import type {CanUseTool} from '@anthropic-ai/claude-agent-sdk';
+import {createConsoleFlags} from '../../src/chat/console-tools.js';
 import {createChatCanUseTool} from '../../src/chat/permission-bridge.js';
 import {
 	CANCEL_MESSAGE,
@@ -556,6 +557,18 @@ test('the yena console tools are allowed without a prompt in every mode, other M
 		assert.equal((await call('mcp__yena__other', {}))?.behavior, 'deny');
 		assert.equal((await call('mcp__yenax__run_command', {}))?.behavior, 'deny');
 		assert.equal(prompter.requests.length, 2);
+	}
+});
+
+test('run_command reaching canUseTool flags the trimmed line for the handler only in auto mode', async () => {
+	for (const mode of ['default', 'acceptEdits', 'plan', 'auto'] as const) {
+		const consoleFlags = createConsoleFlags();
+		const {call, prompter} = setup({consoleFlags});
+		prompter.mode = mode;
+		await call('mcp__yena__run_command', {command: '  mod remove x '});
+		await call('mcp__yena__list_commands', {});
+		assert.equal(consoleFlags.take('mod remove x'), mode === 'auto', mode);
+		assert.equal(consoleFlags.take('mod remove x'), false, mode);
 	}
 });
 
