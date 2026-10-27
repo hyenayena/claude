@@ -77,6 +77,7 @@ test('tool blocks look like Claude Code: green or red dot, bold name, plain argu
 	assert.ok(ok.startsWith(`${SGR.green}●${SGR.reset} ${SGR.bold}Bash${SGR.boldOff}(ls)`));
 	assert.ok(failed.startsWith(`${SGR.red}●${SGR.reset}`));
 	assert.match(failed, /⎿ {2}boom/);
+	assert.equal(failed.split(SGR.red).length, 2, 'only the dot is red');
 	assert.match(formatToolBlock({name: 'Read', input: {file_path: '/a'}, isError: true, text: ''}, scrub), /⎿ {2}Error/);
 });
 

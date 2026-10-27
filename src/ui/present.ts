@@ -258,8 +258,9 @@ export function formatToolBlock(t: ToolResult, scrub: Scrub): string {
 	const dot = `${t.isError ? SGR.red : SGR.green}●${SGR.reset}`;
 	const header = `${dot} ${styledToolHeader(t.name, t.input, scrub)}${SGR.reset}`;
 	const body = summarizeToolResult(t, scrub);
-	if (body.trim() === '') return t.isError ? `${header}\n${paint(SGR.red, `${RESULT_PREFIX}Error`)}` : header;
-	return `${header}\n${paint(t.isError ? SGR.red : SGR.dim, resultLines(body.split('\n')).join('\n'))}`;
+	// Only the dot marks a failure: red error text under every failed call was too loud for the user.
+	if (body.trim() === '') return t.isError ? `${header}\n${paint(SGR.dim, `${RESULT_PREFIX}Error`)}` : header;
+	return `${header}\n${paint(SGR.dim, resultLines(body.split('\n')).join('\n'))}`;
 }
 
 export function formatError(message: string, scrub: Scrub): string {
