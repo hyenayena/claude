@@ -279,6 +279,7 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		if (cls === 'deny-outside') return policyDeny(toolName, POLICY_DENY.outside, summaryPath, b.id);
 		if (cls === 'deny-locked') return policyDeny(toolName, POLICY_DENY.locked, summaryPath, b.id);
 		if (cls === 'deny-readonly') return policyDeny(toolName, POLICY_DENY.readonly, summaryPath, b.id);
+		if (cls === 'deny-image') return policyDeny(toolName, POLICY_DENY.image, summaryPath, b.id);
 		if (cls === 'deny-guard') return policyDeny(toolName, POLICY_DENY.guard, summaryPath, b.id);
 		if (cls === 'deny-secret') return policyDeny(toolName, POLICY_DENY.secret, summaryPath, b.id);
 

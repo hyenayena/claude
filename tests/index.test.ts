@@ -11,11 +11,11 @@ const setup = async () => {
 	return {command: commands.find(c => c.name === 'claude')!, commands, printed, ctx};
 };
 
-test('plugin returns the claude command and the autostarted chat command', async () => {
+test('plugin returns the autostarted chat command, the claude command and fix', async () => {
 	const {commands} = await setup();
 	assert.deepEqual(
 		commands.map(c => c.name),
-		['chat', 'claude'],
+		['chat', 'claude', 'fix'],
 	);
 	assert.equal(commands[0]!.autostart, true);
 	assert.equal(commands[0]!.settings?.title, 'Claude');

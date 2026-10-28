@@ -28,6 +28,7 @@ const MAX_WIDTH = 100;
 const ART_GAP = ' ';
 const INFO_GAP = '   ';
 const MODULES_LABEL = 'modules  ';
+const DEV_LABEL = 'dev      ';
 
 export type BannerInfo = {
 	build?: BuildInfo;
@@ -78,6 +79,7 @@ function infoLines(info: BannerInfo, scrub: Scrub, width: number): {rows: Row[];
 	const head = `${version} · ${model}`;
 	const rows: Row[] =
 		stringCells(head) <= width ? [[{text: head, style: SGR.bold}]] : [[{text: version, style: SGR.bold}], [{text: model, style: SGR.bold}]];
+	if (info.build?.root?.mode === 'dev') rows.push([{text: DEV_LABEL, style: SGR.dim}, {text: scrub(info.build.root.path), style: SGR.yellow}]);
 	const modules = (info.build?.modules ?? []).map(m => `${scrub(m.name)} ${scrub(m.version)}`);
 	if (modules.length === 0) return {rows, complete: true};
 	const fits = (lines: string[]): boolean => lines.every(l => stringCells(l) <= width);

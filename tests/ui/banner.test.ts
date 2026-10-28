@@ -110,3 +110,12 @@ test('the module list is never dropped just to keep the info on the right', () =
 		}
 	}
 });
+
+test('a dev run shows its working copy under the head; an image run shows nothing', () => {
+	const dev = rowsOf(120, {build: {...build, root: {mode: 'dev', path: '/workplace/yena'}}});
+	assert.ok(has(dev, 'dev      /workplace/yena'));
+	const image = rowsOf(120, {build: {...build, root: {mode: 'image', path: '/app'}}});
+	assert.ok(!has(image, '/app') && !has(image, 'dev      '));
+	const scrubbed = plain(formatBanner({build: {...build, root: {mode: 'dev', path: '/x/y'}}, columns: 120}, s => s.replace(/x/g, '?')));
+	assert.ok(scrubbed.includes('/?/y'));
+});

@@ -40,7 +40,21 @@ export type ClaudePaths = {
 	projects?: ProjectAccessReader;
 	/** Where the account module keeps secrets, when it is installed (see withProjects). */
 	accountSecrets?: AccountSecretPaths;
+	/** projectDir is on a read-only filesystem: the image (see withProjects). */
+	imageReadOnly?: boolean;
+	/** The host's state dir, as the host publishes it in YENA_HOST_STATE. */
+	hostState?: string;
 };
+
+/** True only for a read-only filesystem (EROFS): permissions do not count, the container runs as root. */
+export function isReadOnlyDir(dir: string): boolean {
+	try {
+		accessSync(dir, constants.W_OK);
+		return false;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === 'EROFS';
+	}
+}
 
 export type RuntimeInfo = {
 	cli?: string;
@@ -75,10 +89,21 @@ export const MD_LINKED_DIRS = ['agents', 'skills', 'commands', 'output-styles'] 
  * The paths plus what the optional modules tell the policy (loaded at runtime): the project module's
  * access reader and the account module's secret dirs.
  */
-export async function withProjects(paths: ClaudePaths): Promise<ClaudePaths> {
+export async function withProjects(
+	paths: ClaudePaths,
+	env: NodeJS.ProcessEnv = process.env,
+	readOnly: (dir: string) => boolean = isReadOnlyDir,
+): Promise<ClaudePaths> {
 	const projects = await loadProjectAccess(paths.dataDir, paths.hubDir);
 	const accountSecrets = await loadAccountSecretPaths(paths.dataDir);
-	return {...paths, ...(projects && {projects}), ...(accountSecrets && {accountSecrets})};
+	const hostState = env.YENA_HOST_STATE;
+	return {
+		...paths,
+		...(projects && {projects}),
+		...(accountSecrets && {accountSecrets}),
+		...(readOnly(paths.projectDir) && {imageReadOnly: true}),
+		...(hostState && path.isAbsolute(hostState) && {hostState}),
+	};
 }
 
 const lexists = (p: string): boolean => {

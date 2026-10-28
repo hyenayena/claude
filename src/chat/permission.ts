@@ -116,6 +116,10 @@ export const POLICY_DENY = {
 	readonly:
 		'Writing there is not allowed: that project is read-only in this work session. Ask the user which projects the change touches, then run the console command "project isolate <name>" (it asks the user).',
 	projectState: "The project module's data (its state decides which projects are writable) is not to be touched.",
+	image:
+		'Writing there is not allowed: this is the read-only yena image, which changes only with ./yena build. Edit the working copy in /workplace/yena instead (ask the user, then "project isolate yena").',
+	hostState:
+		"yena's host state (the module overlay, the start mode, the logs) is not to be touched from the chat; use the console commands mod and mode.",
 	locked: "Writing there is not allowed (yena's Claude data dir). Instructions, agents and skills are edited in the md hub, at its own path.",
 	authFiles: 'Access to authentication files is blocked.',
 	procEnv: 'Reading process environments is blocked: they hold credentials.',

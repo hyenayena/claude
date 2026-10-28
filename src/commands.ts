@@ -1,7 +1,8 @@
 import {accessSync, constants} from 'node:fs';
 import {appendFile, lstat, mkdir, open, realpath, stat, writeFile} from 'node:fs/promises';
 import path, {join, resolve} from 'node:path';
-import type {BuildInfo, Command, CommandContext, Logger, SettingsTab, Subcommand} from '../../../src/api.js';
+import type {BuildInfo, Command, CommandContext, DevFailure, Logger, SettingsTab, Subcommand} from '../../../src/api.js';
+import {createFixCommand} from './fix.js';
 import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
 import {CONTINUE_TEXT, isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
 import {type AccountView, checkAccountName, chooseAccount, listAccounts, markLimited, removeAccount, setOrder, stashLogin, adoptLogin, useAccount} from './accounts.js';
@@ -60,6 +61,8 @@ const limitKind = (err: unknown): string | undefined =>
 
 export type ClaudeDeps = {
 	dataDir: string;
+	// The host's record of a failed dev start, for `fix`; absent in older hosts.
+	devFailure?: () => Promise<DevFailure | undefined>;
 	// Versions of the host and modules, shown at the top of a new chat.
 	build?: BuildInfo;
 	env: NodeJS.ProcessEnv;
@@ -1413,5 +1416,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	// `chat` first: its Claude tab leads the settings screen, before claude's Permissions tab.
-	return [chatCommand, claude];
+	const fix = createFixCommand({...(deps.devFailure && {devFailure: deps.devFailure}), start: (message, ctx) => startChat([message], ctx)});
+	return [chatCommand, claude, fix];
 };

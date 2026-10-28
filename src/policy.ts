@@ -1,4 +1,4 @@
-import {realpath} from 'node:fs/promises';
+import {realpath, stat} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import type {CanUseTool} from '@anthropic-ai/claude-agent-sdk';
@@ -69,6 +69,10 @@ export const PLANS_DIR = 'plans';
 export type Scope = {
 	roots: string[];
 	denied: string[];
+	/** The project dir when it is the read-only image (`/app`): writes there are refused with a pointer to the working copy. */
+	image?: string;
+	/** What a shell command must not name: the host's state dir (module overlay, start mode, failure record). */
+	hostStateDenied?: string[];
 	/** Roots where Claude may change anything without asking, in every mode (the md hub). */
 	free?: string[];
 	/** Files inside the free roots that still need the user's approval in every mode (the hub's CLAUDE.md, SOUL.md). */
@@ -105,6 +109,10 @@ export type PolicyPaths = {
 	accountSecrets?: AccountSecretPaths;
 	/** The ssh-agent socket from yena's environment (the chat's own env drops SSH_AUTH_SOCK). */
 	agentSocket?: string;
+	/** projectDir is on a read-only filesystem (the image). */
+	imageReadOnly?: boolean;
+	/** The host's state dir (`YENA_HOST_STATE`, published by the host): executable overlay and launcher state. */
+	hostState?: string;
 };
 
 // Instructions loaded into every session and agent: a change there is a persistent prompt injection, so it asks.
@@ -178,6 +186,8 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 		],
 		...(paths.accountSecrets && {shellDenied: accountShellDenied(paths.accountSecrets)}),
 		...(paths.agentSocket && {agentSocket: paths.agentSocket}),
+		...(paths.imageReadOnly && {image: paths.projectDir}),
+		...(paths.hostState && {hostStateDenied: [path.resolve(paths.hostState)]}),
 		...(paths.projects && {projects: () => paths.projects!.read()}),
 		...(paths.projects?.dataDir && {projectDataDir: paths.projects.dataDir}),
 	};
@@ -331,6 +341,13 @@ export async function isPathAllowed(p: string, scope: Scope): Promise<boolean> {
 	const extra = (await scope.projects?.())?.roots ?? [];
 	const roots = await realList([...scope.roots, ...extra]);
 	const denied = await realList(scope.denied);
+	// A project's .yena is a yena data dir (a checkout's own data, secrets included), whatever the project:
+	// the project roots (workplace, stages) hold projects one level down.
+	for (const r of await realList(extra)) {
+		if (!within(real, r)) continue;
+		const segs = path.relative(r, real).split(path.sep);
+		if (segs[0] === '.yena' || segs[1] === '.yena') return false;
+	}
 	const rootLen = Math.max(-1, ...roots.filter(r => within(real, r)).map(r => r.length));
 	if (rootLen < 0) {
 		return false;
@@ -432,7 +449,8 @@ export type EditTargetClass =
 	| 'auto-eligible'
 	| 'free'
 	| 'deny-locked'
-	| 'deny-readonly';
+	| 'deny-readonly'
+	| 'deny-image';
 
 const NO_AUTO_EXACT = new Set([
 	'Makefile',
@@ -455,6 +473,16 @@ function noAutoAccept(rel: string): boolean {
 		return segs[1] === 'claude' && segs[2] === 'src';
 	}
 	return false;
+}
+
+/** A folder holding yena's own repo: the host script, the host entry and the compose file. */
+export async function isYenaCheckout(dir: string): Promise<boolean> {
+	const has = (rel: string) =>
+		stat(path.join(dir, rel)).then(
+			s => s.isFile(),
+			() => false,
+		);
+	return (await has('yena')) && (await has('compose.yaml')) && (await has(path.join('src', 'cli.ts')));
 }
 
 /**
@@ -496,6 +524,10 @@ export async function classifyEditTarget(filePath: string, scope: Scope): Promis
 	const locked = [...(scope.locked ?? []).map(d => path.resolve(d)), ...(await realList(scope.locked ?? []))];
 	const except = await realList(scope.lockedExcept ?? []);
 	if (locked.some(d => within(lexical, d) || within(real, d)) && !except.some(d => within(real, d))) return 'deny-locked';
+	if (scope.image !== undefined) {
+		const image = await resolveReal(scope.image).catch(() => path.resolve(scope.image as string));
+		if (within(real, image) || within(lexical, path.resolve(scope.image))) return 'deny-image';
+	}
 	const access = await scope.projects?.();
 	if (access) {
 		const verdict = await projectTarget(real, access);
@@ -504,8 +536,11 @@ export async function classifyEditTarget(filePath: string, scope: Scope): Promis
 			if (!verdict.docs && isGuardedPath(real, verdict.dir)) return 'deny-guard';
 			if (!(await isPathAllowed(real, scope))) return 'deny-secret';
 			if (verdict.docs) return 'free';
-			const [first] = path.relative(verdict.dir, real).split(path.sep);
-			return first === undefined || first.startsWith('.') ? 'prompt-only' : 'auto-eligible';
+			const rel = path.relative(verdict.dir, real);
+			const [first] = rel.split(path.sep);
+			if (first === undefined || first.startsWith('.')) return 'prompt-only';
+			// In a yena checkout (the working copy, its stages) the files that run on the host keep asking (SEC-8).
+			return (await isYenaCheckout(verdict.dir)) && noAutoAccept(rel) ? 'prompt-only' : 'auto-eligible';
 		}
 	}
 	const roots = await realList(scope.roots);

@@ -75,6 +75,7 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 				if (cls === 'deny-outside') return denyWith(POLICY_DENY.outside);
 				if (cls === 'deny-locked') return denyWith(POLICY_DENY.locked);
 				if (cls === 'deny-readonly') return denyWith(POLICY_DENY.readonly);
+				if (cls === 'deny-image') return denyWith(POLICY_DENY.image);
 				// The Claude config is not Claude's to change, except the plan files plan mode writes.
 				if (config && plans) {
 					const target = await resolveReal(path.resolve(scope.roots[0] ?? '/', args.file_path)).catch(() => undefined);
@@ -109,6 +110,8 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 				if (AUTH_FILE.test(command)) return denyWith(POLICY_DENY.authFiles);
 				// Same heuristic for the account module's secrets and keys.
 				if (scope.shellDenied?.some(s => command.includes(s))) return denyWith(POLICY_DENY.accountSecrets);
+				// The host's state: the module overlay is code that runs at the next start, mode.json picks the root.
+				if (scope.hostStateDenied?.some(s => command.includes(s))) return denyWith(POLICY_DENY.hostState);
 				if (PROC_ENV.test(command)) return denyWith(POLICY_DENY.procEnv);
 				if (usesAgent(command, scope.agentSocket)) return denyWith(POLICY_DENY.sshAgent);
 				// And for the project module's data dir, whose state decides which projects are writable.
