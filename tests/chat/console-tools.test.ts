@@ -97,7 +97,7 @@ test('run_command passes the line, the caller and the signal', async () => {
 	const ac = new AbortController();
 	const r = await runTool.handler({command: '  mod list '}, {signal: ac.signal});
 	assert.equal(seen?.line, 'mod list');
-	assert.equal(seen?.caller, 'claude');
+	assert.equal(seen?.caller, 'yena');
 	assert.equal(seen?.signal, ac.signal);
 	assert.equal(r.content[0]!.text, 'done');
 	assert.equal(r.isError, undefined);
@@ -110,7 +110,7 @@ test('confirm maps allow to true and deny, cancel and a throwing request to fals
 		return ok('');
 	});
 	await runTool.handler({command: 'mod remove x'}, {});
-	const creq = {line: 'mod remove x', command: 'mod', caller: 'claude'};
+	const creq = {line: 'mod remove x', command: 'mod', caller: 'yena'};
 	assert.equal(await confirm!(creq), true);
 	const sent = prompter.requests[0] as unknown as {toolName: string; input: {command: string}; always: unknown};
 	assert.equal(sent.toolName, 'Command');
@@ -137,7 +137,7 @@ test('in auto mode confirm passes without a prompt unless the classifier flagged
 	);
 	prompter.mode = 'auto';
 	prompter.decision = {kind: 'deny'};
-	const creq = {line: 'mod remove x', command: 'mod', caller: 'claude'};
+	const creq = {line: 'mod remove x', command: 'mod', caller: 'yena'};
 
 	await runTool.handler({command: 'mod remove x'}, {});
 	assert.equal(await confirms[0]!(creq), true);
@@ -163,7 +163,7 @@ test('confirm still prompts outside auto mode', async () => {
 		});
 		prompter.mode = mode;
 		await runTool.handler({command: 'mod remove x'}, {});
-		assert.equal(await confirm!({line: 'mod remove x', command: 'mod', caller: 'claude'}), true);
+		assert.equal(await confirm!({line: 'mod remove x', command: 'mod', caller: 'yena'}), true);
 		assert.equal(prompter.requests.length, 1, mode);
 	}
 });
@@ -181,19 +181,19 @@ test('"always" saves the command with its subcommand and later lines with other 
 	});
 	await runTool.handler({command: 'dev check claude'}, {});
 	prompter.decision = {kind: 'allow', always: true};
-	assert.equal(await confirms[0]!({line: 'dev check claude', command: 'dev', subcommand: 'check', caller: 'claude'}), true);
+	assert.equal(await confirms[0]!({line: 'dev check claude', command: 'dev', subcommand: 'check', caller: 'yena'}), true);
 	const sent = prompter.requests[0] as unknown as {always: unknown};
 	assert.deepEqual(sent.always, {label: 'Yes, always for "dev check"'});
 	assert.deepEqual([...prompter.approved], ['cmd:dev check']);
 
 	prompter.decision = {kind: 'deny'};
 	await runTool.handler({command: 'dev check host'}, {});
-	assert.equal(await confirms[1]!({line: 'dev check host', command: 'dev', subcommand: 'check', caller: 'claude'}), true);
+	assert.equal(await confirms[1]!({line: 'dev check host', command: 'dev', subcommand: 'check', caller: 'yena'}), true);
 	assert.equal(prompter.requests.length, 1);
 	assert.deepEqual(prompter.audits.at(-1), {outcome: 'always-allowed', toolName: 'Command', summary: 'dev check host'});
 
 	await runTool.handler({command: 'dev test host'}, {});
-	assert.equal(await confirms[2]!({line: 'dev test host', command: 'dev', subcommand: 'test', caller: 'claude'}), false);
+	assert.equal(await confirms[2]!({line: 'dev test host', command: 'dev', subcommand: 'test', caller: 'yena'}), false);
 	assert.equal(prompter.requests.length, 2);
 });
 
@@ -213,14 +213,14 @@ test('a saved command also covers a line the auto classifier flagged', async () 
 	prompter.decision = {kind: 'deny'};
 	flags.flag('mod install x');
 	await runTool.handler({command: 'mod install x'}, {});
-	assert.equal(await confirm!({line: 'mod install x', command: 'mod', subcommand: 'install', caller: 'claude'}), true);
+	assert.equal(await confirm!({line: 'mod install x', command: 'mod', subcommand: 'install', caller: 'yena'}), true);
 	assert.equal(prompter.requests.length, 0);
 });
 
 test('claude auth and plan mode never offer or use "always"', async () => {
 	const cases: [ChatMode, CommandConfirmRequest][] = [
-		['default', {line: 'claude auth logout', command: 'claude', subcommand: 'auth', caller: 'claude'}],
-		['plan', {line: 'mod install x', command: 'mod', subcommand: 'install', caller: 'claude'}],
+		['default', {line: 'claude auth logout', command: 'claude', subcommand: 'auth', caller: 'yena'}],
+		['plan', {line: 'mod install x', command: 'mod', subcommand: 'install', caller: 'yena'}],
 	];
 	for (const [mode, creq] of cases) {
 		let confirm: CommandRunRequest['confirm'];

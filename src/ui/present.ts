@@ -328,7 +328,7 @@ export function formatAudit(entry: AuditEntry, scrub: Scrub, reveal: Scrub = scr
 const MODE_LINE: Record<ChatMode, string> = {
 	default: 'Mode: default (edits ask for approval)',
 	acceptEdits: 'Mode: auto-accept edits (this chat only)',
-	plan: 'Mode: plan (Claude researches and proposes a plan; nothing is changed until you approve it)',
+	plan: 'Mode: plan (yena researches and proposes a plan; nothing is changed until you approve it)',
 	auto: 'Mode: auto (a classifier approves or denies tool calls, asks when unsure; this chat only)',
 };
 

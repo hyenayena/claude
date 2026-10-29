@@ -162,7 +162,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): ReturnType<typeof 
 				release = deps.holdTurn?.();
 				const result = await bridge.run({
 					line,
-					caller: 'claude',
+					caller: 'yena',
 					confirm: confirmWith(signal, flagged),
 					timeoutMs: CONSOLE_TIMEOUT_MS,
 					...(signal && {signal}),

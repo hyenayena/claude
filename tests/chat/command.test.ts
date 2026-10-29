@@ -1004,7 +1004,7 @@ test('claude rename, export and copy work on the last chat', async () => {
 	const md = await readFile(exported, 'utf8');
 	assert.match(md, /^# My chat/);
 	assert.match(md, /## You\n\nfirst question/);
-	assert.match(md, /## Claude\n\nsecond answer/);
+	assert.match(md, /## yena\n\nsecond answer/);
 	await assert.rejects(async () => claude.run(['export', '/etc/x.md'], s.ctx), /inside the project or the claude data directory/);
 	const copied: string[] = [];
 	s.ctx.copyToClipboard = t => (copied.push(t), true);

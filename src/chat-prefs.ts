@@ -153,7 +153,7 @@ const EFFORT_OPTIONS: SettingOption[] = [
 	...EFFORTS.map(e => ({value: e, label: e[0]!.toUpperCase() + e.slice(1)})),
 ];
 const THINKING_OPTIONS: SettingOption[] = [
-	{value: '', label: 'Adaptive', description: 'Claude decides when to think'},
+	{value: '', label: 'Adaptive', description: 'yena decides when to think'},
 	{value: 'disabled', label: 'Off'},
 ];
 const FAST_OPTIONS: SettingOption[] = [
@@ -163,7 +163,7 @@ const FAST_OPTIONS: SettingOption[] = [
 const MODE_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Default', description: 'edits and commands ask first'},
 	{value: 'acceptEdits', label: 'Accept edits', description: 'project edits go through without asking'},
-	{value: 'plan', label: 'Plan', description: 'Claude researches and proposes a plan first, no edits'},
+	{value: 'plan', label: 'Plan', description: 'yena researches and proposes a plan first, no edits'},
 	{value: 'auto', label: 'Auto', description: 'a classifier approves or denies, asks when unsure'},
 ];
 const INPUT_OPTIONS: SettingOption[] = [
@@ -218,7 +218,7 @@ export function chatSettings(
 		{
 			key: 'chatModel',
 			label: 'Chat model',
-			description: 'The model Claude answers with',
+			description: 'The model yena answers with',
 			options: MODEL_OPTIONS,
 			parse: v => {
 				if (v !== '' && !isModelId(v)) throw new Error('Invalid model id');
@@ -229,7 +229,7 @@ export function chatSettings(
 		{
 			key: 'chatEffort',
 			label: 'Effort',
-			description: 'How much effort Claude puts into answers',
+			description: 'How much effort yena puts into answers',
 			options: EFFORT_OPTIONS,
 			parse: v => fromOptions<Effort>(EFFORT_OPTIONS, v),
 			show: s => s.chatEffort ?? '',
@@ -253,7 +253,7 @@ export function chatSettings(
 		{
 			key: 'chatOutputStyle',
 			label: 'Output style',
-			description: 'How Claude writes its answers',
+			description: 'How yena writes its answers',
 			options: STYLE_OPTIONS,
 			parse: v => fromOptions<OutputStyle>(STYLE_OPTIONS, v),
 			show: s => s.chatOutputStyle ?? '',

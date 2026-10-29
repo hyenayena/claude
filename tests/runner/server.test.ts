@@ -290,7 +290,7 @@ test('the console bridge answers "yena is closed" while detached', async () => {
 	r.session.send('x');
 	c.socket.destroy();
 	await tick(40);
-	const res = await r.io().commandBridge!.run({line: 'help', caller: 'claude'});
+	const res = await r.io().commandBridge!.run({line: 'help', caller: 'yena'});
 	assert.equal(res.status, 'off');
 	assert.equal(res.reason, 'yena is closed');
 	assert.deepEqual(r.io().commandBridge!.list(), []);
@@ -314,7 +314,7 @@ test('the bridge forwards a safe command as is and a confirm command once the ch
 		asked.push(req);
 		return true;
 	};
-	const safe = bridge.run({line: 'help', caller: 'claude', confirm, timeoutMs: 5000});
+	const safe = bridge.run({line: 'help', caller: 'yena', confirm, timeoutMs: 5000});
 	const run1 = (await c.waitFor('bridgeRun')) as Extract<RunnerFrame, {type: 'bridgeRun'}>;
 	assert.equal(run1.timeoutMs, 5000);
 	assert.equal(run1.approved, undefined);
@@ -323,9 +323,9 @@ test('the bridge forwards a safe command as is and a confirm command once the ch
 	assert.equal((await safe).output, 'done');
 
 	const before = c.frames.length;
-	const risky = bridge.run({line: 'exit', caller: 'claude', confirm});
+	const risky = bridge.run({line: 'exit', caller: 'yena', confirm});
 	const run2 = (await c.waitFor('bridgeRun', before)) as Extract<RunnerFrame, {type: 'bridgeRun'}>;
-	assert.deepEqual(asked, [{line: 'exit', command: 'exit', caller: 'claude'}]);
+	assert.deepEqual(asked, [{line: 'exit', command: 'exit', caller: 'yena'}]);
 	assert.equal(run2.approved, true);
 	assert.equal(c.frames.some(f => f.type === 'bridgeAsk'), false);
 	c.send({type: 'bridgeResult', id: run2.id, result: {status: 'ok', output: 'bye', truncated: false, ms: 1}});
@@ -338,14 +338,14 @@ test('a declined confirmation never reaches bridgeRun, a detach settles pending 
 	c.send({type: 'commands', list: CMDS});
 	await tick(30);
 	const bridge = r.io().commandBridge!;
-	const declined = bridge.run({line: 'exit', caller: 'claude', confirm: async () => false});
+	const declined = bridge.run({line: 'exit', caller: 'yena', confirm: async () => false});
 	assert.equal((await declined).status, 'declined');
-	const failed = bridge.run({line: 'exit', caller: 'claude', confirm: async () => Promise.reject(new Error('x'))});
+	const failed = bridge.run({line: 'exit', caller: 'yena', confirm: async () => Promise.reject(new Error('x'))});
 	assert.equal((await failed).status, 'declined');
 	assert.equal(c.frames.some(f => f.type === 'bridgeRun'), false);
 
 	r.session.send('busy');
-	const pending = bridge.run({line: 'help', caller: 'claude'});
+	const pending = bridge.run({line: 'help', caller: 'yena'});
 	await c.waitFor('bridgeRun');
 	c.socket.destroy();
 	const res = await pending;
@@ -356,7 +356,7 @@ test('an aborted bridge call sends bridgeAbort', async () => {
 	const r = await rig();
 	const c = await attach(r);
 	const ac = new AbortController();
-	const p = r.io().commandBridge!.run({line: 'help', caller: 'claude', signal: ac.signal});
+	const p = r.io().commandBridge!.run({line: 'help', caller: 'yena', signal: ac.signal});
 	const run = await c.waitFor('bridgeRun');
 	ac.abort();
 	assert.equal((await p).status, 'aborted');
@@ -608,7 +608,7 @@ test('a control connection cannot send, answer, confirm or close', async () => {
 	ctl.send({type: 'close'});
 	ctl.send({type: 'setMode', mode: 'auto'});
 	ctl.send({type: 'queue', lines: ['x']});
-	const pending = r.io().commandBridge!.run({line: 'exit', caller: 'claude', confirm: async () => false, timeoutMs: 100});
+	const pending = r.io().commandBridge!.run({line: 'exit', caller: 'yena', confirm: async () => false, timeoutMs: 100});
 	await tick(20);
 	ctl.send({type: 'bridgeConfirm', id: 'any', ok: true});
 	assert.equal((await pending).status, 'declined');
@@ -652,7 +652,7 @@ test('bridge answers for unknown ids are ignored', async () => {
 	c.send({type: 'bridgeResult', id: 'nope', result: {status: 'ok', output: 'x', truncated: false, ms: 1}});
 	c.send({type: 'bridgeConfirm', id: 'nope', ok: true});
 	await tick(30);
-	const res = r.io().commandBridge!.run({line: 'help', caller: 'claude', timeoutMs: 100});
+	const res = r.io().commandBridge!.run({line: 'help', caller: 'yena', timeoutMs: 100});
 	const run = await c.waitFor('bridgeRun');
 	c.send({type: 'bridgeResult', id: run.id, result: {status: 'ok', output: 'real', truncated: false, ms: 1}});
 	assert.equal((await res).output, 'real');
@@ -663,7 +663,7 @@ test('a confirm for a safe run id does not matter; only an ask in flight is reso
 	const c = await attach(r, {keep: true});
 	c.send({type: 'commands', list: CMDS});
 	await tick(30);
-	const res = r.io().commandBridge!.run({line: 'help', caller: 'claude', confirm: async () => true});
+	const res = r.io().commandBridge!.run({line: 'help', caller: 'yena', confirm: async () => true});
 	const run = await c.waitFor('bridgeRun');
 	assert.equal(c.frames.some(f => f.type === 'bridgeAsk'), false);
 	c.send({type: 'bridgeConfirm', id: run.id, ok: false});
@@ -676,7 +676,7 @@ test('an unknown command with a confirm callback is not pre-approved by the runn
 	const c = await attach(r, {keep: true});
 	c.send({type: 'commands', list: CMDS});
 	await tick(30);
-	const res = r.io().commandBridge!.run({line: 'mystery', caller: 'claude', confirm: async () => true, timeoutMs: 100});
+	const res = r.io().commandBridge!.run({line: 'mystery', caller: 'yena', confirm: async () => true, timeoutMs: 100});
 	const run = await c.waitFor('bridgeRun');
 	assert.equal(c.frames.some(f => f.type === 'bridgeAsk'), false, 'no ask is sent, so the client has no approval for this id');
 	c.send({type: 'bridgeResult', id: run.id, result: {status: 'unknown', output: '', truncated: false, ms: 1}});

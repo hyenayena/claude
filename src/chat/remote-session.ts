@@ -531,7 +531,7 @@ export class RemoteChatSession implements ChatHandle {
 		const ac = new AbortController();
 		this.runs.set(id, ac);
 		bridge
-			.run({line, caller: 'claude', confirm: req => (this.approvedRuns.has(id) ? Promise.resolve(true) : this.confirmLocal(req, ac.signal)), signal: ac.signal, timeoutMs})
+			.run({line, caller: 'yena', confirm: req => (this.approvedRuns.has(id) ? Promise.resolve(true) : this.confirmLocal(req, ac.signal)), signal: ac.signal, timeoutMs})
 			.then(
 				reply,
 				() => reply({status: 'error', output: 'The console command failed to run.', truncated: false, ms: 0}),

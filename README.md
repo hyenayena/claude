@@ -1,7 +1,9 @@
 # claude
 Claude Code integration for yena.
 
-It is a yena plugin (`runtime: "node"`, `entry: src/index.ts`, version 0.8.0): the host loads it at startup and adds the `claude` command. It requires core 0.4.0+ for the console tools and core 0.5.0+ for the live Bash panel (`MountOptions.activity`, kit `OutputTail`) and core 0.5.1+ for Markdown tables (kit `styledCells`; a named import, so the module fails to load on an older core) and core 0.6.0+ for the chat spinners (kit `SPINNERS.sparkle`, `SPINNERS.blink`; the chat view fails to render on an older core); older cores work without them (core is declared in `yena.json`, without a version): text helpers and UI pieces come from core's public kit, imported only through `src/kit.ts` and `src/ui/kit.ts`; the md hub's path and folders come from md's public entry through `src/deps/md.ts`; `ping` and `ask` never load React, Ink or the kit UI. `claude ask` and `claude chat` run the Claude Agent SDK in a read-only mode.
+It is a yena plugin (`runtime: "node"`, `entry: src/index.ts`, version 0.8.0): the host loads it at startup and adds the `claude` command. It requires core 0.4.
+
+Naming in the UI: the assistant is yena, Claude Code is the engine it runs on. Text where the assistant acts says yena ("yena is still answering", "Question from yena", plan mode, the chat settings, the `## yena` heading of `claude export`, the console caller `[yena]`, the settings tab `Chat`). Text about the tool itself keeps its name: Claude Code and its commands, the Agent SDK, Claude accounts and logins, `Claude request failed`, the `claude` command.0+ for the console tools and core 0.5.0+ for the live Bash panel (`MountOptions.activity`, kit `OutputTail`) and core 0.5.1+ for Markdown tables (kit `styledCells`; a named import, so the module fails to load on an older core) and core 0.6.0+ for the chat spinners (kit `SPINNERS.sparkle`, `SPINNERS.blink`; the chat view fails to render on an older core); older cores work without them (core is declared in `yena.json`, without a version): text helpers and UI pieces come from core's public kit, imported only through `src/kit.ts` and `src/ui/kit.ts`; the md hub's path and folders come from md's public entry through `src/deps/md.ts`; `ping` and `ask` never load React, Ink or the kit UI. `claude ask` and `claude chat` run the Claude Agent SDK in a read-only mode.
 
 ## Commands
 - `claude ping` — prints `pong`; confirms the module is loaded.
@@ -9,7 +11,7 @@ It is a yena plugin (`runtime: "node"`, `entry: src/index.ts`, version 0.8.0): t
 - `fix` — top-level command (`agent: deny`): after dev mode failed to start the working copy (the host's `PluginHost.devFailure` record), starts a new chat like `claude start` whose first message carries the recorded error as an indented data block and the repair steps (`project isolate`, a headless start of the working copy, `dev check`, fix, report); `src/fix.ts`. Without a record it prints `Nothing to fix: the last dev start succeeded`; on a host without the field it says to update the host. Like `claude start` it needs a chat view, so it works in the UI, not from `./yena fix`.
 - `claude ask [--new] <text>` — asks Claude, continuing the last session. `--new` starts a fresh session. Use `--` before text that starts with `--`. Text starting with `/` is rejected. Only one ask runs at a time; an ask is cancelled after 5 minutes. Output ends with a footer:
   ```
-  Asking Claude…
+  Asking yena…
   <answer>
   [session d503c507 · model claude-haiku-5-5 · subscription token]
   ```
@@ -119,7 +121,7 @@ claude chat --new
 Then: send `hello`; ask it to read a file; press Esc mid-answer and send another message; paste several lines; try `/foo` (refused), `/help`, `/new`, `/exit`; run `claude chat` again (resumes); resize the terminal during streaming; press Ctrl+C when idle, then Ctrl+C at the main prompt (yena exits). Check the cursor is visible and typing echoes afterwards, and that `ps` shows no leftover `claude` process.
 
 ## Background chat
-Setting `Keep working after exit` (Claude tab, `chatKeepRunning`, default Off). It is read when a chat opens; changing it switches the open chat at once.
+Setting `Keep working after exit` (Chat tab, `chatKeepRunning`, default Off). It is read when a chat opens; changing it switches the open chat at once.
 - On: a chat opens in a detached runner process (`src/runner/main.ts`, started by `src/runner/spawn.ts`); yena shows it through a `RemoteChatSession`. Leaving yena (exit, closed terminal) detaches: the runner finishes the current turn, sends the queued messages only after an ok turn and exits when done. The next `chat`/`resume` start reattaches to a running runner with a notice and replays the transcript plus new events (text streamed while you were away is not shown).
 - Off: the chat runs in the yena process, and leaving interrupts it as before.
 - After a non-ok turn with a queue the runner lingers up to 30 minutes (`LINGER_MS`, exit reason `abandoned`) so that you can reattach; a runner nobody attached to within 10 s of start also exits.

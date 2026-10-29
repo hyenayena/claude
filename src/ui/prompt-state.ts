@@ -492,7 +492,7 @@ export function toolBodyRows(req: ToolRequest, reveal: Reveal, width: number): B
 		const plan = typeof req.input['plan'] === 'string' ? req.input['plan'] : '';
 		if (plan) for (const line of reveal(plan).split('\n')) pushWrapped(rows, line, 'plain', width);
 		else rows.push({text: 'The plan is in the answer above.', tone: 'dim'});
-		rows.push({text: 'No: Claude keeps planning (say why in the reason).', tone: 'dim'});
+		rows.push({text: 'No: yena keeps planning (say why in the reason).', tone: 'dim'});
 	} else if (req.toolName === 'WebFetch') {
 		pushWrapped(rows, `URL: ${reveal(String(req.input['url'] ?? ''))}`, 'plain', width);
 		const ask = typeof req.input['prompt'] === 'string' ? req.input['prompt'] : '';
@@ -515,7 +515,7 @@ export function toolBodyRows(req: ToolRequest, reveal: Reveal, width: number): B
 		rows.push({text: `timeout: ${Math.round(timeout / 1000)}s`, tone: 'dim'});
 	}
 	if (req.description !== undefined && req.description !== '') {
-		pushWrapped(rows, `Claude's description (not verified): ${reveal(clip(req.description, DESCRIPTION_MAX))}`, 'dim', width, '  ');
+		pushWrapped(rows, `yena's description (not verified): ${reveal(clip(req.description, DESCRIPTION_MAX))}`, 'dim', width, '  ');
 	}
 	if (req.cliNote !== undefined && req.cliNote.text !== '') {
 		pushWrapped(rows, `Note: ${reveal(clip(req.cliNote.text, NOTE_MAX))}`, 'dim', width, '  ');

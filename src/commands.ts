@@ -435,7 +435,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const redact = makeRedactor(cred, allSecrets({env, dataDir}));
 		const scrub = makeScrub(redact);
 		await showNoticeOnce(cred, ctx);
-		ctx.print('Asking Claude…');
+		ctx.print('Asking yena…');
 		log.info('ask started', {fresh, promptChars: text.length});
 
 		let query: QueryFn;
@@ -789,7 +789,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const session = openSession && openSession.state !== 'closed' ? openSession : undefined;
 		const id = session?.sessionId;
 		if (!session || !id) throw new Error('There is no open chat to rewind yet.');
-		if (session.state === 'running') throw new Error('Claude is still answering; wait or press Esc in the chat.');
+		if (session.state === 'running') throw new Error('yena is still answering; wait or press Esc in the chat.');
 		const prompts = (await listPrompts(transcriptOf(id))).reverse();
 		const picked = await pick(ctx, {
 			title: 'Rewind to before…',
@@ -842,7 +842,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (messages.length === 0) throw new Error('The chat has no messages to export yet.');
 		const title = (await readSessionTitle(file)) ?? 'Chat';
 		const body = [`# ${title}`, '', `Session \`${id}\`, exported ${new Date().toISOString()}.`, ''];
-		for (const m of messages) body.push(m.role === 'user' ? '## You' : '## Claude', '', m.text, '');
+		for (const m of messages) body.push(m.role === 'user' ? '## You' : '## yena', '', m.text, '');
 		await mkdir(path.dirname(target), {recursive: true});
 		await writeFile(target, body.join('\n'), {flag: 'wx'}).catch((err: unknown) => {
 			if ((err as {code?: unknown}).code === 'EEXIST') throw new Error(`"${target}" already exists`);
@@ -1252,7 +1252,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	const OWN_SUBCOMMANDS: Subcommand[] = [
 		{name: 'ping', usage: 'claude ping', description: 'Check that the claude module is loaded', agent: 'confirm'},
-		{name: 'ask', usage: 'claude ask [--new] <text>', description: 'Ask Claude a question (continues the last session)', agent: 'deny'},
+		{name: 'ask', usage: 'claude ask [--new] <text>', description: 'Ask yena a question (continues the last session)', agent: 'deny'},
 		{name: 'chat', usage: 'claude chat [--new]', description: 'Open an interactive chat (continues the last session)', agent: 'deny'},
 		{name: 'new', usage: 'claude new [model]', description: 'Start a new chat', agent: 'deny'},
 		{name: 'start', usage: 'claude start <message…>', description: 'Start a new chat and send it the message (the open chat is saved)', agent: 'confirm'},
@@ -1262,7 +1262,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		{name: 'fork', usage: 'claude fork', description: 'Continue the current chat on a new branch', agent: 'deny'},
 		{name: 'rename', usage: 'claude rename <name>', description: 'Name the current chat', agent: 'confirm'},
 		{name: 'export', usage: 'claude export [file]', description: 'Save the current chat as Markdown', agent: 'confirm'},
-		{name: 'copy', usage: 'claude copy [N]', description: "Copy Claude's last (or Nth last) answer to the clipboard", agent: 'deny'},
+		{name: 'copy', usage: 'claude copy [N]', description: "Copy yena's last (or Nth last) answer to the clipboard", agent: 'deny'},
 		{name: 'memory', usage: 'claude memory [file]', description: 'Edit CLAUDE.md (or another md instruction file) in your editor', agent: 'deny'},
 		{name: 'code', usage: 'claude code [args…]', description: 'Run the Claude Code CLI in this terminal (bin/claude; arguments are passed on)', agent: 'deny'},
 		{name: 'tasks', usage: 'claude tasks', description: 'Background tasks and subagents of the chat; pick one to stop it', agent: 'safe'},
@@ -1304,7 +1304,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (known.length > 0 && !known.some(c => c.name === name)) {
 			throw new Error(`Unknown Claude Code command "${name}". Type "claude " in the console to see the list.`);
 		}
-		if (session.state === 'running') throw new Error('Claude is still answering; wait or press Esc in the chat.');
+		if (session.state === 'running') throw new Error('yena is still answering; wait or press Esc in the chat.');
 		session.send(`/${name}${args.length > 0 ? ` ${args.join(' ')}` : ''}`, {command: true});
 		log.info('claude code command sent', {command: name, args: args.length});
 		ctx.print(`Sent /${name} to the chat`);
@@ -1385,7 +1385,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		agent: 'deny',
 		autostart: true,
 		settings: {
-			title: 'Claude',
+			title: 'Chat',
 			settings: chatSettings(store, isModelId, log, {
 				applyMode: mode => {
 					if (openSession && openSession.state !== 'closed') openSession.setMode(mode);

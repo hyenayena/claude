@@ -206,7 +206,7 @@ test('bridgeRun runs the real bridge and answers; bridgeAbort aborts it', async 
 	const res = r.frames.find(f => f.type === 'bridgeResult') as Extract<ClientFrame, {type: 'bridgeResult'}>;
 	assert.equal(res.id, 'b1');
 	assert.equal(res.result.output, 'done');
-	assert.equal(requests[0]?.caller, 'claude');
+	assert.equal(requests[0]?.caller, 'yena');
 	r.send({type: 'bridgeRun', id: 'b2', line: 'hang', timeoutMs: 5000});
 	await r.until(() => requests.length === 2);
 	r.send({type: 'bridgeAbort', id: 'b2'});
@@ -219,13 +219,13 @@ test('bridgeAsk shows the local prompt and answers with bridgeConfirm; the pre-a
 	const bridge: CommandBridge = {
 		list: () => [],
 		run: async req => {
-			confirmed = await req.confirm?.({line: req.line, command: 'x', caller: 'claude'});
+			confirmed = await req.confirm?.({line: req.line, command: 'x', caller: 'yena'});
 			return {status: 'ok', output: '', truncated: false, ms: 1};
 		},
 	};
 	const s = await connect(r.socketPath, {commandBridge: bridge});
 	cleanup.push(() => s.close());
-	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'x go', command: 'x', caller: 'claude'}});
+	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'x go', command: 'x', caller: 'yena'}});
 	await r.until(() => s.pendingPermissions.length === 1);
 	const req = s.pendingPermissions[0]!;
 	assert.equal(req.kind === 'tool' && req.toolName, 'Command');
@@ -245,7 +245,7 @@ test('without a bridge a console run answers off; a declined ask answers false',
 	r.send({type: 'bridgeRun', id: 'b1', line: 'x', timeoutMs: 1000});
 	await r.until(() => r.frames.some(f => f.type === 'bridgeResult'));
 	assert.equal((r.frames.find(f => f.type === 'bridgeResult') as Extract<ClientFrame, {type: 'bridgeResult'}>).result.status, 'off');
-	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'x', command: 'x', caller: 'claude'}});
+	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'x', command: 'x', caller: 'yena'}});
 	await r.until(() => s.pendingPermissions.length === 1);
 	s.answerPermission(s.pendingPermissions[0]!.id, {kind: 'deny'});
 	await r.until(() => r.frames.some(f => f.type === 'bridgeConfirm'));

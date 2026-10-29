@@ -313,7 +313,7 @@ test('toolBodyRows reveals, wraps and labels content; clipBody marks cuts', () =
 	assert.match(text, /timeout: 5s/);
 	assert.match(text, /Note: needs care/);
 	assert.ok(rows.every(r => r.text.length <= 40 + 4));
-	assert.match(toolBodyRows(req, reveal, 100).map(r => r.text).join('\n'), /Claude's description \(not verified\): does things/);
+	assert.match(toolBodyRows(req, reveal, 100).map(r => r.text).join('\n'), /yena's description \(not verified\): does things/);
 	assert.equal(rows[0]?.tone, 'warn');
 
 	assert.equal(clipBody(rows, rows.length, false), rows);

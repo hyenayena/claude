@@ -68,7 +68,7 @@ test('ask joins args with spaces and keeps quotes literal', async () => {
 test('ask prints progress, answer and footer without secrets', async () => {
 	const {command, ctx, printed} = await setup();
 	await command.run(['ask', 'hi'], ctx);
-	assert.deepEqual(printed, ['Asking Claude…', 'answer', '[session 11111111 · model claude-test-1 · API key]']);
+	assert.deepEqual(printed, ['Asking yena…', 'answer', '[session 11111111 · model claude-test-1 · API key]']);
 	assert.ok(!printed.join('\n').includes(KEY));
 });
 

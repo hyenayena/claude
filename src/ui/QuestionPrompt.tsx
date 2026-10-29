@@ -50,7 +50,7 @@ export function QuestionPrompt(props: QuestionPromptProps) {
 		return (
 			<Box flexDirection="column">
 				<Text color="yellow" bold wrap="truncate">
-					Question from Claude (not a permission request)
+					Question from yena (not a permission request)
 				</Text>
 				{layout.budget >= 4 && (
 					<Text dimColor wrap="truncate">
@@ -68,7 +68,7 @@ export function QuestionPrompt(props: QuestionPromptProps) {
 	const count = request.questions.length;
 	const optionCount = questionRows(spec);
 	const title = count > 1 ? `Question ${state.index + 1} of ${count}` : 'Question';
-	const header = `${headerPrefix(props.position, props.total, 0)}Question from Claude (not a permission request) · ${title}`;
+	const header = `${headerPrefix(props.position, props.total, 0)}Question from yena (not a permission request) · ${title}`;
 	const width = layout.width;
 	const headerAll = wrapRows(header, width);
 	const headerRows = headerAll.length > 2 ? [headerAll[0] as string, truncateCells(headerAll.slice(1).join(' '), width)] : headerAll;

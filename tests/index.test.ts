@@ -18,7 +18,7 @@ test('plugin returns the autostarted chat command, the claude command and fix', 
 		['chat', 'claude', 'fix'],
 	);
 	assert.equal(commands[0]!.autostart, true);
-	assert.equal(commands[0]!.settings?.title, 'Claude');
+	assert.equal(commands[0]!.settings?.title, 'Chat');
 });
 
 test('ping prints pong', async () => {

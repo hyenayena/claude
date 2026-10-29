@@ -42,7 +42,7 @@ test('Bash prompt: fixed header, bordered content, five choices and a hint', asy
 	assert.match(frame, /│ ls -la/);
 	assert.match(frame, /│ cwd: \/app/);
 	assert.match(frame, /│ Notable: non-ASCII/);
-	assert.match(frame, /Claude's description \(not verified\): lists files/);
+	assert.match(frame, /yena's description \(not verified\): lists files/);
 	assert.match(frame, /❯ y {2}Allow once/);
 	assert.match(frame, /a {2}Always allow in this chat/);
 	assert.match(frame, /Always allow this exact command in this chat: ls -la/);
@@ -140,7 +140,7 @@ test('question prompt has its own header, options and Other row', async () => {
 			total={1}
 		/>,
 	);
-	assert.equal(frame.split('\n')[0], 'Question from Claude (not a permission request) · Question');
+	assert.equal(frame.split('\n')[0], 'Question from yena (not a permission request) · Question');
 	assert.match(frame, /│ \[Color\] Which color\?/);
 	assert.match(frame, /❯ 1 Red — warm/);
 	assert.match(frame, /3 Other \(type your own answer\)/);

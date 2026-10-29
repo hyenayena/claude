@@ -66,7 +66,7 @@ const okResult: CommandRunResult = {status: 'ok', output: '', truncated: false, 
 const confirming = (seen: Array<boolean | undefined>): CommandBridge => ({
 	list: () => [],
 	run: async (req: CommandRunRequest) => {
-		seen.push(await req.confirm?.({line: req.line, command: 'x', caller: 'claude'}));
+		seen.push(await req.confirm?.({line: req.line, command: 'x', caller: 'yena'}));
 		return okResult;
 	},
 });
@@ -106,7 +106,7 @@ test('a declined bridgeAsk gives no approval to a later run with the same id', a
 	const seen: Array<boolean | undefined> = [];
 	const s = await connect(r.socketPath, {commandBridge: confirming(seen)});
 	cleanup.push(() => s.close());
-	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'exit', command: 'exit', caller: 'claude'}});
+	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'exit', command: 'exit', caller: 'yena'}});
 	await r.until(() => s.pendingPermissions.length === 1);
 	s.answerPermission(s.pendingPermissions[0]!.id, {kind: 'deny'});
 	await r.until(() => r.frames.some(f => f.type === 'bridgeConfirm'));
@@ -120,7 +120,7 @@ test('an approval is spent by its run: the same id asked again needs a new promp
 	const seen: Array<boolean | undefined> = [];
 	const s = await connect(r.socketPath, {commandBridge: confirming(seen)});
 	cleanup.push(() => s.close());
-	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'exit', command: 'exit', caller: 'claude'}});
+	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'exit', command: 'exit', caller: 'yena'}});
 	await r.until(() => s.pendingPermissions.length === 1);
 	s.answerPermission(s.pendingPermissions[0]!.id, {kind: 'allow'});
 	r.send({type: 'bridgeRun', id: 'a1', line: 'exit', timeoutMs: 1000});
@@ -137,7 +137,7 @@ test('an approval for one id does not carry over to another id', async () => {
 	const seen: Array<boolean | undefined> = [];
 	const s = await connect(r.socketPath, {commandBridge: confirming(seen)});
 	cleanup.push(() => s.close());
-	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'exit', command: 'exit', caller: 'claude'}});
+	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'exit', command: 'exit', caller: 'yena'}});
 	await r.until(() => s.pendingPermissions.length === 1);
 	s.answerPermission(s.pendingPermissions[0]!.id, {kind: 'allow'});
 	await r.until(() => r.frames.some(f => f.type === 'bridgeConfirm'));
@@ -153,11 +153,11 @@ test('a console prompt that nobody answers is cancelled after the idle limit', a
 	cleanup.push(() => s.close());
 	const events: ChatEvent[] = [];
 	s.subscribe(e => events.push(e));
-	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'exit', command: 'exit', caller: 'claude'}});
+	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'exit', command: 'exit', caller: 'yena'}});
 	await r.until(() => s.pendingPermissions.length === 1);
 	mock.timers.enable({apis: ['setTimeout']});
 	// the timer was armed with real time before mocking, so a fresh prompt is needed under the mock clock
-	r.send({type: 'bridgeAsk', id: 'a2', request: {line: 'exit', command: 'exit', caller: 'claude'}});
+	r.send({type: 'bridgeAsk', id: 'a2', request: {line: 'exit', command: 'exit', caller: 'yena'}});
 	await immediately(() => s.pendingPermissions.length === 2);
 	mock.timers.tick(PERMISSION_IDLE_MS + 1);
 	assert.equal(s.pendingPermissions.length, 1, 'the prompt armed under the mock clock is gone');

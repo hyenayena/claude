@@ -596,7 +596,7 @@ test('the approval-fatigue counter appears from the fourth request of a turn', a
 
 test('question prompt: single choice, multi choice and Other', async () => {
 	const single = await withPrompt(questionReq());
-	assert.match(single.lastFrame(), /Question from Claude \(not a permission request\)/);
+	assert.match(single.lastFrame(), /Question from yena \(not a permission request\)/);
 	single.press('2');
 	await single.settle();
 	assert.deepEqual(single.controller.calls.answers.map(a => a.decision), [{kind: 'answers', answers: {'Which color?': 'Blue'}}]);
