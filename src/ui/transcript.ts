@@ -1,4 +1,4 @@
-import type {ChatEvent, TurnOutcome, UiEvent} from '../chat/events.js';
+import type {ChatEvent, ToolPatch, TurnOutcome, UiEvent} from '../chat/events.js';
 import type {RateLimitInfo} from '../chat/limits.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
 
@@ -77,7 +77,7 @@ export interface TranscriptState {
 // Raw (unscrubbed) items; present.ts turns them into display strings.
 export type Out =
 	| {kind: 'assistant'; text: string; interrupted: boolean}
-	| {kind: 'tool'; name: string; input: unknown; isError: boolean; text: string}
+	| {kind: 'tool'; name: string; input: unknown; isError: boolean; text: string; patch?: ToolPatch}
 	| {kind: 'error'; message: string}
 	| {kind: 'api-error'; code: string}
 	| {kind: 'outcome'; outcome: Exclude<TurnOutcome, 'ok'>; error?: string}
@@ -205,6 +205,7 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 						input: tool?.input,
 						isError: e.isError,
 						text: e.text,
+						...(e.patch !== undefined && {patch: e.patch}),
 					},
 				],
 			};

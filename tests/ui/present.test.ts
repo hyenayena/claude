@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {makeScrub} from '../../src/chat/scrub.js';
+import {stringCells} from '../../src/kit.js';
 import {
 	formatAssistantBlock,
 	formatError,
@@ -200,9 +201,9 @@ test('tool results: Edit and Write summarise, refusals show denied, Bash keeps t
 		strip(formatToolBlock({name, input, isError, text}, scrub));
 	assert.match(
 		block('Edit', {file_path: '/app/a.ts', old_string: 'a', new_string: 'b\nc'}, false, 'The file has been updated'),
-		/⎿ {2}Updated \/app\/a\.ts with 2 additions and 1 removal$/,
+		/⎿ {2}Updated \/app\/a\.ts with 2 additions and 1 removal$/m,
 	);
-	assert.match(block('Write', {file_path: '/app/b.ts', content: 'x\ny\n'}, false, 'File created'), /⎿ {2}Wrote 2 lines to \/app\/b\.ts$/);
+	assert.match(block('Write', {file_path: '/app/b.ts', content: 'x\ny\n'}, false, 'File created'), /⎿ {2}Wrote 2 lines to \/app\/b\.ts$/m);
 	assert.match(block('Read', {file_path: '/app/b.ts'}, false, '1\tx\n2\ty\n'), /⎿ {2}Read 2 lines$/);
 	assert.match(block('Glob', {pattern: '*.ts'}, false, '/a.ts\n/b.ts'), /⎿ {2}Found 2 files$/);
 	assert.match(block('Glob', {pattern: '*.ts'}, false, 'No files found'), /⎿ {2}Found 0 files$/);
@@ -307,4 +308,81 @@ test('assistantPrint lays the block out again for each width, with actions for t
 	}
 	assert.ok(strip((render(120) as {text: string}).text).split('\n')[0]!.length > 40);
 	assert.deepEqual(assistantPrint('plain', id).options.render!(50), {text: '● plain'});
+});
+
+test('an Edit shows its summary, then the whole diff in red and green with line numbers', () => {
+	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
+	const patch = {hunks: [{oldStart: 9, newStart: 9, lines: [' keep', '-old', '+new1', '+new2']}]};
+	const raw = formatToolBlock({name: 'Edit', input: {file_path: '/a.ts'}, isError: false, text: 'ok', patch}, scrub);
+	assert.deepEqual(strip(raw).split('\n'), [
+		'● Edit(/a.ts)',
+		'  ⎿  Updated /a.ts with 2 additions and 1 removal',
+		'      9   keep',
+		'     10 - old',
+		'     10 + new1',
+		'     11 + new2',
+	]);
+	assert.ok(raw.includes(`${SGR.red}10 - old${SGR.reset}`));
+	assert.ok(raw.includes(`${SGR.green}10 + new1${SGR.reset}`));
+
+	const big = {hunks: [{oldStart: 1, newStart: 1, lines: Array.from({length: 50}, (_, i) => `+l${i}`)}]};
+	const rows = strip(formatToolBlock({name: 'Edit', input: {file_path: '/a.ts'}, isError: false, text: 'ok', patch: big}, scrub, 80)).split('\n');
+	assert.equal(rows.length, 2 + 50);
+	assert.ok(!rows.some(r => r.includes('ctrl+o')));
+
+	const fallback = strip(formatToolBlock({name: 'Edit', input: {file_path: '/a.ts', old_string: 'a', new_string: 'b'}, isError: false, text: 'ok'}, scrub));
+	assert.deepEqual(fallback.split('\n').slice(2), ['     - a', '     + b']);
+});
+
+test('a Write shows the head of a new file, an overwrite as a diff', () => {
+	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
+	const content = Array.from({length: 13}, (_, i) => `l${i + 1}`).join('\n');
+	const created = strip(formatToolBlock({name: 'Write', input: {file_path: '/n.ts', content}, isError: false, text: 'ok', patch: {hunks: [], created: true}}, scrub)).split('\n');
+	assert.equal(created[1], '  ⎿  Wrote 13 lines to /n.ts');
+	assert.equal(created[2], '      1 + l1');
+	assert.equal(created.length, 2 + 10 + 1);
+	assert.equal(created.at(-1), '     … +3 lines (ctrl+o to expand)');
+
+	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: ['-a', '-b', '+c']}]};
+	const over = strip(formatToolBlock({name: 'Write', input: {file_path: '/n.ts', content: 'c'}, isError: false, text: 'ok', patch}, scrub)).split('\n');
+	assert.deepEqual(over.slice(1), ['  ⎿  Updated /n.ts with 1 addition and 2 removals', '     1 - a', '     2 - b', '     1 + c']);
+
+	const same = strip(formatToolBlock({name: 'Write', input: {file_path: '/n.ts', content: 'c'}, isError: false, text: 'ok', patch: {hunks: []}}, scrub));
+	assert.deepEqual(same.split('\n').slice(1), ['  ⎿  Wrote 1 line to /n.ts']);
+});
+
+test('diff rows wrap inside the width, and their lines are scrubbed', () => {
+	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
+	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: [`-${'x'.repeat(80)}`, `+${dirty}`, ` ${'界'.repeat(30)}`]}]};
+	const width = 30;
+	const raw = formatToolBlock({name: 'Edit', input: {file_path: `/${'p'.repeat(60)}`}, isError: false, text: 'ok', patch}, scrub, width);
+	assert.ok(onlyConstantEscapes(raw), JSON.stringify(raw));
+	assert.ok(!raw.includes(SECRET));
+	const rows = strip(raw).split('\n');
+	for (const r of rows) assert.ok(stringCells(r) <= width, JSON.stringify(r));
+	assert.ok(rows.some(r => r.startsWith('     1 - xxx')));
+	assert.ok(rows.some(r => r.startsWith('         xxx')));
+
+	const content = Array.from({length: 12}, () => 'y'.repeat(70)).join('\n');
+	const head = strip(formatToolBlock({name: 'Write', input: {file_path: '/n', content}, isError: false, text: 'ok'}, scrub, width)).split('\n');
+	for (const r of head) assert.ok(stringCells(r) <= width, JSON.stringify(r));
+	assert.match(head.at(-1) ?? '', /^ {5}… \+2 lines/);
+});
+
+test('errors and refusals of Edit and Write keep the old result, without a diff', () => {
+	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
+	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: ['-a', '+b']}]};
+	for (const name of ['Edit', 'Write']) {
+		const out = strip(formatToolBlock({name, input: {file_path: '/a.ts', content: 'b'}, isError: true, text: 'boom', patch}, scrub));
+		assert.ok(!out.includes('+ b') && !out.includes('- a'), out);
+		assert.ok(out.split('\n').length <= 3, out);
+	}
+});
+
+test('secrets and escapes in patch lines never reach the output; a CRLF and a missing width are fine', () => {
+	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: [`-${dirty}`, `+line\r`, `\\ No newline at end of file`]}]};
+	const raw = formatToolBlock({name: 'Edit', input: {file_path: '/a.ts'}, isError: false, text: 'ok', patch}, scrub);
+	assert.ok(onlyConstantEscapes(raw), JSON.stringify(raw));
+	assert.ok(!raw.includes(SECRET) && !raw.includes('\r'));
+	assert.ok(raw.includes('[redacted]'));
 });

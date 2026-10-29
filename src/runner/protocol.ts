@@ -1,7 +1,7 @@
 import type {AgentPolicy, CommandConfirmRequest, CommandInfo, CommandRunResult, CommandRunStatus} from '../../../../src/api.js';
 import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import type {SlashCommandInfo, TaskInfo} from '../chat/chat-session.js';
-import type {ChatEvent, ChatState, TurnOutcome, UiEvent} from '../chat/events.js';
+import type {ChatEvent, ChatState, ToolPatch, TurnOutcome, UiEvent} from '../chat/events.js';
 import type {LimitType, RateLimitInfo} from '../chat/limits.js';
 import type {
 	AuditEntry,
@@ -312,6 +312,23 @@ const readPreview = (v: unknown): Preview => {
 	};
 };
 
+const readToolPatch = (v: unknown): ToolPatch => {
+	const o = rec(v, 'patch');
+	let lines = 0;
+	const hunks = arr(o.hunks, 'hunks', 200).map(h => {
+		const ho = rec(h, 'hunk');
+		const oldStart = int(ho.oldStart, 'oldStart');
+		const newStart = int(ho.newStart, 'newStart');
+		if (oldStart < 0 || newStart < 0) fail('hunk start must not be negative');
+		const hunkLines = arr(ho.lines, 'lines', 2000).map(l => str(l, 'line', 20_000));
+		lines += hunkLines.length;
+		if (lines > 2000) fail('patch has too many lines');
+		return {oldStart, newStart, lines: hunkLines};
+	});
+	if (has(o, 'created') && o.created !== true) fail('created must be true');
+	return {hunks, ...(o.created === true && {created: true as const})};
+};
+
 const readPermission = (v: unknown): PermissionRequest => {
 	const o = rec(v, 'permission');
 	if (o.kind === 'question') {
@@ -415,6 +432,7 @@ const readUiEvent = (v: unknown): UiEvent => {
 				toolUseId: str(o.toolUseId, 'toolUseId', 256),
 				isError: bool(o.isError, 'isError'),
 				text: str(o.text, 'text'),
+				...(has(o, 'patch') && {patch: readToolPatch(o.patch)}),
 			};
 		case 'tool-progress':
 			return {

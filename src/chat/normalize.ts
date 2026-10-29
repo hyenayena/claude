@@ -1,10 +1,14 @@
 import type {SDKMessage} from '@anthropic-ai/claude-agent-sdk';
-import type {UiEvent} from './events.js';
+import type {ToolPatch, UiEvent} from './events.js';
 import {type Clock, parseRateLimit} from './limits.js';
 
 type Loose = Record<string, unknown>;
 
 const TOOL_RESULT_CAP = 64 * 1024;
+const PATCH_HUNKS_CAP = 200;
+const PATCH_LINES_CAP = 2000;
+const PATCH_TEXT_CAP = 256 * 1024;
+const PATCH_LINE_CAP = 20_000;
 const ERROR_DETAIL_CAP = 300;
 
 const isRecord = (v: unknown): v is Loose => typeof v === 'object' && v !== null;
@@ -169,13 +173,50 @@ const agentActivity = (parent: string, msg: Loose): UiEvent[] => {
 	return [{kind: 'agent-activity', toolUseId: parent, name: str(last['name']) ?? '', input: last['input']}];
 };
 
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+
+// Copies only the hunks of an Edit/Write result; any shape or size problem drops the whole patch,
+// since an oversized runner frame would be dropped together with the tool result.
+const toolPatch = (v: unknown): ToolPatch | undefined => {
+	if (!isRecord(v) || v['staged'] === true) return undefined;
+	const created = v['type'] === 'create';
+	const raw = v['structuredPatch'];
+	if (!Array.isArray(raw)) return created ? {hunks: [], created: true} : undefined;
+	if (raw.length > PATCH_HUNKS_CAP) return undefined;
+	const hunks: ToolPatch['hunks'] = [];
+	let lines = 0;
+	let bytes = 0;
+	for (const h of raw) {
+		if (!isRecord(h) || !isCount(h['oldStart']) || !isCount(h['newStart']) || !Array.isArray(h['lines'])) return undefined;
+		const hunkLines: string[] = [];
+		for (const l of h['lines']) {
+			if (typeof l !== 'string' || l.length > PATCH_LINE_CAP) return undefined;
+			// Counted as encoded in a runner frame, where escapes and UTF-8 make a line longer.
+			bytes += Buffer.byteLength(JSON.stringify(l));
+			hunkLines.push(l);
+		}
+		lines += hunkLines.length;
+		if (lines > PATCH_LINES_CAP || bytes > PATCH_TEXT_CAP) return undefined;
+		hunks.push({oldStart: h['oldStart'], newStart: h['newStart'], lines: hunkLines});
+	}
+	return {hunks, ...(created && {created: true as const})};
+};
+
 const fromUser = (msg: Loose): UiEvent[] => {
 	const out: UiEvent[] = [];
-	for (const b of blocks(msg)) {
-		if (b['type'] !== 'tool_result') continue;
+	const results = blocks(msg).filter(b => b['type'] === 'tool_result');
+	// tool_use_result belongs to the message, so it is only unambiguous with a single result block.
+	const patch = results.length === 1 ? toolPatch(msg['tool_use_result']) : undefined;
+	for (const b of results) {
 		const toolUseId = str(b['tool_use_id']);
 		if (!toolUseId) continue;
-		out.push({kind: 'tool-result', toolUseId, isError: b['is_error'] === true, text: resultText(b['content'])});
+		out.push({
+			kind: 'tool-result',
+			toolUseId,
+			isError: b['is_error'] === true,
+			text: resultText(b['content']),
+			...(patch !== undefined && {patch}),
+		});
 	}
 	return out;
 };

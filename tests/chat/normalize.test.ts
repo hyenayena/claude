@@ -151,3 +151,64 @@ test('tool input streaming', () => {
 	assert.deepEqual(ev({type: 'content_block_delta', delta: {type: 'input_json_delta', partial_json: '{"a":'}}), [{kind: 'tool-input-delta', chars: 5}]);
 	assert.deepEqual(ev({type: 'content_block_delta', delta: {type: 'input_json_delta', partial_json: ''}}), []);
 });
+
+test('user tool_result carries a checked copy of the structured patch', () => {
+	const user = (tool_use_result: unknown, count = 1) =>
+		n({
+			type: 'user',
+			parent_tool_use_id: null,
+			message: {role: 'user', content: Array.from({length: count}, (_, i) => ({type: 'tool_result', tool_use_id: `t${i}`, content: 'ok'}))},
+			tool_use_result,
+		});
+	const hunk = {oldStart: 3, oldLines: 1, newStart: 3, newLines: 2, lines: [' a', '-b', '+c', '+d']};
+	const [ev] = user({filePath: '/a', originalFile: 'SECRET', oldString: 'b', newString: 'c\nd', structuredPatch: [hunk], gitDiff: 'x'});
+	assert.deepEqual(ev, {
+		kind: 'tool-result',
+		toolUseId: 't0',
+		isError: false,
+		text: 'ok',
+		patch: {hunks: [{oldStart: 3, newStart: 3, lines: [' a', '-b', '+c', '+d']}]},
+	});
+	assert.ok(!JSON.stringify(ev).includes('SECRET'));
+
+	const [created] = user({type: 'create', filePath: '/n', content: 'SECRET', structuredPatch: []});
+	assert.deepEqual(created && created.kind === 'tool-result' && created.patch, {hunks: [], created: true});
+	assert.ok(!JSON.stringify(created).includes('SECRET'));
+
+	const none = (v: unknown, count = 1) => user(v, count).every(e => e.kind === 'tool-result' && e.patch === undefined);
+	assert.ok(none({structuredPatch: [hunk]}, 2));
+	assert.ok(none({structuredPatch: [hunk], staged: true}));
+	assert.ok(none({structuredPatch: 'x'}));
+	assert.ok(none('x'));
+	assert.ok(none({structuredPatch: [{...hunk, oldStart: -1}]}));
+	assert.ok(none({structuredPatch: [{...hunk, newStart: 1.5}]}));
+	assert.ok(none({structuredPatch: [{...hunk, lines: [' a', 3]}]}));
+	assert.ok(none({structuredPatch: Array.from({length: 201}, () => ({oldStart: 1, newStart: 1, lines: []}))}));
+	assert.ok(none({structuredPatch: [{oldStart: 1, newStart: 1, lines: Array.from({length: 2001}, () => '+x')}]}));
+	assert.ok(none({structuredPatch: [{oldStart: 1, newStart: 1, lines: ['+' + 'x'.repeat(20_000)]}]}));
+	assert.ok(none({structuredPatch: [{oldStart: 1, newStart: 1, lines: Array.from({length: 20}, () => '+' + 'x'.repeat(15_000))}]}));
+});
+
+test('a patch at the engine caps with escape-heavy text still fits in a runner frame', async () => {
+	const {encodeFrame, createDecoder, MAX_FRAME_BYTES} = await import('../../src/runner/protocol.js');
+	// About 120 encoded bytes per line: 2000 lines stay just under the engine's 256 KiB, so every body is accepted.
+	for (const body of ['\u0001'.repeat(20), '界'.repeat(40), '"\\'.repeat(30), 'x'.repeat(120)]) {
+		const lines = Array.from({length: 2000}, () => `+${body}`);
+		const events = n({
+			type: 'user',
+			message: {content: [{type: 'tool_result', tool_use_id: 't', content: 'ok'}]},
+			tool_use_result: {structuredPatch: [{oldStart: 1, newStart: 1, lines}]},
+		});
+		const ev = events[0] as {patch?: unknown};
+		assert.notEqual(ev?.patch, undefined, 'the engine accepts a patch at its caps');
+		const frame = {v: 1, type: 'event', event: {type: 'ui', event: ev}} as never;
+		const encoded = encodeFrame(frame);
+		assert.ok(Buffer.byteLength(encoded) <= MAX_FRAME_BYTES);
+		assert.equal((createDecoder('toClient').push(encoded)).length, 1);
+	}
+});
+
+test('an Edit result without a patch field yields no patch', () => {
+	const events = n({type: 'user', message: {content: [{type: 'tool_result', tool_use_id: 't', content: 'ok'}]}});
+	assert.ok(events.every(e => !('patch' in e)));
+});

@@ -8,7 +8,10 @@ import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
 import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
 import {sliceCells, stringCells, truncateCells, wrapRows} from '../kit.js';
 import type {PrintAction, PrintOptions} from '../../../../src/api.js';
+import type {ToolPatch} from '../chat/events.js';
+import type {PreviewRow} from '../chat/permission.js';
 import {openFenceLine, renderMarkdownBlocks} from './markdown.js';
+import {WRITE_HEAD_LINES, editRows, writeRows} from './tool-diff.js';
 import {LIVE, parseTodos, type Out, type Phase, type RunningTool, type StatusLine, type Todo} from './transcript.js';
 
 export type Scrub = (s: string) => string;
@@ -181,7 +184,7 @@ export function styledToolHeader(name: string, input: unknown, scrub: Scrub): st
 	return `${SGR.bold}${scrub(displayName(name))}${SGR.boldOff}${args ? `(${args})` : ''}`;
 }
 
-type ToolResult = {name: string; input: unknown; isError: boolean; text: string};
+type ToolResult = {name: string; input: unknown; isError: boolean; text: string; patch?: ToolPatch};
 type ResultSummary = (t: ToolResult, scrub: Scrub) => string | undefined;
 
 const REFUSAL_MARKERS = ["The user doesn't want to proceed", DENY_MESSAGE.slice(0, DENY_MESSAGE.indexOf('.'))];
@@ -210,13 +213,15 @@ const RESULT_REGISTRY: Record<string, ResultSummary> = {
 	Edit: (t, scrub) => {
 		const path = pathOf(t, scrub);
 		if (t.isError || path === undefined) return undefined;
-		const added = countLines(field('new_string')(t.input));
-		const removed = countLines(field('old_string')(t.input));
+		const {added, removed} = editRows(t.input, t.patch);
 		return `Updated ${path} with ${plural(added, 'addition')} and ${plural(removed, 'removal')}`;
 	},
 	Write: (t, scrub) => {
 		const path = pathOf(t, scrub);
-		return t.isError || path === undefined ? undefined : `Wrote ${plural(countLines(field('content')(t.input)), 'line')} to ${path}`;
+		if (t.isError || path === undefined) return undefined;
+		const w = writeRows(t.input, t.patch);
+		if (w.mode === 'diff') return `Updated ${path} with ${plural(w.added, 'addition')} and ${plural(w.removed, 'removal')}`;
+		return `Wrote ${plural(countLines(field('content')(t.input)), 'line')} to ${path}`;
 	},
 	Read: t => (t.isError ? undefined : `Read ${plural(countLines(t.text.replace(/\n+$/, '')), 'line')}`),
 	Glob: t => {
@@ -266,9 +271,50 @@ export const resultLines = (lines: string[]): string[] => lines.map((l, i) => `$
 // Screen rows of a finished tool call's output in the chat, the "… +N lines" row included; Ctrl+O has the rest.
 export const TOOL_RESULT_ROWS = 5;
 
+const DIFF_TONE: Record<PreviewRow['kind'], string> = {del: SGR.red, add: SGR.green, ctx: SGR.dim, gap: SGR.dim, meta: SGR.dim};
+
+/** Diff rows behind a line-number gutter, wrapped to `inner` cells (continuations under a blank gutter), each painted whole. */
+function diffRowLines(rows: PreviewRow[], scrub: Scrub, inner?: number): string[] {
+	const wrap = (text: string, max: number): string[] => (inner === undefined ? [text] : wrapRows(text, Math.max(1, max), {mode: 'char'}));
+	let digits = 0;
+	for (const r of rows) if (r.no !== undefined) digits = Math.max(digits, String(r.no).length);
+	const out: string[] = [];
+	for (const row of rows) {
+		const text = scrub(row.text).split('\n').join(' ');
+		if (row.kind === 'gap' || row.kind === 'meta') {
+			for (const part of wrap(row.kind === 'gap' && text === '' ? '…' : text, inner ?? 0)) out.push(paint(SGR.dim, part));
+			continue;
+		}
+		const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' ';
+		const no = digits === 0 ? '' : `${(row.no === undefined ? '' : String(row.no)).padStart(digits)} `;
+		const gutter = `${no}${sign} `;
+		wrap(text, (inner ?? 0) - gutter.length).forEach((part, i) =>
+			out.push(paint(DIFF_TONE[row.kind], `${i === 0 ? gutter : ' '.repeat(gutter.length)}${part}`)),
+		);
+	}
+	return out;
+}
+
+/** An Edit or Write: the summary, then its diff (or a new file's head) in full; only the head is capped. */
+function fileChangeRows(t: ToolResult, summary: string, scrub: Scrub, inner?: number): string[] {
+	const head = summary.split('\n').flatMap(l => (inner === undefined ? [l] : wrapRows(l, inner, {mode: 'char'})));
+	let rows: string[];
+	if (t.name === 'Edit') rows = diffRowLines(editRows(t.input, t.patch).rows, scrub, inner);
+	else {
+		const w = writeRows(t.input, t.patch);
+		rows = diffRowLines(w.rows, scrub, inner);
+		if (w.mode === 'head' && w.total > WRITE_HEAD_LINES) {
+			const more = `… +${w.total - WRITE_HEAD_LINES} lines (ctrl+o to expand)`;
+			rows.push(paint(SGR.dim, inner === undefined ? more : truncateCells(more, inner)));
+		}
+	}
+	return [...resultLines(head).map(r => paint(SGR.dim, r)), ...rows.map(r => `${RESULT_INDENT}${r}`)];
+}
+
 /**
  * A finished tool call: the call on one row, cut with "…", and its output in at most `TOOL_RESULT_ROWS`
- * rows as the chat shows them (wrapped to `width`). Without a width, source lines count as rows.
+ * rows as the chat shows them (wrapped to `width`); an Edit or Write shows its whole diff instead.
+ * Without a width, source lines count as rows.
  */
 export function formatToolBlock(t: ToolResult, scrub: Scrub, width?: number): string {
 	const dot = `${t.isError ? SGR.red : SGR.green}●${SGR.reset}`;
@@ -279,11 +325,15 @@ export function formatToolBlock(t: ToolResult, scrub: Scrub, width?: number): st
 		args = truncateCells(args, Math.max(1, width - 2 - stringCells(name) - 2));
 	}
 	const header = `${dot} ${SGR.bold}${name}${SGR.boldOff}${args ? `(${args})` : ''}${SGR.reset}`;
-	const custom = refusalSummary(t) ?? RESULT_REGISTRY[t.name]?.(t, scrub);
+	const refusal = refusalSummary(t);
+	const custom = refusal ?? RESULT_REGISTRY[t.name]?.(t, scrub);
+	const inner = width === undefined ? undefined : Math.max(1, width - RESULT_PREFIX.length);
+	if (refusal === undefined && custom !== undefined && (t.name === 'Edit' || t.name === 'Write')) {
+		return `${header}\n${fileChangeRows(t, custom, scrub, inner).join('\n')}`;
+	}
 	const body = custom ?? scrub(t.text.slice(0, RESULT_INPUT_CAP)).replace(/\n+$/, '');
 	// Only the dot marks a failure: red error text under every failed call was too loud for the user.
 	if (body.trim() === '') return t.isError ? `${header}\n${paint(SGR.dim, `${RESULT_PREFIX}Error`)}` : header;
-	const inner = width === undefined ? undefined : Math.max(1, width - RESULT_PREFIX.length);
 	const lines = body.split('\n');
 	const rows = inner === undefined ? lines : lines.flatMap(l => wrapRows(l, inner, {mode: 'char'}));
 	let shown = rows;

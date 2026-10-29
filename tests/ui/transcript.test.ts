@@ -187,3 +187,12 @@ test('the status line follows thinking estimates and tool input until the call a
 	assert.equal(called.state.status, null, 'a stray delta after the call changes nothing');
 	assert.deepEqual(run([ui({kind: 'cli-state', state: 'running'})]).out, []);
 });
+
+test('a tool result passes its patch on to the printed tool', () => {
+	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: ['-a', '+b']}]};
+	const {out} = run([
+		ui({kind: 'tool-use', toolUseId: 't1', name: 'Edit', input: {file_path: '/a'}}),
+		ui({kind: 'tool-result', toolUseId: 't1', isError: false, text: 'ok', patch}),
+	]);
+	assert.deepEqual(out, [{kind: 'tool', name: 'Edit', input: {file_path: '/a'}, isError: false, text: 'ok', patch}]);
+});

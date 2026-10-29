@@ -1,6 +1,9 @@
 import type {RateLimitInfo} from './limits.js';
 import type {AuditEntry, ChatMode, PermissionDecision, PermissionRequest} from './permission.js';
 
+// The change an Edit or Write made, from Claude Code's structured patch; `created` marks a new file.
+export type ToolPatch = {hunks: {oldStart: number; newStart: number; lines: string[]}[]; created?: true};
+
 export type UiEvent =
 	| {kind: 'session'; sessionId: string; model?: string; apiKeySource?: string; slashCommands?: string[]}
 	| {kind: 'text-delta'; text: string}
@@ -14,7 +17,7 @@ export type UiEvent =
 	// Claude started writing the input of a tool call (shown until the call itself arrives).
 	| {kind: 'tool-input'; name: string}
 	| {kind: 'tool-input-delta'; chars: number}
-	| {kind: 'tool-result'; toolUseId: string; isError: boolean; text: string}
+	| {kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; patch?: ToolPatch}
 	| {kind: 'tool-progress'; toolUseId: string; name: string; elapsedSeconds: number}
 	// What a subagent started by tool `toolUseId` is doing now (its latest tool call).
 	| {kind: 'agent-activity'; toolUseId: string; name: string; input: unknown}

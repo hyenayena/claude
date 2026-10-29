@@ -125,3 +125,25 @@ test('live status events cross the protocol; a bad state does not', () => {
 	const broken = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'cli-state', state: 'asleep'}}};
 	assert.throws(() => createDecoder('toClient').push(line(broken)), ProtocolError);
 });
+
+test('a tool-result with a patch round-trips; a bad or oversized patch is rejected', () => {
+	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: ['-a', '+b']}], created: true as const};
+	const frame: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'tool-result', toolUseId: 't', isError: false, text: 'ok', patch}}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(frame)), [frame]);
+	const older: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'tool-result', toolUseId: 't', isError: false, text: 'ok'}}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(older)), [older]);
+	const bad = (p: unknown) => line({v: 1, type: 'event', event: {type: 'ui', event: {kind: 'tool-result', toolUseId: 't', isError: false, text: 'ok', patch: p}}});
+	for (const p of [
+		'x',
+		{hunks: 'x'},
+		{hunks: [{oldStart: -1, newStart: 1, lines: []}]},
+		{hunks: [{oldStart: 1, newStart: 1.5, lines: []}]},
+		{hunks: [{oldStart: 1, newStart: 1, lines: [1]}]},
+		{hunks: [{oldStart: 1, newStart: 1, lines: ['x'.repeat(20_001)]}]},
+		{hunks: Array.from({length: 201}, () => ({oldStart: 1, newStart: 1, lines: []}))},
+		{hunks: [0, 1, 2].map(() => ({oldStart: 1, newStart: 1, lines: Array.from({length: 700}, () => '+')}))},
+		{hunks: [], created: false},
+	]) {
+		assert.throws(() => createDecoder('toClient').push(bad(p)), ProtocolError, JSON.stringify(p).slice(0, 80));
+	}
+});
