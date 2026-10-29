@@ -8,6 +8,7 @@ import type {PermissionRequest} from '../../src/chat/permission.js';
 import {makeReveal} from '../../src/chat/reveal.js';
 import {armExpiry, BUSY_HINT, ChatView, clearSentHistory, MAX_QUEUED, type ChatViewProps} from '../../src/ui/ChatView.js';
 import {createChatElement} from '../../src/ui/mount.js';
+import {WORKING_VERBS} from '../../src/ui/present.js';
 import {fakeController, mountHarness, questionReq, toolReq, type FakeController} from './testkit.js';
 
 const SECRET = 'sk-ant-oat-TESTVALUE0123456789abcdef';
@@ -1092,7 +1093,7 @@ test('mouse: clicks during a permission prompt or while waiting for the answer a
 	t.controller.setState('running');
 	t.controller.emit({type: 'state', state: 'running'});
 	await t.settle();
-	assert.match(t.lastFrame(), /Working… \(\d+s · esc to interrupt\)/);
+	assert.match(t.lastFrame(), /[\w -]+… \(\d+s · esc to interrupt\)/);
 	assert.equal(m.click(3, 8), false);
 });
 
@@ -1107,17 +1108,20 @@ test('mouse: a host without subscribeMouse changes nothing', async () => {
 	assert.deepEqual(t.controller.calls.sent, ['abc']);
 });
 
-test('thinking status shows the animated Claude Code spinner with seconds and the interrupt hint', async () => {
+test('thinking status shows the animated spinner, one hyena verb for the turn, seconds and the interrupt hint', async () => {
 	const t = setup();
 	await t.settle();
 	t.controller.ui({kind: 'thinking'});
 	await t.settle();
-	const first = t.lastFrame().match(/([·✢✳✶✻✽]) Thinking… \(\d+s · esc to interrupt\)/);
+	const line = /([·✢✳✶✻✽]) ([\w -]+)… \(\d+s · esc to interrupt\)/;
+	const first = t.lastFrame().match(line);
 	assert.ok(first, 'spinner frame before the status text');
+	assert.ok((WORKING_VERBS as readonly string[]).includes(first[2]), first[2]);
 	await t.settle(400);
-	const later = t.lastFrame().match(/([·✢✳✶✻✽]) Thinking… \(\d+s · esc to interrupt\)/);
+	const later = t.lastFrame().match(line);
 	assert.ok(later);
 	assert.notEqual(later[1], first[1]);
+	assert.equal(later[2], first[2]);
 });
 
 function limitSetup(clock: {now: () => number; timeZone?: string}) {

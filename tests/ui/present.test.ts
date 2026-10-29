@@ -17,7 +17,9 @@ import {
 	statusLineText,
 	tasksBarText,
 	modeHint,
+	pickWorkingVerb,
 	workingText,
+	WORKING_VERBS,
 } from '../../src/ui/present.js';
 
 const SECRET = 'sk-ant-oat-TESTVALUE0123456789abcdef';
@@ -153,6 +155,12 @@ test('the working line and the mode hint', () => {
 	assert.equal(workingText('running', {kind: 'tool-input', name: 'Ed\u001bit', chars: 0}, 5), 'Writing Edit… (5s · esc to interrupt)');
 	assert.equal(workingText('running', null, 130, 59), 'Working… (2m 10s · esc to interrupt)');
 	assert.equal(workingText('running', null, 130, 75), 'Working… (2m 10s · no response for 1m 15s · esc to interrupt)');
+	assert.equal(workingText('running', null, 3, 0, 'Sniffing'), 'Sniffing… (3s · esc to interrupt)');
+	assert.equal(workingText('running', {kind: 'thinking', tokens: 3400}, 72, 0, 'Prowling'), 'Prowling… (1m 12s · ↓ 3.4k tokens · esc to interrupt)');
+	assert.equal(workingText('running', {kind: 'compacting'}, 5, 0, 'Prowling'), 'Compacting… (5s · esc to interrupt)');
+	assert.equal(workingText('interrupting', null, 3, 0, 'Prowling'), 'Interrupting…');
+	assert.equal(pickWorkingVerb(() => 0), WORKING_VERBS[0]);
+	assert.equal(pickWorkingVerb(() => 0.9999), WORKING_VERBS[WORKING_VERBS.length - 1]);
 	assert.equal(modeHint('default'), '');
 	assert.equal(modeHint('acceptEdits'), '⏵⏵ accept edits on (shift+tab to cycle)');
 	assert.equal(modeHint('plan'), '⏸ plan mode on (shift+tab to cycle)');

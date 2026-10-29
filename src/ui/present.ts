@@ -516,10 +516,62 @@ const formatTokens = (n: number): string => (n < 1000 ? `${Math.round(n)}` : `${
 // Silence longer than this is shown, so a long think can be told from a hang.
 export const QUIET_NOTICE_S = 60;
 
-/** The line under the live output while a turn runs: what is happening, for how long, how to stop it. */
-export function workingText(phase: Phase, status: StatusLine, seconds: number, quietSeconds = 0): string {
+export const WORKING_VERBS = [
+	'Sniffing',
+	'Prowling',
+	'Scavenging',
+	'Cackling',
+	'Gnawing',
+	'Tracking',
+	'Stalking',
+	'Pouncing',
+	'Burrowing',
+	'Howling',
+	'Lurking',
+	'Snuffling',
+	'Chomping',
+	'Circling',
+	'Crunching bones',
+	'Following the scent',
+	'Perking ears',
+	'Wagging',
+	'Den-digging',
+	'Rallying the clan',
+	'Giggling at bugs',
+	'Licking paws',
+	'Fluffing the tail',
+	'Digging up old code',
+	'Chewing on a stack trace',
+	'Whooping',
+	'Marking territory',
+	'Napping in the shade',
+	'Stealing from lions',
+	'Sharpening teeth',
+	'Twitching ears',
+	'Nosing around',
+	'Spotting the spots',
+	'Hunting by moonlight',
+	'Grooming the pack',
+	'Dragging it to the den',
+	'Laughing maniacally',
+	'Smelling a regression',
+	'Tail-chasing',
+	'Bone-burying',
+	'Paw-typing',
+	'Snarling at the linter',
+	'Scouting the savanna',
+	'Yipping',
+] as const;
+
+export const pickWorkingVerb = (random = Math.random): string => WORKING_VERBS[Math.floor(random() * WORKING_VERBS.length)] ?? 'Working';
+
+/**
+ * The line under the live output while a turn runs: what is happening, for how long, how to stop it.
+ * `verb` stands in for the plain working and thinking texts; writing, compacting and retries keep theirs.
+ */
+export function workingText(phase: Phase, status: StatusLine, seconds: number, quietSeconds = 0, verb?: string): string {
 	if (phase === 'interrupting') return 'Interrupting…';
-	const what = statusLineText(status) || 'Working…';
+	const what = verb !== undefined && (!status || status.kind === 'thinking') ? `${verb}…` : statusLineText(status) || 'Working…';
 	const parts = [formatDuration(seconds)];
 	// Tool input is JSON: about four characters a token.
 	const tokens = status?.kind === 'thinking' ? status.tokens : status?.kind === 'tool-input' && status.chars > 0 ? status.chars / 4 : undefined;
