@@ -2,9 +2,9 @@ import type {CommandBridge, Logger} from '../../../../src/api.js';
 import {withPatch, type ChatTuning, type LivePatch} from '../chat-prefs.js';
 import {buildChatOptions, buildEnv, ensureMdLinks, resolvePaths, restrictDataDirs, withProjects, type ClaudePaths} from '../config.js';
 import type {LoginProbe} from '../claude-login.js';
-import {accountsCtx, allSecrets, makeRedactor, prepareCredential, registerLogRedaction, requireCredential} from '../credentials.js';
-import {refreshAccountSecretValues} from '../deps/account.js';
-import {chooseAccount, markLimited} from '../accounts.js';
+import {accountsCtx, liveSecrets, loginSyncOf, makeRedactor, prepareCredential, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
+import {chooseAccount, LoginUnsavedError, markLimited, prepareAccount} from '../accounts.js';
+import {degradedReason, type ClaudeVault} from '../vault.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {buildScope} from '../policy.js';
 import type {ChatQueryFn, ClaudeState, Credential} from '../types.js';
@@ -56,7 +56,17 @@ export type EngineDeps = {
 	turnLock?: (session: () => ChatSession | undefined) => {acquire(): void; release(): void};
 	// An idle chat ends its Claude Code process after this long (IDLE_CLOSE_MS by default).
 	idleCloseMs?: number;
+	// Stored Claude accounts: the credential channel in yena, the pushed bundle in a runner.
+	vault?: ClaudeVault;
+	// The host's redactor (every module's registered secrets), applied after the chat's own.
+	redactExtra?: (text: string) => string;
+	// A runner cannot save a refreshed login itself: it tells the attached yena, which syncs and pushes.
+	onLoginChanged?: () => void;
+	loginPollMs?: number;
 };
+
+/** How often a running turn checks whether Claude Code refreshed its login. */
+export const LOGIN_POLL_MS = 30_000;
 
 /** How long an idle chat keeps its Claude Code process (it may still write the title into the transcript). */
 export const IDLE_CLOSE_MS = 15_000;
@@ -94,17 +104,24 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	const {fresh, model, tuning, resume: chosen, fork, resumeAt} = open;
 	const {dataDir, env, store} = deps;
 	const log = deps.log ?? noopLog;
+	const credOpts: CredentialOpts = {env, dataDir, log, ...(deps.vault && {vault: deps.vault})};
 	let cred: Credential;
 	try {
-		cred = await requireCredential({env, dataDir, probeLogin: deps.probeLogin});
+		cred = await requireCredential({...credOpts, ...(deps.probeLogin && {probeLogin: deps.probeLogin})});
 	} catch (err) {
 		log.warn('no credential');
 		throw err;
 	}
 	registerLogRedaction(log, cred);
-	const credOpts = {env, dataDir};
-	await refreshAccountSecretValues(dataDir);
-	const redact = makeRedactor(cred, allSecrets(credOpts));
+	const loginSync = loginSyncOf(credOpts);
+	// In yena the sync saves the login itself; a runner asks the attached yena to.
+	let lastSync: Promise<unknown> = Promise.resolve();
+	const saveLoginSoon = (): void => {
+		if (deps.onLoginChanged) {
+			if (loginSync.dirty()) deps.onLoginChanged();
+		} else lastSync = loginSync.sync();
+	};
+	const redact = makeRedactor(cred, liveSecrets(credOpts), deps.redactExtra);
 	const scrub = makeScrub(redact);
 	const reveal = makeReveal(redact);
 	await deps.onCredential?.(cred);
@@ -149,6 +166,8 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		resuming: resume !== undefined,
 		model: model ?? 'default',
 	});
+	const status = vaultOf(credOpts).current().status;
+	if (status === 'no-grant' || status === 'error') io.warn(`Note: ${degradedReason(status)}`);
 	const problem = (deps.sandboxProblem ?? sandboxProblem)(env.PATH);
 	if (problem !== undefined) {
 		log.warn('bash sandbox unavailable');
@@ -206,7 +225,12 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		// The account is chosen again at every start of Claude Code (a limit may have passed or been hit),
 		// under the session lock, so a login can be swapped into the config dir safely.
 		buildOptions: (abortController, id, prompter) => {
-			cred = prepareCredential(credOpts);
+			try {
+				cred = prepareCredential(credOpts);
+			} catch (err) {
+				if (err instanceof LoginUnsavedError) saveLoginSoon();
+				throw err;
+			}
 			registerLogRedaction(log, cred);
 			const consoleFlags = createConsoleFlags();
 			// Claude Code narrows a running sandbox at once but never widens it past the one it started with,
@@ -264,6 +288,15 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			const next = chooseAccount(ctx);
 			log.info('account limited', {reason, next: next !== undefined && next.limitedUntil === undefined && next.name !== current});
 			if (!next || next.limitedUntil !== undefined || next.name === current) return undefined;
+			try {
+				prepareAccount(ctx, next.name);
+			} catch (err) {
+				if (!(err instanceof LoginUnsavedError)) throw err;
+				// Swapping in another login now would overwrite the refreshed one before it is saved.
+				log.info('account switch skipped', {reason: 'login-unsaved'});
+				saveLoginSoon();
+				return undefined;
+			}
 			return {from: current, to: next.name};
 		},
 	});
@@ -298,14 +331,31 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		if (e.type === 'turn-end' && (e.outcome === 'ok' || e.outcome === 'limit' || e.outcome === 'context')) refreshTitleSoon();
 	});
 
-	const status = createProcessStatus(env.YENA_STATUS_DIR, log);
+	const procStatus = createProcessStatus(env.YENA_STATUS_DIR, log);
 	const writeStatus = (): void => {
-		if (session.state === 'closed') return status.clear();
-		status.set(statusLine({state: session.state, sessionId: session.sessionId, tasks: session.tasks}));
+		if (session.state === 'closed') return procStatus.clear();
+		procStatus.set(statusLine({state: session.state, sessionId: session.sessionId, tasks: session.tasks}));
 	};
 	writeStatus();
 	session.subscribe(e => {
 		if (e.type === 'state' || (e.type === 'ui' && (e.event.kind === 'task' || e.event.kind === 'session'))) writeStatus();
+	});
+
+	// Claude Code refreshes its login during a run: saved after each turn and checked every 30 s while one runs.
+	let loginPoll: NodeJS.Timeout | undefined;
+	const stopLoginPoll = (): void => {
+		if (loginPoll) clearInterval(loginPoll);
+		loginPoll = undefined;
+	};
+	session.subscribe(e => {
+		if (e.type === 'turn-end') saveLoginSoon();
+		if (e.type !== 'state') return;
+		if (e.state === 'running' && !loginPoll) {
+			loginPoll = setInterval(() => {
+				if (loginSync.changed()) saveLoginSoon();
+			}, deps.loginPollMs ?? LOGIN_POLL_MS);
+			loginPoll.unref();
+		} else if (e.state !== 'running') stopLoginPoll();
 	});
 
 	session.subscribe(e => {
@@ -339,8 +389,10 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			for (const timer of titleTimers) clearTimeout(timer);
 			titleTimers.clear();
 			session.close();
-			status.clear();
+			procStatus.clear();
+			stopLoginPoll();
+			saveLoginSoon();
 		},
-		flush: () => saving,
+		flush: () => Promise.all([saving, lastSync]).then(() => undefined),
 	};
 };

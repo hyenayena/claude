@@ -107,7 +107,7 @@ test('the socket path comes from the session directory, never from the lock file
 	});
 	hold(t.sessionDir, 'runner', '/definitely/not/here/evil.sock');
 	await t.chat.run(['chat'], t.ctx);
-	assert.deepEqual(frames.map(f => f.type), ['hello']);
+	assert.deepEqual(frames.map(f => f.type), ['hello', 'credentials']);
 	assert.equal(t.props.length, 1);
 });
 

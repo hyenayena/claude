@@ -10,6 +10,7 @@ import {resolveCommandLine} from '../kit.js';
 import {clip, errClass} from '../log.js';
 import {removeLeftoverSocket, type ControlStatus} from '../sessions/control.js';
 import type {ClaudeState} from '../types.js';
+import {type CredentialBundle, decodeBundle} from '../vault.js';
 import {
 	createDecoder,
 	encodeFrame,
@@ -85,6 +86,8 @@ export type RunnerOptions = {
 	 */
 	createEngine: (open: EngineOpen, io: EngineIo, log: Logger, control: RunnerControl) => Promise<RunnerEngine>;
 	store: {update: (patch: Partial<ClaudeState>) => Promise<unknown>};
+	/** The stored accounts the attached yena pushed; only the last one is kept (in the runner's vault). */
+	onCredentials?: (bundle: CredentialBundle) => void;
 	/** Local sink for the runner's records (the runner itself has no log file). */
 	log?: Logger;
 	noAttachMs?: number;
@@ -93,7 +96,12 @@ export type RunnerOptions = {
 	now?: () => number;
 };
 
-export type RunnerControl = {status: () => ControlStatus; stop: () => void};
+export type RunnerControl = {
+	status: () => ControlStatus;
+	stop: () => void;
+	/** Tells the attached yena that the login working copy is not saved; nothing while detached. */
+	loginChanged: () => void;
+};
 
 export type RunnerHandle = {
 	readonly socketPath: string;
@@ -463,7 +471,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 				},
 				io,
 				log,
-				{status, stop: () => void shutdown('stopped')},
+				{status, stop: () => void shutdown('stopped'), loginChanged: () => client && write(client, {type: 'loginChanged'})},
 			);
 		} catch (err) {
 			opening = false;
@@ -498,6 +506,10 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 		}
 		if (frame.type === 'status') {
 			write(c, {type: 'statusReply', status: status()});
+			return;
+		}
+		if (frame.type === 'credentials') {
+			opts.onCredentials?.(decodeBundle(frame.bundle));
 			return;
 		}
 		if (frame.type === 'stop' || frame.type === 'close') {

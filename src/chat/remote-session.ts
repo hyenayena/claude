@@ -9,6 +9,7 @@ import type {ClientFrame, OpenSpec, RpcCall, RunnerFrame, Snapshot, StatePatch} 
 import {RESUME_MESSAGE} from '../session.js';
 import {readHolder} from '../sessions/lock.js';
 import type {RewindResult} from '../types.js';
+import {type CredentialBundle, encodeBundle} from '../vault.js';
 import type {SlashCommandInfo, TaskInfo} from './chat-session.js';
 import type {ChatEvent, ChatState} from './events.js';
 import type {ChatHandle} from './handle.js';
@@ -35,6 +36,10 @@ export type RemoteOptions = {
 	onLost?: (reason: string) => void;
 	// Sent after the hello when this attach starts a fresh runner.
 	open?: {open: OpenSpec; tuning: ChatTuning; mode?: ChatMode; keep: boolean};
+	// The stored accounts the runner may use: sent before the open and again whenever they change.
+	credentials?: {current(): CredentialBundle; onChange(cb: (b: CredentialBundle) => void): () => void};
+	// The runner's working copy holds a login that is not saved yet; this side saves it (and pushes again).
+	onLoginChanged?: () => void;
 	rpcTimeoutMs?: number;
 	connectTimeoutMs?: number;
 };
@@ -86,6 +91,7 @@ export class RemoteChatSession implements ChatHandle {
 	private _startedAt = Date.now();
 	private lastCommands = '';
 	private lostReported = false;
+	private unwatchCredentials: (() => void) | undefined;
 	private readonly socket: net.Socket;
 	private readonly opts: RemoteOptions;
 
@@ -123,6 +129,10 @@ export class RemoteChatSession implements ChatHandle {
 			};
 			socket.on('connect', () => {
 				session.write({v: 1, type: 'hello', role: 'attach'});
+				if (opts.credentials) {
+					session.pushCredentials(opts.credentials.current());
+					session.unwatchCredentials = opts.credentials.onChange(b => session.pushCredentials(b));
+				}
 				if (opts.open) {
 					session.write({
 						v: 1,
@@ -368,6 +378,10 @@ export class RemoteChatSession implements ChatHandle {
 		this.shutdown();
 	}
 
+	private pushCredentials(bundle: CredentialBundle): void {
+		this.write({v: 1, type: 'credentials', bundle: encodeBundle(bundle)});
+	}
+
 	private write(frame: ClientFrame): void {
 		if (this.socket.destroyed || !this.socket.writable) return;
 		try {
@@ -449,6 +463,9 @@ export class RemoteChatSession implements ChatHandle {
 				this.lose(frame.reason === '' ? 'The background chat ended.' : `The background chat ended: ${frame.reason}`);
 				return;
 			case 'statusReply':
+				return;
+			case 'loginChanged':
+				this.opts.onLoginChanged?.();
 				return;
 		}
 	}
@@ -602,6 +619,8 @@ export class RemoteChatSession implements ChatHandle {
 	private shutdown(): void {
 		const wasRunning = this._state === 'running';
 		this._state = 'closed';
+		this.unwatchCredentials?.();
+		this.unwatchCredentials = undefined;
 		for (const ac of this.runs.values()) ac.abort();
 		this.runs.clear();
 		this.approvedRuns.clear();

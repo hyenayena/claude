@@ -148,6 +148,9 @@ export const accountPaths = (paths: PolicyPaths): [string, string] => {
 	return [path.join(dir, 'accounts.json'), path.join(dir, 'accounts')];
 };
 
+// Order, limits and the installed login (no secrets, but names and state the model has no use for).
+export const authStatePath = (paths: PolicyPaths): string => path.join(path.dirname(paths.credentialsFile), 'auth.json');
+
 /**
  * Strings a shell command naming the account secrets would contain: the data dir and each secret dir's
  * last two segments ("account/keys"), which also catch a relative path after a cd.
@@ -158,8 +161,9 @@ export function accountShellDenied(secrets: AccountSecretPaths | undefined): str
 	return [path.resolve(secrets.dataDir), ...tails];
 }
 
+// Each entry may be a file or a folder: both rules, so neither form slips through.
 const accountSecretRules = (paths: PolicyPaths, tool: 'Read' | 'Edit'): string[] =>
-	(paths.accountSecrets?.secretDirs ?? []).map(d => `${tool}(${absRule(d)}/**)`);
+	(paths.accountSecrets?.secretDirs ?? []).flatMap(d => [`${tool}(${absRule(d)})`, `${tool}(${absRule(d)}/**)`]);
 
 // Claude Code permission rules: "//path" is absolute, "~/" is the home directory.
 const absRule = (p: string) => `/${p}`;
@@ -176,6 +180,7 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 		denied: [
 			paths.credentialsFile,
 			...accountPaths(paths),
+			authStatePath(paths),
 			paths.stateFile,
 			path.join(paths.projectDir, '.yena'),
 			'/proc',
@@ -204,6 +209,7 @@ export function buildAskSettings(paths: PolicyPaths): {
 				`Read(${absRule(paths.credentialsFile)})`,
 				`Read(${absRule(accountPaths(paths)[0])})`,
 				`Read(${absRule(accountPaths(paths)[1])}/**)`,
+				`Read(${absRule(authStatePath(paths))})`,
 				`Read(${absRule(paths.stateFile)})`,
 				`Read(${absRule(paths.configDir)}/.credentials.json)`,
 				`Read(${absRule(paths.configDir)}/.claude.json)`,
@@ -271,6 +277,7 @@ export function buildChatSettings(paths: PolicyPaths): {
 		`Edit(${absRule(paths.credentialsFile)})`,
 		`Edit(${absRule(accountPaths(paths)[0])})`,
 		`Edit(${absRule(accountPaths(paths)[1])}/**)`,
+		`Edit(${absRule(authStatePath(paths))})`,
 		`Edit(${absRule(paths.stateFile)})`,
 		...CONFIG_EDIT_DENY.map(p => `Edit(${absRule(paths.configDir)}/${p})`),
 		`Edit(${absRule(paths.configDir)}/.credentials.json)`,

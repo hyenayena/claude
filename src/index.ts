@@ -6,6 +6,7 @@ import {ensureSessionDir} from './chat/shell-tmp.js';
 import {noopLog} from './log.js';
 import {spawnRunner} from './runner/spawn.js';
 import type {ChatQueryFn, QueryFn} from './types.js';
+import {hostVault} from './vault.js';
 
 const active = new Set<AbortController>();
 let exitHookInstalled = false;
@@ -51,8 +52,10 @@ const plugin: ModulePlugin = host => {
 	const log = host.log ?? noopLog;
 	exitLog = log;
 	log.info('plugin loaded');
+	const vault = hostVault(host.credentials, log);
+	const redactExtra = log.redact?.bind(log);
 	return [
-		...createClaudeCommands({dataDir: host.dataDir, env: process.env, log, ...(host.build && {build: host.build}), ...(host.devFailure && {devFailure: host.devFailure}), loadQuery, loadChatQuery, loadConsoleSdk, loadUi, registerAbort, spawnRunner, sessionDir: () => ensureSessionDir()}),
+		...createClaudeCommands({dataDir: host.dataDir, env: process.env, log, vault, ...(redactExtra && {redactExtra}),...(host.build && {build: host.build}), ...(host.devFailure && {devFailure: host.devFailure}), loadQuery, loadChatQuery, loadConsoleSdk, loadUi, registerAbort, spawnRunner, sessionDir: () => ensureSessionDir()}),
 	];
 };
 

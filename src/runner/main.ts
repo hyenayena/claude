@@ -10,6 +10,7 @@ import {createStore} from '../store.js';
 import type {ChatQueryFn} from '../types.js';
 import {runnerSocketPath} from './spawn.js';
 import {runRunner} from './server.js';
+import {bundleVault} from '../vault.js';
 
 const isMissingModule = (err: unknown): boolean => {
 	const code = (err as {code?: unknown} | null)?.code;
@@ -42,9 +43,12 @@ const main = async (): Promise<number> => {
 			const paths = resolvePaths(dataDir, moduleDir);
 			return runtimeInfo(paths).cli ? probeLogin({bin: paths.runtimeBin, env: cliEnv(env, paths)}) : undefined;
 		};
+		// No credential channel here: the attached yena pushes the stored accounts.
+		const vault = bundleVault();
 		const runner = await runRunner({
 			dir,
 			store,
+			onCredentials: bundle => vault.push(bundle),
 			createEngine: (open, io, log, control) =>
 				createChatEngine(
 					open,
@@ -57,6 +61,8 @@ const main = async (): Promise<number> => {
 						loadConsoleSdk,
 						store,
 						probeLogin: probe,
+						vault,
+						onLoginChanged: control.loginChanged,
 						isMissingModule,
 						shellTmp: ensureShellTmp,
 						// The session lock is held per turn, like a chat in yena: an idle runner blocks nobody.

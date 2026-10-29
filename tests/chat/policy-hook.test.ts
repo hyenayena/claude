@@ -195,6 +195,65 @@ test('the hook denies the account secrets to Bash and the file tools', async () 
 	assert.notEqual(await verdict('Write', {file_path: path.join(accountDir, 'secrets', 'x.json'), content: ''}), 'pass');
 });
 
+test('the account vault and every other denied account path are refused in every layer; ssh_config stays readable', async () => {
+	// Inside a readable root, so only the deny list keeps them out.
+	const accountDir = path.join(projectDir, 'mount', 'account');
+	const names = ['accounts.json', 'kinds.json', 'secrets', 'keys', 'disabled', 'vault', 'grants.json'];
+	const secretDirs = names.map(n => path.join(accountDir, n));
+	for (const d of ['secrets', 'keys', 'disabled', 'vault']) mkdirSync(path.join(accountDir, d), {recursive: true});
+	for (const f of ['accounts.json', 'kinds.json', 'grants.json', 'ssh_config', 'vault/key']) writeFileSync(path.join(accountDir, f), '{}');
+	const guarded = {...paths, accountSecrets: {dataDir: accountDir, secretDirs}};
+	const scope = buildScope(guarded, path.join(tmp, 'home'));
+	const {isPathAllowed, buildAskSettings, buildChatSettings} = await import('../../src/policy.js');
+	const {buildSandbox} = await import('../../src/chat/sandbox.js');
+	const vaultKey = path.join(accountDir, 'vault', 'key');
+	assert.equal(await isPathAllowed(vaultKey, scope), false, 'Read, Glob, Grep');
+	assert.equal(await isPathAllowed(path.join(accountDir, 'vault'), scope), false);
+	assert.equal(await isPathAllowed(path.join(accountDir, 'grants.json'), scope), false);
+	assert.equal(await isPathAllowed(path.join(accountDir, 'ssh_config'), scope), true, 'ssh_config is not denied');
+	const hook = createPolicyHook(scope, paths.configDir);
+	const verdict = async (tool_name: string, tool_input: Record<string, unknown>) => {
+		const out = (await hook(
+			{hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: projectDir} as never,
+			't',
+			opts,
+		)) as {hookSpecificOutput?: {permissionDecisionReason?: string}};
+		return out.hookSpecificOutput?.permissionDecisionReason ?? 'pass';
+	};
+	assert.notEqual(await verdict('Read', {file_path: vaultKey}), 'pass');
+	assert.notEqual(await verdict('Edit', {file_path: vaultKey, old_string: 'a', new_string: 'b'}), 'pass');
+	assert.notEqual(await verdict('Grep', {pattern: 'x', path: path.join(accountDir, 'vault')}), 'pass');
+	assert.notEqual(await verdict('Glob', {pattern: '**/*', path: path.join(accountDir, 'vault')}), 'pass');
+	assert.equal(await verdict('Read', {file_path: path.join(accountDir, 'ssh_config')}), 'pass');
+	assert.ok(scope.shellDenied!.includes('account/vault'), 'the Bash heuristic names the vault');
+	for (const command of [`cat ${vaultKey}`, 'cd / && base64 account/vault/key', 'cat account/grants.json']) {
+		assert.equal(await verdict('Bash', {command}), POLICY_DENY.accountSecrets, command);
+	}
+	const settings = [...buildAskSettings(guarded).permissions.deny, ...buildChatSettings(guarded).permissions.deny];
+	for (const p of secretDirs) {
+		for (const rule of [`Read(/${p})`, `Read(/${p}/**)`, `Edit(/${p})`, `Edit(/${p}/**)`]) assert.ok(settings.includes(rule), rule);
+	}
+	assert.ok(!settings.some(r => r.includes('ssh_config') || r === `Read(/${accountDir}/**)`), 'no rule covers ssh_config');
+	const box = buildSandbox(guarded, undefined, () => [], path.join(tmp, 'home'));
+	for (const p of secretDirs) assert.ok(box.filesystem.denyRead.includes(p), p);
+	const sshConfig = path.join(accountDir, 'ssh_config');
+	assert.ok(!box.filesystem.denyRead.some(d => sshConfig === d || sshConfig.startsWith(`${d}/`)), 'no denied parent of ssh_config');
+	assert.ok(!scope.denied.some(d => sshConfig === d || sshConfig.startsWith(`${d}/`)));
+});
+
+test('auth.json is denied in the scope, the settings, the sandbox and the Bash heuristic', async () => {
+	const authFile = path.join(dataDir, 'auth.json');
+	const scope = buildScope(paths, path.join(tmp, 'home'));
+	assert.ok(scope.denied.includes(authFile));
+	const {buildAskSettings, buildChatSettings} = await import('../../src/policy.js');
+	const {buildSandbox} = await import('../../src/chat/sandbox.js');
+	assert.ok(buildAskSettings(paths).permissions.deny.includes(`Read(/${authFile})`));
+	assert.ok(buildChatSettings(paths).permissions.deny.includes(`Edit(/${authFile})`));
+	assert.ok(buildSandbox(paths, undefined, () => [], path.join(tmp, 'home')).filesystem.denyRead.includes(authFile));
+	assert.equal(await decision('Bash', {command: 'cat /data/claude/auth.json'}), `deny:${POLICY_DENY.authFiles}`);
+	assert.equal(await decision('Bash', {command: 'cat src/auth.json'}), 'pass');
+});
+
 test('the hook forces a prompt for the hub instructions every session loads', async () => {
 	const md = (f: string) => path.join(paths.mdDir, f);
 	writeFileSync(md('SOUL.md'), 's');

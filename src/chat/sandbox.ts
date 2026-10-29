@@ -3,7 +3,7 @@ import {accessSync, constants, readdirSync} from 'node:fs';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import type {ProjectAccess} from '../deps/project.js';
-import {accountPaths, CONFIG_HISTORY, CONFIG_SECRET, CONFIG_TRANSCRIPTS, HUB_ASK_FILES, PLANS_DIR, type PolicyPaths} from '../policy.js';
+import {accountPaths, authStatePath, CONFIG_HISTORY, CONFIG_SECRET, CONFIG_TRANSCRIPTS, HUB_ASK_FILES, PLANS_DIR, type PolicyPaths} from '../policy.js';
 
 // Hosts the chat's Bash reaches without a prompt (git over https, npm); any other host asks.
 export const SANDBOX_DOMAINS = ['github.com', '*.github.com', '*.githubusercontent.com', 'registry.npmjs.org'];
@@ -72,6 +72,7 @@ export function buildSandbox(paths: PolicyPaths, access: ProjectAccess | undefin
 		paths.credentialsFile,
 		accountsFile,
 		accountsDir,
+		authStatePath(paths),
 		paths.stateFile,
 		...CONFIG_SECRET.map(x => path.join(config, x)),
 		path.join(config, CONFIG_HISTORY),

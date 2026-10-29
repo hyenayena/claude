@@ -3,6 +3,9 @@ import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import type {SlashCommandInfo, TaskInfo} from '../chat/chat-session.js';
 import type {ChatEvent, ChatState, ToolPatch, TurnOutcome, UiEvent} from '../chat/events.js';
 import type {LimitType, RateLimitInfo} from '../chat/limits.js';
+import {ACCOUNT_NAME_RE} from '../accounts.js';
+import {parseSlot} from '../login-slot.js';
+import {MAX_ENTRIES, type WireBundle, type WireEntry} from '../vault.js';
 import type {
 	AuditEntry,
 	CancelCause,
@@ -93,6 +96,8 @@ export type ClientFrame = Base &
 		| {type: 'close'}
 		| {type: 'stop'}
 		| {type: 'status'}
+		// The stored accounts the chat may use, values included: sent after hello, before open, and on change.
+		| {type: 'credentials'; bundle: WireBundle}
 	);
 
 export type RunnerFrame = Base &
@@ -108,6 +113,8 @@ export type RunnerFrame = Base &
 		| {type: 'log'; level: 'error' | 'warn' | 'info' | 'debug'; msg: string; fields?: Record<string, unknown>}
 		| {type: 'statusReply'; status: SessionStatus}
 		| {type: 'bye'; reason: string}
+		// The runner's login working copy changed and is not saved; no payload, the client reads the files.
+		| {type: 'loginChanged'}
 	);
 
 export type Frame = ClientFrame | RunnerFrame;
@@ -623,6 +630,33 @@ const readLogFields = (v: unknown): Record<string, unknown> => {
 	return out;
 };
 
+const VAULT_STATUSES = ['ok', 'no-provider', 'no-grant', 'old-host', 'error'] as const;
+const VALUE_MAX = 8192;
+const SLOT_MAX = 64 * 1024;
+
+const readWireEntry = (v: unknown): WireEntry => {
+	const o = rec(v, 'entry');
+	const name = str(o.name, 'name', 32);
+	if (!ACCOUNT_NAME_RE.test(name)) fail('account name');
+	const slot = has(o, 'slot') ? parseSlot(rec(o.slot, 'slot')) : undefined;
+	if (has(o, 'slot') && (!slot || JSON.stringify(slot).length > SLOT_MAX)) fail('slot');
+	return {
+		name,
+		type: oneOf(o.type, ['key', 'token', 'login'] as const, 'type'),
+		kind: oneOf(o.kind, ['api-key', 'oauth'] as const, 'kind'),
+		...(has(o, 'email') && {email: str(o.email, 'email', 320)}),
+		disabled: bool(o.disabled, 'disabled'),
+		...(o.reserved === true && {reserved: true}),
+		...(has(o, 'value') && {value: str(o.value, 'value', VALUE_MAX)}),
+		...(slot && {slot}),
+	};
+};
+
+const readBundle = (v: unknown): WireBundle => {
+	const o = rec(v, 'bundle');
+	return {status: oneOf(o.status, VAULT_STATUSES, 'status'), entries: arr(o.entries, 'entries', MAX_ENTRIES).map(readWireEntry)};
+};
+
 type Reader = (o: Rec) => Rec;
 
 const CLIENT: Record<string, Reader> = {
@@ -651,6 +685,7 @@ const CLIENT: Record<string, Reader> = {
 	close: () => ({}),
 	stop: () => ({}),
 	status: () => ({}),
+	credentials: o => ({bundle: readBundle(o.bundle)}),
 };
 
 const RUNNER: Record<string, Reader> = {
@@ -679,6 +714,7 @@ const RUNNER: Record<string, Reader> = {
 	}),
 	statusReply: o => ({status: readStatus(o.status)}),
 	bye: o => ({reason: str(o.reason, 'reason', 1024)}),
+	loginChanged: () => ({}),
 };
 
 /** Validates one parsed frame; null for a well-formed frame of an unknown type. */

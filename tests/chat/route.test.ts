@@ -141,7 +141,7 @@ test('a runner that holds the lock is attached to by chat, with a reattach notic
 	await t.chat.run(['chat'], t.ctx);
 	assert.equal(t.props.length, 1);
 	assert.equal(t.props[0]!.controller.detachesOnClose, true);
-	assert.deepEqual(frames.map(f => f.type), ['hello']);
+	assert.deepEqual(frames.map(f => f.type), ['hello', 'credentials']);
 	assert.equal(t.waits.length, 0);
 	assert.ok(t.printed.some(p => p.includes('Reattached to a session working since')));
 });

@@ -189,6 +189,7 @@ describe('ask policy snapshot', () => {
 					`Read(/${paths.credentialsFile})`,
 					`Read(/${path.join(path.dirname(paths.credentialsFile), 'accounts.json')})`,
 					`Read(/${path.join(path.dirname(paths.credentialsFile), 'accounts')}/**)`,
+					`Read(/${path.join(path.dirname(paths.credentialsFile), 'auth.json')})`,
 					`Read(/${paths.stateFile})`,
 					`Read(/${paths.configDir}/.credentials.json)`,
 					`Read(/${paths.configDir}/.claude.json)`,

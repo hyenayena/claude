@@ -12,6 +12,8 @@ import {checkCommandDocs} from '../../src/kit.js';
 import type {ChatQueryFn, QueryFn} from '../../src/types.js';
 import type {ChatUi} from '../../src/chat/command.js';
 import {makeFakeLog, serialized} from '../helpers/fake-log.js';
+import {fakeCredentials, seed} from '../helpers/fake-credentials.js';
+import {hostVault} from '../../src/vault.js';
 
 const OAUTH = 'sk-ant-oat-TESTVALUE0123456789abcdef';
 const SID1 = '11111111-aaaa-4bbb-8ccc-222222222222';
@@ -1160,8 +1162,14 @@ test('claude tasks lists the chat tasks and stops the picked running one; claude
 
 test('chat with a Claude Code login: no credentials in the child env', async () => {
 	let runs = 0;
+	// The login is stored by account; claude writes it into its config dir as the CLI's working copy.
+	const fake = fakeCredentials();
+	const login = {credentials: {claudeAiOauth: {accessToken: 'A', refreshToken: 'R'}}, oauthAccount: {emailAddress: 'a@example.com', accountUuid: 'uuid-a'}};
+	seed(fake, 'a-example-com', 'claude-login', JSON.stringify(login), {fields: {email: 'a@example.com', method: 'claude.ai'}});
+	const vault = hostVault(fake, makeFakeLog());
+	await vault.load();
 	const s = await setup({
-		deps: {env: {PATH: '/bin'}, login: {probe: async () => ({loggedIn: true, method: 'claude.ai', subscriptionType: 'max'})}},
+		deps: {env: {PATH: '/bin'}, vault, login: {probe: async () => ({loggedIn: true, method: 'claude.ai', subscriptionType: 'max'})}},
 		run: async p => {
 			runs++;
 			const done = turnDone(p);
@@ -1169,9 +1177,6 @@ test('chat with a Claude Code login: no credentials in the child env', async () 
 			await done;
 		},
 	});
-	// The login Claude Code keeps in its config dir; yena takes it as an account.
-	await mkdir(join(s.dataDir, 'config'), {recursive: true});
-	await writeFile(join(s.dataDir, 'config', '.credentials.json'), JSON.stringify({claudeAiOauth: {accessToken: 'A', refreshToken: 'R'}}));
 	await s.command.run(['chat'], s.ctx);
 	assert.equal(runs, 1);
 	const env = s.q.calls[0]!.options.env as Record<string, string | undefined>;

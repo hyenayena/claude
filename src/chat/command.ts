@@ -3,8 +3,8 @@ import {tuningFromState, type ChatTuning, type LivePatch} from '../chat-prefs.js
 import type {LoginProbe} from '../claude-login.js';
 import {clockTime} from '../clock-time.js';
 import {resolvePaths, type ClaudePaths} from '../config.js';
-import {allSecrets, makeRedactor, registerLogRedaction, requireCredential} from '../credentials.js';
-import {refreshAccountSecretValues} from '../deps/account.js';
+import {liveSecrets, loginSyncOf, makeRedactor, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
+import type {ClaudeVault} from '../vault.js';
 import {clip, errClass, noopLog} from '../log.js';
 import type {spawnRunner} from '../runner/spawn.js';
 import type {LockInfo} from '../sessions/lock.js';
@@ -92,6 +92,10 @@ export type ChatRunDeps = {
 	spawnRunner?: typeof spawnRunner;
 	// Overrides for the connection to a background chat (tests).
 	remote?: {rpcTimeoutMs?: number; connectTimeoutMs?: number};
+	// Stored Claude accounts (the credential channel); without it only the environment variables count.
+	vault?: ClaudeVault;
+	// The host's redactor, applied after the chat's own.
+	redactExtra?: (text: string) => string;
 };
 
 // `resume` names a session to continue; otherwise `fresh` picks a new one or the last one.
@@ -263,16 +267,16 @@ const openRemote = async (
 	deps: ChatRunDeps,
 ): Promise<ViewSource> => {
 	const log = deps.log ?? noopLog;
+	const credOpts: CredentialOpts = {env: deps.env, dataDir: deps.dataDir, log, ...(deps.vault && {vault: deps.vault})};
 	let cred: Credential;
 	try {
-		cred = await requireCredential({env: deps.env, dataDir: deps.dataDir, probeLogin: deps.probeLogin});
+		cred = await requireCredential({...credOpts, ...(deps.probeLogin && {probeLogin: deps.probeLogin})});
 	} catch (err) {
 		log.warn('no credential');
 		throw err;
 	}
 	registerLogRedaction(log, cred);
-	await refreshAccountSecretValues(deps.dataDir);
-	const redact = makeRedactor(cred, allSecrets({env: deps.env, dataDir: deps.dataDir}));
+	const redact = makeRedactor(cred, liveSecrets(credOpts), deps.redactExtra);
 	const scrub = makeScrub(redact);
 	await deps.showNoticeOnce(cred, ctx);
 	let chatUi: ChatUi;
@@ -318,6 +322,9 @@ const openRemote = async (
 		cwd: paths.projectDir,
 		stateUpdate: patch => deps.store.update(patch),
 		onLost: reason => ctx.print(formatNotice(reason, scrub)),
+		// The runner gets the stored accounts from here and asks this yena to save a refreshed login.
+		credentials: vaultOf(credOpts),
+		onLoginChanged: () => void loginSyncOf(credOpts).sync(),
 		...(ctx.commandBridge && {commandBridge: ctx.commandBridge}),
 		...(spawned && {
 			open: {
