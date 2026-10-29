@@ -1,7 +1,7 @@
 import {accessSync, constants} from 'node:fs';
 import {appendFile, mkdir, writeFile} from 'node:fs/promises';
 import path, {join} from 'node:path';
-import type {BuildInfo, Command, CommandContext, DevFailure, Logger, SettingsTab, Subcommand} from '../../../src/api.js';
+import type {ArgumentDoc, BuildInfo, Command, CommandContext, DevFailure, Logger, OptionDoc, SettingsTab, Subcommand} from '../../../src/api.js';
 import {createFixCommand} from './fix.js';
 import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
 import {CONTINUE_TEXT, isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
@@ -107,15 +107,43 @@ export type ClaudeDeps = {
 const USAGE = 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|auth|help|<Claude Code command>>';
 const RESUME_USAGE = 'Usage: claude resume [session]';
 const NO_CHAT = 'No chat is open. Claude Code commands run in the open chat; start one with "chat".';
-const ASK_USAGE = 'Usage: claude ask [--new] <text>';
+const ASK_USAGE = 'Usage: claude ask [--new] <text…>';
 const AUTH_USAGE = 'Usage: claude auth <status|login|add|order|use|remove|logout>';
-const ORDER_USAGE = 'Usage: claude auth order <account> [<account>…]';
+const ORDER_USAGE = 'Usage: claude auth order <account>…';
 const ADD_USAGE = 'Usage: claude auth add [--name <account>]';
 const CHAT_NEW_USAGE = 'Usage: chat [model]';
 const START_USAGE = 'Usage: claude start <message…>';
 const START_MAX = 20_000;
 const SEND_USAGE = 'Usage: claude send <message…>';
 const STOP_USAGE = 'Usage: claude stop [session]';
+
+const SLOT_WORD = /^(?:<([A-Za-z0-9_][\w-]*)(?:…|\.\.\.)?>|\[([A-Za-z0-9_][\w-]*)(?:…|\.\.\.)?\])(?:…|\.\.\.)?$/u;
+
+// Claude Code's argument hints are free text: one goes into the usage only when every word is a plain slot.
+const passthroughUsage = (name: string, hint: string | undefined): Pick<Subcommand, 'usage' | 'args'> => {
+	const words = (hint ?? '').trim().split(/\s+/u).filter(w => w !== '');
+	const slots = words.map(w => {
+		const m = SLOT_WORD.exec(w);
+		return m?.[1] ?? m?.[2];
+	});
+	if (slots.every((s): s is string => s !== undefined)) {
+		return {
+			usage: ['claude', name, ...words].join(' '),
+			args: [...new Set(slots)].map(s => ({name: s, description: 'Argument of the Claude Code command'})),
+		};
+	}
+	return {
+		usage: `claude ${name} [args…]`,
+		args: [{name: 'args', description: `Arguments, as Claude Code describes them: ${Array.from(words.join(' ')).slice(0, 80).join('')}`}],
+	};
+};
+
+const passthroughDescription = (text: string | undefined): string => {
+	const clean = (text ?? '').replace(/\s+/gu, ' ').trim().replace(/\.+$/u, '');
+	if (clean === '') return 'Claude Code command (runs in the open chat)';
+	const chars = Array.from(`Claude Code: ${clean}`);
+	return chars.length <= 90 ? chars.join('') : `${chars.slice(0, 89).join('')}…`;
+};
 
 export {MODEL_OPTIONS} from './chat-prefs.js';
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -854,7 +882,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	// Copies Claude's latest answer (or the Nth latest) to the clipboard of your terminal.
 	const copyAnswer = async (args: string[], ctx: CommandContext): Promise<void> => {
 		const n = args[0] === undefined ? 1 : Number(args[0]);
-		if (args.length > 1 || !Number.isInteger(n) || n < 1) throw new Error('Usage: claude copy [N]');
+		if (args.length > 1 || !Number.isInteger(n) || n < 1) throw new Error('Usage: claude copy [n]');
 		if (!ctx.copyToClipboard) throw new Error('This interface cannot reach the clipboard');
 		const id = await currentSessionId();
 		if (!id) throw new Error('There is no answer to copy yet.');
@@ -1199,6 +1227,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				return authLogout(rest, ctx);
 			case 'login':
 				return authLogin(rest, ctx);
+			case undefined:
+				if (!ctx.showHelp) throw new Error(AUTH_USAGE);
+				return ctx.showHelp(['auth']);
 			default:
 				throw new Error(AUTH_USAGE);
 		}
@@ -1250,36 +1281,169 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		else throw new Error(`The background ${holder.kind} (pid ${holder.pid}) did not stop.`);
 	};
 
+	const ACCOUNT_ARG: ArgumentDoc = {name: 'account', description: 'Account name, as "claude auth status" lists it'};
+	const NAME_OPTION: OptionDoc = {name: '--name', value: '<account>', description: 'Name of the new account (asked for when left out)'};
+	const SESSION_ARG = (what: string): ArgumentDoc => ({name: 'session', description: `Session id or a prefix of it; ${what}`});
+	const MESSAGE_ARG: ArgumentDoc = {name: 'message', description: 'Text of the message'};
+
 	const OWN_SUBCOMMANDS: Subcommand[] = [
 		{name: 'ping', usage: 'claude ping', description: 'Check that the claude module is loaded', agent: 'confirm'},
-		{name: 'ask', usage: 'claude ask [--new] <text>', description: 'Ask yena a question (continues the last session)', agent: 'deny'},
-		{name: 'chat', usage: 'claude chat [--new]', description: 'Open an interactive chat (continues the last session)', agent: 'deny'},
-		{name: 'new', usage: 'claude new [model]', description: 'Start a new chat', agent: 'deny'},
-		{name: 'start', usage: 'claude start <message…>', description: 'Start a new chat and send it the message (the open chat is saved)', agent: 'confirm'},
-		{name: 'send', usage: 'claude send <message…>', description: 'Send the message to the open chat (into the running answer while it works); with no chat open, start one', agent: 'confirm'},
-		{name: 'resume', usage: 'claude resume [session]', description: 'Continue an earlier chat (pick from a list, or give an id prefix)', agent: 'deny'},
+		{
+			name: 'ask',
+			usage: 'claude ask [--new] <text…>',
+			description: 'Ask yena a question in the last session',
+			agent: 'deny',
+			args: [{name: 'text', description: 'The question; put "--" before text that starts with "--"'}],
+			options: [{name: '--new', description: 'Ask in a new session'}],
+		},
+		{
+			name: 'chat',
+			usage: 'claude chat [--new]',
+			description: 'Open an interactive chat in the last session',
+			agent: 'deny',
+			options: [{name: '--new', description: 'Start a new session'}],
+		},
+		{
+			name: 'new',
+			usage: 'claude new [model]',
+			description: 'Start a new chat',
+			agent: 'deny',
+			args: [{name: 'model', description: 'Model of the chat (default: the one in the settings)'}],
+		},
+		{
+			name: 'start',
+			usage: 'claude start <message…>',
+			description: 'Start a new chat and send it the message',
+			agent: 'confirm',
+			args: [MESSAGE_ARG],
+			notes: ['The open chat is saved and can be resumed.'],
+		},
+		{
+			name: 'send',
+			usage: 'claude send <message…>',
+			description: 'Send the message to the open chat, or start one',
+			agent: 'confirm',
+			args: [MESSAGE_ARG],
+			notes: ['While the chat answers, the message goes into the running answer.'],
+		},
+		{
+			name: 'resume',
+			usage: 'claude resume [session]',
+			description: 'Continue an earlier chat',
+			agent: 'deny',
+			args: [SESSION_ARG('without it, pick from a list')],
+		},
 		{name: 'rewind', usage: 'claude rewind', description: 'Go back to before one of your messages (files and conversation)', agent: 'deny'},
 		{name: 'fork', usage: 'claude fork', description: 'Continue the current chat on a new branch', agent: 'deny'},
-		{name: 'rename', usage: 'claude rename <name>', description: 'Name the current chat', agent: 'confirm'},
-		{name: 'export', usage: 'claude export [file]', description: 'Save the current chat as Markdown', agent: 'confirm'},
-		{name: 'copy', usage: 'claude copy [N]', description: "Copy yena's last (or Nth last) answer to the clipboard", agent: 'deny'},
-		{name: 'memory', usage: 'claude memory [file]', description: 'Edit CLAUDE.md (or another md instruction file) in your editor', agent: 'deny'},
-		{name: 'code', usage: 'claude code [args…]', description: 'Run the Claude Code CLI in this terminal (bin/claude; arguments are passed on)', agent: 'deny'},
+		{
+			name: 'rename',
+			usage: 'claude rename <name>',
+			description: 'Name the current chat',
+			agent: 'confirm',
+			args: [{name: 'name', description: 'New name of the chat'}],
+		},
+		{
+			name: 'export',
+			usage: 'claude export [file]',
+			description: 'Save the current chat as Markdown',
+			agent: 'confirm',
+			args: [{name: 'file', description: 'Target file in the project (default: a new file in the exports folder)'}],
+		},
+		{
+			name: 'copy',
+			usage: 'claude copy [n]',
+			description: "Copy yena's last answer to the clipboard",
+			agent: 'deny',
+			args: [{name: 'n', description: 'Which answer, counted from the end (default: 1, the last)'}],
+		},
+		{
+			name: 'memory',
+			usage: 'claude memory [file]',
+			description: 'Edit an md instruction file in your editor',
+			agent: 'deny',
+			args: [{name: 'file', description: 'File in the md directory (default: CLAUDE.md)'}],
+		},
+		{
+			name: 'code',
+			usage: 'claude code [args…]',
+			description: 'Run the Claude Code CLI in this terminal',
+			agent: 'deny',
+			args: [{name: 'args', description: 'Arguments passed on to bin/claude as they are'}],
+		},
 		{name: 'tasks', usage: 'claude tasks', description: 'Background tasks and subagents of the chat; pick one to stop it', agent: 'safe'},
-		{name: 'mcp', usage: 'claude mcp [reconnect <server>]', description: 'MCP servers of the chat and their status', agent: 'safe'},
+		{
+			name: 'mcp',
+			usage: 'claude mcp',
+			description: 'MCP servers of the chat and their status',
+			agent: 'safe',
+			subcommands: [
+				{
+					name: 'reconnect',
+					usage: 'claude mcp reconnect <server>',
+					description: 'Reconnect an MCP server of the chat',
+					args: [{name: 'server', description: 'Server name, as "claude mcp" lists it'}],
+				},
+			],
+		},
 		{name: 'session', usage: 'claude session', description: 'Show the current session, model and runtime', agent: 'safe'},
 		{name: 'sessions', usage: 'claude sessions', description: 'Show the running chat or ask, in any yena or in the background', agent: 'safe'},
-		{name: 'stop', usage: 'claude stop [session]', description: 'Stop the running chat or ask', agent: 'confirm'},
+		{
+			name: 'stop',
+			usage: 'claude stop [session]',
+			description: 'Stop the running chat or ask',
+			agent: 'confirm',
+			args: [SESSION_ARG('stops only when the running one matches')],
+		},
 		{
 			name: 'auth',
-			usage: 'claude auth <status|login|add|order|use|remove|logout>',
-			description:
-				'Accounts in priority order (the next takes over at a limit): status, login [--name <n>] [--console|--sso|--email <a>] (browser), add [--name <n>] (paste a key or token), order, use, remove, logout',
+			usage: 'claude auth <subcommand>',
+			description: 'Accounts in priority order; the next one takes over at a limit',
+			args: [{name: 'subcommand', description: 'One of the subcommands below'}],
 			agent: 'confirm',
+			subcommands: [
+				{name: 'status', usage: 'claude auth status', description: 'Show the active credential and the accounts in order', agent: 'confirm'},
+				{
+					name: 'login',
+					usage: 'claude auth login [--name <account>] [--console | --claudeai] [--sso] [--email <address>]',
+					description: "Sign in with Claude Code's browser login",
+					// Hands over the terminal (ctx.suspend), which an assistant run does not have.
+					agent: 'deny',
+					options: [
+						NAME_OPTION,
+						{name: '--console', description: 'Sign in with an Anthropic Console account (API billing)'},
+						{name: '--claudeai', description: 'Sign in with a claude.ai subscription'},
+						{name: '--sso', description: 'Sign in through single sign-on'},
+						{name: '--email', value: '<address>', description: 'Email address to prefill on the login page'},
+					],
+				},
+				{
+					name: 'add',
+					usage: 'claude auth add [--name <account>]',
+					description: 'Add an API key or subscription token (typed into a hidden input)',
+					agent: 'confirm',
+					options: [NAME_OPTION],
+				},
+				{
+					name: 'order',
+					usage: 'claude auth order <account>…',
+					description: 'Set the priority order of the accounts',
+					agent: 'confirm',
+					args: [{...ACCOUNT_ARG, description: 'Accounts, first one first; the ones left out follow'}],
+				},
+				{
+					name: 'use',
+					usage: 'claude auth use <account>',
+					description: 'Put an account first and forget its limit',
+					agent: 'confirm',
+					args: [ACCOUNT_ARG],
+				},
+				{name: 'remove', usage: 'claude auth remove <account>', description: 'Remove an account', agent: 'confirm', args: [ACCOUNT_ARG]},
+				{name: 'logout', usage: 'claude auth logout', description: 'Sign Claude Code out of its current login', agent: 'confirm'},
+			],
 		},
-		{name: 'help', usage: 'claude help', description: 'Show the usage', agent: 'safe'},
 	];
-	const ownNames = new Set(OWN_SUBCOMMANDS.map(s => s.name));
+	// `help` stays reserved: a Claude Code /help listed here would replace core's help subcommand.
+	const ownNames = new Set([...OWN_SUBCOMMANDS.map(s => s.name), 'help']);
 
 	const claudeCodeSubcommands = (): Subcommand[] => {
 		const known: SlashCommandInfo[] =
@@ -1288,11 +1452,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				: diskCommands(resolvePaths(dataDir, deps.moduleDir).configDir);
 		return known
 			.filter(c => !ownNames.has(c.name))
-			.map(c => ({
-				name: c.name,
-				usage: `claude ${c.name}${c.argumentHint ? ` ${c.argumentHint}` : ''}`,
-				description: c.description ? `Claude Code: ${c.description}` : 'Claude Code command (runs in the open chat)',
-			}));
+			.map(c => ({name: c.name, description: passthroughDescription(c.description), ...passthroughUsage(c.name, c.argumentHint)}));
 	};
 
 	// Runs a Claude Code command in the open chat, as if typed there with a leading slash.
@@ -1313,8 +1473,12 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const claude: Command = {
 		name: 'claude',
 		description: 'Claude Code integration',
-		usage: 'claude <command> [args…]',
+		usage: 'claude <subcommand> [args…]',
 		agent: 'deny',
+		args: [
+			{name: 'subcommand', description: 'One of the subcommands below, or a Claude Code command of the open chat'},
+			{name: 'args', description: 'Its arguments'},
+		],
 		get subcommands() {
 			return [...OWN_SUBCOMMANDS, ...claudeCodeSubcommands()];
 		},
@@ -1324,16 +1488,11 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		run: async ([sub, ...args], ctx) => {
 			switch (sub) {
 				case undefined:
-					throw new Error(USAGE);
+					if (!ctx.showHelp) throw new Error(USAGE);
+					return ctx.showHelp();
 				case 'ping':
 					ctx.print('pong');
 					return;
-				// Its own case: an unknown name is sent to the open chat as a Claude Code command (/help).
-				case 'help': {
-					const width = Math.max(...OWN_SUBCOMMANDS.map(s => s.usage.length));
-					for (const s of OWN_SUBCOMMANDS) ctx.print(`  ${s.usage.padEnd(width)}   ${s.description}`);
-					return;
-				}
 				case 'ask':
 					return ask(args, ctx);
 				case 'chat':
@@ -1382,6 +1541,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		name: 'chat',
 		description: 'Start a new chat with the assistant',
 		usage: 'chat [model]',
+		args: [{name: 'model', description: 'Model of the chat (default: the one in the settings)'}],
 		agent: 'deny',
 		autostart: true,
 		settings: {

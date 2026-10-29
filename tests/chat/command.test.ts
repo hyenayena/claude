@@ -8,6 +8,7 @@ import type {CommandContext} from '../../../../src/api.js';
 import {CHAT_DISALLOWED_TOOLS, CHAT_TOOLS} from '../../src/policy.js';
 import {createClaudeCommand, createClaudeCommands, type ClaudeDeps} from '../../src/commands.js';
 import {resolvePaths} from '../../src/config.js';
+import {checkCommandDocs} from '../../src/kit.js';
 import type {ChatQueryFn, QueryFn} from '../../src/types.js';
 import type {ChatUi} from '../../src/chat/command.js';
 import {makeFakeLog, serialized} from '../helpers/fake-log.js';
@@ -791,6 +792,26 @@ test('claude hints list Claude Code commands from the session, or from the confi
 	assert.equal(pipeline.usage, 'claude pipeline <request>');
 	assert.match(pipeline.description, /Run the pipeline/);
 	assert.ok(subs.some(x => x.name === 'deploy'));
+});
+
+test('Claude Code commands with free-text hints and long descriptions still pass the documentation check', async () => {
+	const s = await setupChat();
+	await mkdir(join(s.dataDir, 'config', 'commands'), {recursive: true});
+	await writeFile(join(s.dataDir, 'config', 'commands', 'review.md'), `---\ndescription: ${'Review the change carefully. '.repeat(6)}\nargument-hint: [--strict] pr number\n---\nbody`);
+	await writeFile(join(s.dataDir, 'config', 'commands', 'fixit.md'), '---\ndescription: Fix it.\nargument-hint: <issue> [note…]\n---\nbody');
+	await writeFile(join(s.dataDir, 'config', 'commands', 'help.md'), '---\ndescription: Not core help\n---\nbody');
+	const [, claude] = createClaudeCommands({dataDir: s.dataDir, env: {}, loadQuery: async () => (() => []) as unknown as QueryFn});
+	const subs = claude!.subcommands!;
+	const review = subs.find(x => x.name === 'review')!;
+	assert.equal(review.usage, 'claude review [args…]');
+	assert.match(review.args![0]!.description, /\[--strict\] pr number/);
+	assert.ok(review.description.length <= 90 && !review.description.endsWith('.'));
+	const fixit = subs.find(x => x.name === 'fixit')!;
+	assert.equal(fixit.usage, 'claude fixit <issue> [note…]');
+	assert.deepEqual(fixit.args!.map(a => a.name), ['issue', 'note']);
+	assert.equal(fixit.description, 'Claude Code: Fix it');
+	assert.equal(subs.some(x => x.name === 'help'), false);
+	assert.deepEqual(checkCommandDocs(claude!), []);
 });
 
 test('the chat is named after the first message, then after the title Claude Code writes', async () => {

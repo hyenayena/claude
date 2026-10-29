@@ -27,18 +27,21 @@ test('ping prints pong', async () => {
 	assert.deepEqual(printed, ['pong']);
 });
 
-test('no subcommand throws the usage error', async () => {
+test('no subcommand shows core help, or throws the usage error without it', async () => {
 	const {command, ctx} = await setup();
 	await assert.rejects(async () => command.run([], ctx), {
 		message: 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|auth|help|<Claude Code command>>',
 	});
+	const paths: (string[] | undefined)[] = [];
+	await command.run([], {...ctx, showHelp: path => paths.push(path)});
+	await command.run(['auth'], {...ctx, showHelp: path => paths.push(path)});
+	assert.deepEqual(paths, [undefined, ['auth']]);
+	await assert.rejects(async () => command.run(['auth'], ctx), {message: 'Usage: claude auth <status|login|add|order|use|remove|logout>'});
 });
 
-test('help lists the own subcommands without sending /help to the chat', async () => {
-	const {command, printed, ctx} = await setup();
-	await command.run(['help'], ctx);
-	assert.ok(printed.some(l => l.includes('claude ping')));
-	assert.ok(printed.some(l => l.includes('claude help')));
+test('claude declares no help subcommand of its own', async () => {
+	const {command} = await setup();
+	assert.equal(command.subcommands!.some(s => s.name === 'help'), false);
 });
 
 test('an unknown subcommand is a Claude Code command and needs an open chat', async () => {

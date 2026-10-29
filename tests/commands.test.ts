@@ -7,7 +7,8 @@ import {test} from 'node:test';
 import type {CommandContext} from '../../../src/api.js';
 import {storeSecret} from '../src/credentials.js';
 import {CONTINUE_TEXT} from '../src/chat/chat-session.js';
-import {createClaudeCommand, type ClaudeDeps} from '../src/commands.js';
+import {createClaudeCommand, createClaudeCommands, type ClaudeDeps} from '../src/commands.js';
+import {checkCommandDocs} from '../src/kit.js';
 import type {LoginStatus} from '../src/claude-login.js';
 import type {QueryFn} from '../src/types.js';
 import {TurnFailure} from '../src/session.js';
@@ -92,8 +93,8 @@ test('-- ends flag parsing', async () => {
 
 test('missing text and slash commands are refused', async () => {
 	const {command, ctx} = await setup();
-	await assert.rejects(async () => command.run(['ask'], ctx), {message: 'Usage: claude ask [--new] <text>'});
-	await assert.rejects(async () => command.run(['ask', '--new'], ctx), {message: 'Usage: claude ask [--new] <text>'});
+	await assert.rejects(async () => command.run(['ask'], ctx), {message: 'Usage: claude ask [--new] <text…>'});
+	await assert.rejects(async () => command.run(['ask', '--new'], ctx), {message: 'Usage: claude ask [--new] <text…>'});
 	await assert.rejects(async () => command.run(['ask', '/help'], ctx), {
 		message: 'Slash commands are not supported in "claude ask"',
 	});
@@ -560,9 +561,21 @@ test('commands carry agent policies', async () => {
 	const {command} = await setup();
 	assert.equal(command.agent, 'deny');
 	const by = Object.fromEntries(command.subcommands!.map(s => [s.name, s.agent]));
-	for (const n of ['session', 'tasks', 'mcp', 'help']) assert.equal(by[n], 'safe', n);
+	for (const n of ['session', 'tasks', 'mcp']) assert.equal(by[n], 'safe', n);
 	for (const n of ['ping', 'rename', 'export', 'auth']) assert.equal(by[n], 'confirm', n);
 	for (const n of ['ask', 'chat', 'new', 'resume', 'rewind', 'fork', 'copy', 'memory', 'code']) assert.equal(by[n], 'deny', n);
+	const auth = command.subcommands!.find(s => s.name === 'auth')!;
+	const authBy = Object.fromEntries(auth.subcommands!.map(s => [s.name, s.agent]));
+	assert.deepEqual(authBy, {status: 'confirm', login: 'deny', add: 'confirm', order: 'confirm', use: 'confirm', remove: 'confirm', logout: 'confirm'});
+	const reconnect = command.subcommands!.find(s => s.name === 'mcp')!.subcommands!.find(s => s.name === 'reconnect')!;
+	assert.equal(reconnect.agent, undefined);
+});
+
+test('the claude, chat and fix commands pass the documentation check', async () => {
+	const {command} = await setup();
+	assert.deepEqual(checkCommandDocs(command), []);
+	const cmds = createClaudeCommands({dataDir: '/tmp/x', env: {}, loadQuery: async () => (() => { throw new Error('unused'); }) as never});
+	for (const c of cmds) assert.deepEqual(checkCommandDocs(c), [], c.name);
 });
 
 test('the top-level chat command is denied to agents', async () => {
@@ -914,13 +927,15 @@ test('ask with a login source: env without credentials, footer says subscription
 	assert.equal(s.printed.filter(l => l.startsWith('[session')).at(-1), '[session 11111111 · model claude-test-1 · subscription login]');
 });
 
-test('auth subcommand description lists the login options within the hint limit', () => {
+test('auth lists its subcommands with their own usages and options', () => {
 	const command = createClaudeCommand({dataDir: '/nonexistent', env: {}, loadQuery: async () => (() => []) as unknown as QueryFn});
 	const auth = command.subcommands!.find(x => x.name === 'auth')!;
-	assert.match(auth.description!, /login \[--name <n>\] \[--console\|--sso\|--email <a>\] \(browser\)/);
-	assert.match(auth.description!, /add \[--name <n>\]/);
-	assert.doesNotMatch(auth.description!, /--token|--from-file|accounts,/);
-	assert.ok(auth.description!.length <= 200);
+	assert.equal(auth.usage, 'claude auth <subcommand>');
+	assert.deepEqual(auth.subcommands!.map(s => s.name), ['status', 'login', 'add', 'order', 'use', 'remove', 'logout']);
+	const login = auth.subcommands!.find(s => s.name === 'login')!;
+	assert.deepEqual(login.options!.map(o => o.name), ['--name', '--console', '--claudeai', '--sso', '--email']);
+	assert.ok(!JSON.stringify(auth).match(/--token|--from-file/));
+	for (const s of [auth, ...auth.subcommands!]) assert.ok(s.description.length <= 70, s.name);
 });
 
 test('auth add from the terminal never runs the Claude Code CLI', async () => {

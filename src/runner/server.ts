@@ -6,6 +6,7 @@ import type {LivePatch} from '../chat-prefs.js';
 import type {ChatSession} from '../chat/chat-session.js';
 import type {ChatEvent} from '../chat/events.js';
 import type {EngineIo, EngineOpen} from '../chat/engine.js';
+import {resolveCommandLine} from '../kit.js';
 import {clip, errClass} from '../log.js';
 import {removeLeftoverSocket, type ControlStatus} from '../sessions/control.js';
 import type {ClaudeState} from '../types.js';
@@ -121,13 +122,11 @@ const toStatePatch = (patch: Partial<ClaudeState>): StatePatch => {
 };
 
 const policyFor = (list: CommandInfo[], line: string): {request: CommandConfirmRequest; policy: string} | undefined => {
-	const [first, second] = line.trim().split(/\s+/);
-	const cmd = list.find(c => c.name === first);
-	if (!cmd) return undefined;
-	const sub = second === undefined ? undefined : cmd.subcommands.find(s => s.name === second || s.aliases.includes(second));
+	const found = resolveCommandLine(list, line);
+	if (!found) return undefined;
 	return {
-		policy: sub?.policy ?? cmd.policy,
-		request: {line, command: cmd.name, ...(sub && {subcommand: sub.name}), caller: ''},
+		policy: found.policy,
+		request: {line, command: found.command, ...(found.subcommand !== undefined && {subcommand: found.subcommand}), caller: ''},
 	};
 };
 

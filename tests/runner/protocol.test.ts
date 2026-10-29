@@ -147,3 +147,15 @@ test('a tool-result with a patch round-trips; a bad or oversized patch is reject
 		assert.throws(() => createDecoder('toClient').push(bad(p)), ProtocolError, JSON.stringify(p).slice(0, 80));
 	}
 });
+
+test('a commands frame keeps nested subcommands up to three levels and rejects deeper ones', () => {
+	const leaf = {name: 'c', aliases: [], usage: 'x a b c', description: 'c', policy: 'deny'};
+	const nested = {name: 'a', aliases: ['A'], usage: 'x a', description: 'a', policy: 'confirm', subcommands: [{name: 'b', aliases: [], usage: 'x a b', description: 'b', policy: 'safe', subcommands: [leaf]}]};
+	const frame: ClientFrame = {v: 1, type: 'commands', list: [{name: 'x', description: 'x', policy: 'safe', subcommands: [nested]}]} as ClientFrame;
+	assert.deepEqual(createDecoder('toRunner').push(Buffer.from(encodeFrame(frame))), [frame]);
+	const tooDeep = {...leaf, subcommands: [{...leaf, name: 'd'}]};
+	const deeper = {v: 1, type: 'commands', list: [{name: 'x', description: 'x', policy: 'safe', subcommands: [{...nested, subcommands: [{...nested.subcommands[0], subcommands: [tooDeep]}]}]}]};
+	assert.throws(() => createDecoder('toRunner').push(line(deeper)), ProtocolError);
+	const badPolicy = {v: 1, type: 'commands', list: [{name: 'x', description: 'x', policy: 'safe', subcommands: [{...nested, subcommands: [{...leaf, policy: 'yes'}]}]}]};
+	assert.throws(() => createDecoder('toRunner').push(line(badPolicy)), ProtocolError);
+});

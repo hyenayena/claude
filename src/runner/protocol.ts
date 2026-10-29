@@ -1,4 +1,4 @@
-import type {AgentPolicy, CommandConfirmRequest, CommandInfo, CommandRunResult, CommandRunStatus} from '../../../../src/api.js';
+import type {AgentPolicy, CommandConfirmRequest, CommandInfo, CommandInfoSub, CommandRunResult, CommandRunStatus} from '../../../../src/api.js';
 import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import type {SlashCommandInfo, TaskInfo} from '../chat/chat-session.js';
 import type {ChatEvent, ChatState, ToolPatch, TurnOutcome, UiEvent} from '../chat/events.js';
@@ -242,6 +242,25 @@ const readDecision = (v: unknown): PermissionDecision => {
 
 const readPolicy = (v: unknown): AgentPolicy => oneOf(v, POLICIES, 'policy');
 
+const MAX_SUB_DEPTH = 3;
+
+const readSubcommands = (v: unknown, depth: number): CommandInfoSub[] =>
+	arr(v, 'subcommands', 100).map(s => {
+		const so = rec(s, 'subcommand');
+		const sub: CommandInfoSub = {
+			name: ident(so.name, 'name'),
+			aliases: strList(so.aliases, 'aliases', 20),
+			usage: str(so.usage, 'usage', 4096),
+			description: str(so.description, 'description', 4096),
+			policy: readPolicy(so.policy),
+		};
+		if (has(so, 'subcommands')) {
+			if (depth >= MAX_SUB_DEPTH) fail('subcommands nested too deep');
+			sub.subcommands = readSubcommands(so.subcommands, depth + 1);
+		}
+		return sub;
+	});
+
 const readCommandInfo = (v: unknown): CommandInfo => {
 	const o = rec(v, 'command');
 	return {
@@ -249,16 +268,7 @@ const readCommandInfo = (v: unknown): CommandInfo => {
 		description: str(o.description, 'description', 4096),
 		...(has(o, 'usage') && {usage: str(o.usage, 'usage', 4096)}),
 		policy: readPolicy(o.policy),
-		subcommands: arr(o.subcommands, 'subcommands', 100).map(s => {
-			const so = rec(s, 'subcommand');
-			return {
-				name: ident(so.name, 'name'),
-				aliases: strList(so.aliases, 'aliases', 20),
-				usage: str(so.usage, 'usage', 4096),
-				description: str(so.description, 'description', 4096),
-				policy: readPolicy(so.policy),
-			};
-		}),
+		subcommands: readSubcommands(o.subcommands, 1),
 	};
 };
 

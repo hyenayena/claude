@@ -354,6 +354,42 @@ test('the bridge forwards a safe command as is and a confirm command once the ch
 	assert.equal((await risky).output, 'bye');
 });
 
+test('the bridge resolves nested subcommand paths: the deepest listed policy decides and names the path', async () => {
+	const r = await rig();
+	const c = await attach(r);
+	const nested: CommandInfo[] = [
+		{
+			name: 'claude',
+			description: 'c',
+			policy: 'deny',
+			subcommands: [
+				{name: 'mcp', aliases: [], usage: 'claude mcp', description: 'm', policy: 'safe', subcommands: [{name: 'reconnect', aliases: [], usage: 'claude mcp reconnect <server>', description: 'r', policy: 'safe'}]},
+				{name: 'auth', aliases: [], usage: 'claude auth <subcommand>', description: 'a', policy: 'confirm', subcommands: [{name: 'status', aliases: ['st'], usage: 'claude auth status', description: 's', policy: 'confirm'}]},
+			],
+		},
+	];
+	c.send({type: 'commands', list: nested});
+	await tick(30);
+	const bridge = r.io().commandBridge!;
+	const asked: unknown[] = [];
+	const confirm = async (req: unknown) => {
+		asked.push(req);
+		return true;
+	};
+	const safe = bridge.run({line: 'claude mcp reconnect yena', caller: 'yena', confirm});
+	const run1 = (await c.waitFor('bridgeRun')) as Extract<RunnerFrame, {type: 'bridgeRun'}>;
+	assert.equal(run1.approved, undefined);
+	c.send({type: 'bridgeResult', id: run1.id, result: {status: 'ok', output: '', truncated: false, ms: 1}});
+	await safe;
+	const before = c.frames.length;
+	const risky = bridge.run({line: 'claude auth st', caller: 'yena', confirm});
+	const run2 = (await c.waitFor('bridgeRun', before)) as Extract<RunnerFrame, {type: 'bridgeRun'}>;
+	assert.deepEqual(asked, [{line: 'claude auth st', command: 'claude', subcommand: 'auth status', caller: 'yena'}]);
+	assert.equal(run2.approved, true);
+	c.send({type: 'bridgeResult', id: run2.id, result: {status: 'ok', output: '', truncated: false, ms: 1}});
+	await risky;
+});
+
 test('a declined confirmation never reaches bridgeRun, a detach settles pending calls', async () => {
 	const r = await rig();
 	const c = await attach(r, {keep: true});

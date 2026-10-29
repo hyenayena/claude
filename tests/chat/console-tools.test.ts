@@ -9,6 +9,7 @@ import {
 	commandKey,
 	createConsoleFlags,
 	createConsoleServer,
+	neverAlways,
 	type ConsoleFlags,
 	type ConsoleSdk,
 } from '../../src/chat/console-tools.js';
@@ -220,6 +221,9 @@ test('a saved command also covers a line the auto classifier flagged', async () 
 test('claude auth and plan mode never offer or use "always"', async () => {
 	const cases: [ChatMode, CommandConfirmRequest][] = [
 		['default', {line: 'claude auth logout', command: 'claude', subcommand: 'auth', caller: 'yena'}],
+		...['status', 'login', 'add', 'order', 'use', 'remove', 'logout'].map(
+			(sub): [ChatMode, CommandConfirmRequest] => ['default', {line: `claude auth ${sub}`, command: 'claude', subcommand: `auth ${sub}`, caller: 'yena'}],
+		),
 		['plan', {line: 'mod install x', command: 'mod', subcommand: 'install', caller: 'yena'}],
 	];
 	for (const [mode, creq] of cases) {
@@ -327,4 +331,9 @@ test('holdTurn is taken before the run and released after it, also when the brid
 	events.length = 0;
 	await make(async () => ok('')).handler({command: '  '}, {});
 	assert.deepEqual(events, []);
+});
+
+test('neverAlways covers claude auth and every path below it, nothing else', () => {
+	for (const key of ['cmd:claude auth', 'cmd:claude auth login', 'cmd:claude auth status', 'cmd:claude auth x y']) assert.equal(neverAlways(key), true, key);
+	for (const key of ['cmd:claude', 'cmd:claude authx', 'cmd:claude mcp reconnect', 'cmd:mod auth']) assert.equal(neverAlways(key), false, key);
 });

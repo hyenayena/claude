@@ -70,8 +70,8 @@ export const COMMAND_KEY_PREFIX = 'cmd:';
 export const commandKey = (req: Pick<CommandConfirmRequest, 'command' | 'subcommand'>): string =>
 	`${COMMAND_KEY_PREFIX}${req.subcommand === undefined ? req.command : `${req.command} ${req.subcommand}`}`;
 
-// Credentials stay behind a prompt every time: one "always" here would cover login, key, use, remove and logout.
-const NEVER_ALWAYS: ReadonlySet<string> = new Set(['cmd:claude auth']);
+// Credentials stay behind a prompt every time, on every path below `claude auth`.
+export const neverAlways = (key: string): boolean => key === 'cmd:claude auth' || key.startsWith('cmd:claude auth ');
 
 const signalOf = (extra: unknown): AbortSignal | undefined => {
 	const s = typeof extra === 'object' && extra !== null ? (extra as {signal?: unknown}).signal : undefined;
@@ -96,7 +96,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): ReturnType<typeof 
 				return true;
 			}
 			const key = commandKey(req);
-			const alwaysOk = prompter.mode !== 'plan' && !NEVER_ALWAYS.has(key);
+			const alwaysOk = prompter.mode !== 'plan' && !neverAlways(key);
 			if (alwaysOk && prompter.hasApproved(key)) {
 				prompter.audit({outcome: 'always-allowed', toolName: 'Command', summary: req.line});
 				return true;
