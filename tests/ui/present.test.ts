@@ -105,7 +105,6 @@ test('tool block rows are counted as the chat shows them, not as source lines', 
 	const block = formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: false, text: `${'y'.repeat(200)}\nz`}, scrub, width).replace(/\u001b\[\d+m/g, '');
 	const rows = block.split('\n');
 	assert.equal(rows.length, 1 + 5);
-	// 200 cells in 35-cell rows are 6 rows, plus "z": 4 shown, 3 behind the footer.
 	assert.match(rows.at(-1)!, /… \+3 lines \(ctrl\+o to expand\)$/);
 	for (const row of rows) assert.ok(row.length <= width, row);
 });

@@ -191,7 +191,6 @@ test('user tool_result carries a checked copy of the structured patch', () => {
 
 test('a patch at the engine caps with escape-heavy text still fits in a runner frame', async () => {
 	const {encodeFrame, createDecoder, MAX_FRAME_BYTES} = await import('../../src/runner/protocol.js');
-	// About 120 encoded bytes per line: 2000 lines stay just under the engine's 256 KiB, so every body is accepted.
 	for (const body of ['\u0001'.repeat(20), '界'.repeat(40), '"\\'.repeat(30), 'x'.repeat(120)]) {
 		const lines = Array.from({length: 2000}, () => `+${body}`);
 		const events = n({

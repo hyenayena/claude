@@ -35,8 +35,6 @@ const symlink = () =>
 		always: false,
 	});
 
-// What the user can see before y is accepted: rows >= 10 header plus a body that starts with the
-// notes and the command or diff; rows 4-9 the command line or path in the header; rows < 4 nothing.
 for (const rows of [24, 17, 12, 10, 8, 7, 6, 5, 4]) {
 	test(`rows ${rows}: the symlink target and the path are visible before y is accepted`, async () => {
 		const {controller, h} = await open(symlink(), rows);

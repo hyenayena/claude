@@ -6,7 +6,6 @@ const MAX_FILES = 5000;
 const MAX_DEPTH = 8;
 const SECRET = [/^\.env/, /\.pem$/, /^id_rsa/];
 
-/** Files of the project (relative paths, sorted), for @ mentions; skips build output, VCS and secrets. */
 export async function listProjectFiles(root: string, max = MAX_FILES): Promise<string[]> {
 	const out: string[] = [];
 	const walk = async (dir: string, depth: number): Promise<void> => {
@@ -33,7 +32,6 @@ export async function listProjectFiles(root: string, max = MAX_FILES): Promise<s
 	return out;
 }
 
-/** Best matches for what follows "@": file-name prefix first, then path prefix, then anywhere in the path. */
 export function matchFiles(files: readonly string[], query: string, limit = 6): string[] {
 	const q = query.toLowerCase();
 	if (q === '') return files.slice(0, limit);
@@ -48,7 +46,6 @@ export function matchFiles(files: readonly string[], query: string, limit = 6): 
 	return scored.slice(0, limit).map(([, f]) => f);
 }
 
-/** The "@…" token that ends at the cursor, if the cursor is in one. */
 export function mentionAt(text: string, cursor: number): {start: number; query: string} | undefined {
 	let i = cursor;
 	while (i > 0 && !/\s/.test(text[i - 1]!)) i--;

@@ -16,7 +16,6 @@ import {LIVE, parseTodos, type Out, type Phase, type RunningTool, type StatusLin
 
 export type Scrub = (s: string) => string;
 
-// The only places an escape character may originate; every untrusted string is scrubbed first.
 export const SGR = {
 	reset: '\u001b[0m',
 	dim: '\u001b[2m',
@@ -53,7 +52,6 @@ export function formatUserLine(text: string, scrub: Scrub): string {
 
 const THINKING_LINES = 6;
 
-/** A finished thinking block: dim and italic, cut to its first lines. */
 export function formatThinking(text: string, scrub: Scrub): string {
 	const lines = scrub(clampChars(text, BLOCK_DISPLAY_CAP)).trim().split('\n');
 	const shown = lines.slice(0, THINKING_LINES);
@@ -62,7 +60,6 @@ export function formatThinking(text: string, scrub: Scrub): string {
 	return paint(SGR.dim + SGR.italic, body.join('\n'));
 }
 
-/** Claude Code's block shape: a marker on the first line, every other line under the text. */
 const hang = (marker: string, lines: string[]): string =>
 	lines.map((l, i) => (i === 0 ? `${marker} ${l}` : l === '' ? '' : `${' '.repeat(BLOCK_INDENT)}${l}`)).join('\n');
 
@@ -72,11 +69,6 @@ export function formatAssistantBlock(text: string, scrub: Scrub, interrupted = f
 	return assistantBlock(text, scrub, interrupted, width, false).text;
 }
 
-/**
- * An answer block for `print`: laid out for `width` now, and again by the transcript for each width it
- * shows (`render`), so the block fills the chat after a resize or when the console closes. With
- * `copyLabel` each code block header reads "· copy" and carries the action that copies it.
- */
 export function assistantPrint(
 	text: string,
 	scrub: Scrub,
@@ -97,12 +89,10 @@ export function assistantPrint(
 }
 
 function assistantBlock(text: string, scrub: Scrub, interrupted: boolean, width: number | undefined, copyLabel: boolean): {text: string; actions: PrintAction[]} {
-	// Markdown styling is applied to the scrubbed text, so it only adds the constant SGR codes.
 	const inner = width === undefined ? undefined : Math.max(10, width - BLOCK_INDENT);
 	const rendered = renderMarkdownBlocks(scrub(clampChars(text, BLOCK_DISPLAY_CAP)), {width: inner, copyLabel});
 	const lead = /^\n*/.exec(rendered.text)![0].length;
 	const source = rendered.text.slice(lead).split('\n');
-	// Wrapped here, not by the terminal, so continuation rows keep the indent under the dot.
 	const lines: string[] = [];
 	const firstRow: number[] = [];
 	for (const l of source) {
@@ -142,7 +132,6 @@ function agentArgs(input: unknown): string {
 	return type && what ? `${type}: ${what}` : (type ?? what ?? '');
 }
 
-// Per-tool extension point for the one-line argument summary.
 const ARGS_REGISTRY: Record<string, ArgsSummary> = {
 	AskUserQuestion: questionArgs,
 	Bash: field('command'),
@@ -162,7 +151,6 @@ const ARGS_REGISTRY: Record<string, ArgsSummary> = {
 	[LIST_COMMANDS_TOOL]: () => 'list commands',
 };
 
-// yena's own console tools read as one tool, named after the app, with the command line as arguments.
 const DISPLAY_NAMES: Record<string, string> = {[RUN_COMMAND_TOOL]: 'Yena', [LIST_COMMANDS_TOOL]: 'Yena'};
 
 const displayName = (name: string): string => DISPLAY_NAMES[name] ?? name;
@@ -178,7 +166,6 @@ export function toolHeader(name: string, input: unknown, scrub: Scrub): string {
 	return `${scrub(displayName(name))}${args ? `(${args})` : ''}`;
 }
 
-/** The tool name bold, the arguments plain, as Claude Code shows them. */
 export function styledToolHeader(name: string, input: unknown, scrub: Scrub): string {
 	const args = toolArgs(name, input, scrub);
 	return `${SGR.bold}${scrub(displayName(name))}${SGR.boldOff}${args ? `(${args})` : ''}`;
@@ -208,7 +195,6 @@ const pathOf = (t: ToolResult, scrub: Scrub): string | undefined => {
 	return p === '' ? undefined : scrub(p);
 };
 
-// Claude Code's one-line summaries; Bash and the other tools fall through to the clamped output.
 const RESULT_REGISTRY: Record<string, ResultSummary> = {
 	Edit: (t, scrub) => {
 		const path = pathOf(t, scrub);
@@ -237,7 +223,6 @@ const RESULT_REGISTRY: Record<string, ResultSummary> = {
 	},
 };
 
-/** Messages waiting for the current answer, one line each; the last line counts any extra ones. */
 export function queuedLines(queue: string[], scrub: Scrub, max: number): string[] {
 	if (max <= 0 || queue.length === 0) return [];
 	const one = (q: string) => `↳ queued: ${scrub(q.replace(/\s+/g, ' '))}`;
@@ -247,7 +232,6 @@ export function queuedLines(queue: string[], scrub: Scrub, max: number): string[
 
 const TODO_MARK: Record<Todo['status'], string> = {completed: '☒', in_progress: '☐', pending: '☐'};
 
-/** The open checklist as display lines, at most `max` (an item in progress is never left out). */
 export function todoLines(todos: Todo[], scrub: Scrub, max: number): string[] {
 	if (max <= 0 || !todos.some(t => t.status !== 'completed')) return [];
 	const line = (t: Todo) => {
@@ -265,15 +249,12 @@ export function todoLines(todos: Todo[], scrub: Scrub, max: number): string[] {
 export const RESULT_PREFIX = '  ⎿  ';
 const RESULT_INDENT = '     ';
 
-/** Lines under a block: the first after "⎿", the rest aligned with it. */
 export const resultLines = (lines: string[]): string[] => lines.map((l, i) => `${i === 0 ? RESULT_PREFIX : RESULT_INDENT}${l}`);
 
-// Screen rows of a finished tool call's output in the chat, the "… +N lines" row included; Ctrl+O has the rest.
 export const TOOL_RESULT_ROWS = 5;
 
 const DIFF_TONE: Record<PreviewRow['kind'], string> = {del: SGR.red, add: SGR.green, ctx: SGR.dim, gap: SGR.dim, meta: SGR.dim};
 
-/** Diff rows behind a line-number gutter, wrapped to `inner` cells (continuations under a blank gutter), each painted whole. */
 function diffRowLines(rows: PreviewRow[], scrub: Scrub, inner?: number): string[] {
 	const wrap = (text: string, max: number): string[] => (inner === undefined ? [text] : wrapRows(text, Math.max(1, max), {mode: 'char'}));
 	let digits = 0;
@@ -295,7 +276,6 @@ function diffRowLines(rows: PreviewRow[], scrub: Scrub, inner?: number): string[
 	return out;
 }
 
-/** An Edit or Write: the summary, then its diff (or a new file's head) in full; only the head is capped. */
 function fileChangeRows(t: ToolResult, summary: string, scrub: Scrub, inner?: number): string[] {
 	const head = summary.split('\n').flatMap(l => (inner === undefined ? [l] : wrapRows(l, inner, {mode: 'char'})));
 	let rows: string[];
@@ -311,17 +291,11 @@ function fileChangeRows(t: ToolResult, summary: string, scrub: Scrub, inner?: nu
 	return [...resultLines(head).map(r => paint(SGR.dim, r)), ...rows.map(r => `${RESULT_INDENT}${r}`)];
 }
 
-/**
- * A finished tool call: the call on one row, cut with "…", and its output in at most `TOOL_RESULT_ROWS`
- * rows as the chat shows them (wrapped to `width`); an Edit or Write shows its whole diff instead.
- * Without a width, source lines count as rows.
- */
 export function formatToolBlock(t: ToolResult, scrub: Scrub, width?: number): string {
 	const dot = `${t.isError ? SGR.red : SGR.green}●${SGR.reset}`;
 	const name = scrub(displayName(t.name));
 	let args = toolArgs(t.name, t.input, scrub);
 	if (width !== undefined && args !== '') {
-		// "● " before the name, the parentheses around the arguments.
 		args = truncateCells(args, Math.max(1, width - 2 - stringCells(name) - 2));
 	}
 	const header = `${dot} ${SGR.bold}${name}${SGR.boldOff}${args ? `(${args})` : ''}${SGR.reset}`;
@@ -332,7 +306,6 @@ export function formatToolBlock(t: ToolResult, scrub: Scrub, width?: number): st
 		return `${header}\n${fileChangeRows(t, custom, scrub, inner).join('\n')}`;
 	}
 	const body = custom ?? scrub(t.text.slice(0, RESULT_INPUT_CAP)).replace(/\n+$/, '');
-	// Only the dot marks a failure: red error text under every failed call was too loud for the user.
 	if (body.trim() === '') return t.isError ? `${header}\n${paint(SGR.dim, `${RESULT_PREFIX}Error`)}` : header;
 	const lines = body.split('\n');
 	const rows = inner === undefined ? lines : lines.flatMap(l => wrapRows(l, inner, {mode: 'char'}));
@@ -365,7 +338,6 @@ const pluralQuestions = (summary: string): string => {
 	return m[1] === '1' ? '1 question' : `${m[1]} questions`;
 };
 
-/** One dim line per decision; carries a tool, a path or a command, never file contents or answers. */
 export function formatAudit(entry: AuditEntry, scrub: Scrub, reveal: Scrub = scrub, width?: number): string {
 	const tool = scrub(entry.toolName);
 	const summary = auditText(entry.summary, reveal);
@@ -392,7 +364,6 @@ export function formatAudit(entry: AuditEntry, scrub: Scrub, reveal: Scrub = scr
 	return paint(SGR.dim, width === undefined ? line : cutMiddle(line, Math.max(1, width)));
 }
 
-/** One row of `max` cells with "…" in the middle: the tail holds what a call resolved to (a symlink target). */
 function cutMiddle(text: string, max: number): string {
 	const cells = stringCells(text);
 	if (cells <= max) return text;
@@ -459,7 +430,6 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 
 let tailCache: {raw: string; scrub: Scrub; columns: number; rows: string[]} | undefined;
 
-/** The streaming answer, rendered like the finished block it becomes; its last `maxRows` rows. */
 export function liveTail(liveRaw: string, scrub: Scrub, maxRows: number, columns: number): string[] {
 	if (liveRaw === '' || maxRows <= 0) return [];
 	const cached = tailCache;
@@ -479,12 +449,10 @@ function renderTail(liveRaw: string, scrub: Scrub, columns: number): string[] {
 		const nl = liveRaw.indexOf('\n', start);
 		const from = nl >= 0 ? nl + 1 : start;
 		window = liveRaw.slice(from);
-		// A fence opened before the window still frames the code inside it.
 		const fence = openFenceLine(liveRaw.slice(0, from));
 		if (fence !== undefined) window = `${fence}\n${window}`;
 		cut = true;
 	}
-	// The live area keeps the terminal's last column empty.
 	const rows = assistantBlock(window, scrub, false, Math.max(1, columns - 1), false).text.split('\n');
 	if (cut && rows[0]?.startsWith('● ')) rows[0] = `${' '.repeat(BLOCK_INDENT)}${rows[0].slice(2)}`;
 	return rows;
@@ -513,7 +481,6 @@ export const formatDuration = (seconds: number): string => {
 
 const formatTokens = (n: number): string => (n < 1000 ? `${Math.round(n)}` : `${(n / 1000).toFixed(1)}k`);
 
-// Silence longer than this is shown, so a long think can be told from a hang.
 export const QUIET_NOTICE_S = 60;
 
 export const WORKING_VERBS = [
@@ -563,21 +530,15 @@ export const WORKING_VERBS = [
 	'Yipping',
 ] as const;
 
-/** A random verb, never `previous` again, so a change is always visible. */
 export function pickWorkingVerb(random = Math.random, previous?: string): string {
 	const pool = WORKING_VERBS.filter(v => v !== previous);
 	return pool[Math.floor(random() * pool.length)] ?? 'Working';
 }
 
-/**
- * The line under the live output while a turn runs: what is happening, for how long, how to stop it.
- * `verb` stands in for the plain working and thinking texts; writing, compacting and retries keep theirs.
- */
 export function workingText(phase: Phase, status: StatusLine, seconds: number, quietSeconds = 0, verb?: string): string {
 	if (phase === 'interrupting') return 'Interrupting…';
 	const what = verb !== undefined && (!status || status.kind === 'thinking') ? `${verb}…` : statusLineText(status) || 'Working…';
 	const parts = [formatDuration(seconds)];
-	// Tool input is JSON: about four characters a token.
 	const tokens = status?.kind === 'thinking' ? status.tokens : status?.kind === 'tool-input' && status.chars > 0 ? status.chars / 4 : undefined;
 	if (tokens !== undefined && tokens > 0) parts.push(`↓ ${formatTokens(tokens)} tokens`);
 	if (quietSeconds >= QUIET_NOTICE_S) parts.push(`no response for ${formatDuration(quietSeconds)}`);
@@ -592,7 +553,6 @@ const MODE_HINT: Record<ChatMode, string> = {
 	auto: '⏵⏵ auto mode on (shift+tab to cycle)',
 };
 
-/** The hint under the input box; empty in the default mode. */
 export const modeHint = (mode: ChatMode): string => MODE_HINT[mode];
 
 export function toolRunningText(tool: RunningTool, scrub: Scrub): string {
@@ -601,7 +561,6 @@ export function toolRunningText(tool: RunningTool, scrub: Scrub): string {
 	return `${toolHeader(tool.name, tool.input, scrub)}${secs > 0 ? ` ${secs}s` : ''}${activity}`;
 }
 
-/** Running work for the status bar: subagents (foreground and background) and other background tasks. */
 export function tasksBarText(tasks: readonly {status: string; background: boolean; taskType?: string}[]): string {
 	const running = tasks.filter(t => t.status === 'running');
 	const agents = running.filter(t => t.taskType === 'local_agent').length;
@@ -612,7 +571,6 @@ export function tasksBarText(tasks: readonly {status: string; background: boolea
 	return parts.join(' · ');
 }
 
-/** Account, session, model, limit, phase, running tasks; the mode is shown under the input instead. */
 export function statusBarText(
 	s: {
 		account?: string;

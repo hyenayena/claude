@@ -4,7 +4,6 @@ export interface EditorState {
 	text: string;
 	cursor: number;
 	truncated: boolean;
-	// The last text removed by a kill (Ctrl+K/U/W, Alt+D, vim d/c/x), for Ctrl+Y and vim p.
 	killed?: string;
 }
 
@@ -20,7 +19,6 @@ export type EditorAction =
 	| {type: 'killEnd'}
 	| {type: 'killWordBack'}
 	| {type: 'killWordForward'}
-	// vim dw: the word and the spaces after it.
 	| {type: 'killToNextWord'}
 	| {type: 'wordLeft'}
 	| {type: 'wordRight'}
@@ -46,7 +44,6 @@ function lineEnd(text: string, cursor: number): number {
 
 const isSpace = (c: string | undefined) => c === undefined || /\s/.test(c);
 
-/** Start of the word before the cursor (spaces skipped first). */
 export function wordStartBefore(text: string, cursor: number): number {
 	let i = cursor;
 	while (i > 0 && isSpace(text[i - 1])) i--;
@@ -54,7 +51,6 @@ export function wordStartBefore(text: string, cursor: number): number {
 	return i;
 }
 
-/** End of the word after the cursor (spaces skipped first). */
 export function wordEndAfter(text: string, cursor: number): number {
 	let i = cursor;
 	while (i < text.length && isSpace(text[i])) i++;
@@ -69,7 +65,6 @@ const cut = (state: EditorState, from: number, to: number): EditorState => {
 
 export function editorReduce(state: EditorState, action: EditorAction): EditorState {
 	const next = reduce(state, action);
-	// The kill ring survives every edit that does not replace it.
 	return next.killed === undefined && state.killed !== undefined ? {...next, killed: state.killed} : next;
 }
 

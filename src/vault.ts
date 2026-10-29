@@ -6,12 +6,6 @@ import {registerLogValues} from './credentials.js';
 import {errClass, noopLog} from './log.js';
 import {type LoginSlot, parseSlot, sameClaudeAccount, slotEmail, slotKind, slotLeaves} from './login-slot.js';
 
-/**
- * The Claude credentials of the account module, read through the host's credential channel and kept
- * in memory only (a bundle): never logged, never written except the login working copy in config/.
- * The background runner has no channel; it gets the bundle pushed by the yena it is attached to.
- */
-
 export type VaultStatus = 'ok' | 'no-provider' | 'no-grant' | 'old-host' | 'error';
 export type EntryType = 'key' | 'token' | 'login';
 
@@ -21,17 +15,13 @@ export type VaultEntry = {
 	readonly kind: AccountKind;
 	readonly email?: string;
 	readonly disabled: boolean;
-	/** Named like an environment account (env-key, env-token): listed, never used. */
 	readonly reserved?: boolean;
-	/** Hidden from JSON and inspect. */
 	readonly value?: string;
-	/** Hidden from JSON and inspect. */
 	readonly slot?: LoginSlot;
 };
 
 export type CredentialBundle = {readonly status: VaultStatus; readonly entries: readonly VaultEntry[]};
 
-/** A bundle with its values in the open: only for the runner socket (runner/protocol.ts). */
 export type WireEntry = {name: string; type: EntryType; kind: AccountKind; email?: string; disabled: boolean; reserved?: boolean; value?: string; slot?: LoginSlot};
 export type WireBundle = {status: VaultStatus; entries: WireEntry[]};
 
@@ -44,7 +34,6 @@ export type ClaudeVault = {
 	remove(name: string): Promise<void>;
 	removeAll(): Promise<number>;
 	onChange(cb: (bundle: CredentialBundle) => void): () => void;
-	/** The channel itself, in yena only (the one-time migration writes through it). */
 	readonly channel?: Credentials;
 };
 
@@ -105,11 +94,9 @@ export const decodeBundle = (w: WireBundle): CredentialBundle => ({
 	entries: w.entries.map(({value, slot, ...pub}) => makeEntry(pub, {...(value !== undefined && {value}), ...(slot !== undefined && {slot})})),
 });
 
-/** Every secret string in the bundle (values and the tokens inside logins), for redaction. */
 export const bundleSecrets = (b: CredentialBundle): string[] =>
 	b.entries.flatMap(e => [...(e.value !== undefined ? [e.value] : []), ...(e.slot ? slotLeaves(e.slot) : [])]);
 
-// In memory only, to tell whether a bundle changed.
 const bundleDigest = (b: CredentialBundle): string => createHash('sha256').update(JSON.stringify(encodeBundle(b))).digest('hex');
 
 const empty = (status: VaultStatus): CredentialBundle => ({status, entries: []});
@@ -128,11 +115,6 @@ function entryOf(a: CredentialAccount, type: EntryType, raw: string | undefined)
 	return makeEntry({...pub, kind, ...(email !== undefined && {email})}, slot ? {slot} : {});
 }
 
-/**
- * Creates an account and sets its secret; without `explicit` the next free name (`-2`, `-3`…) is tried
- * when the store refuses one (it may belong to an account of a kind claude cannot see). A secret that
- * cannot be set removes the new account again.
- */
 export async function createCredential(
 	creds: Credentials,
 	p: {base: string; explicit: boolean; taken: ReadonlySet<string>; type: EntryType; fields?: Record<string, string>; value: string},
@@ -163,7 +145,6 @@ const loginFields = (slot: LoginSlot): Record<string, string> => {
 	return {method: slotKind(slot) === 'oauth' ? 'claude.ai' : 'console', ...(email !== undefined && {email})};
 };
 
-/** The vault of a yena process: the module's credential channel (absent in hosts older than it). */
 export function hostVault(creds: Credentials | undefined, log: Logger = noopLog): ClaudeVault {
 	let current = empty(creds ? 'error' : 'old-host');
 	let digest = '';
@@ -205,7 +186,6 @@ export function hostVault(creds: Credentials | undefined, log: Logger = noopLog)
 				try {
 					cb(next);
 				} catch {
-					// a listener must not break loading
 				}
 			}
 		}
@@ -308,10 +288,6 @@ export function hostVault(creds: Credentials | undefined, log: Logger = noopLog)
 
 export type RunnerVault = ClaudeVault & {push(bundle: CredentialBundle): void};
 
-/**
- * The runner's vault: the last bundle the attached yena pushed. It never writes: changes to accounts
- * are made in yena, which pushes a fresh bundle.
- */
 export function bundleVault(log: Logger = noopLog, waitMs = LOAD_WAIT_MS): RunnerVault {
 	let current: CredentialBundle | undefined;
 	const waiting = new Set<() => void>();
@@ -328,7 +304,6 @@ export function bundleVault(log: Logger = noopLog, waitMs = LOAD_WAIT_MS): Runne
 				try {
 					cb(bundle);
 				} catch {
-					// a listener must not break the runner
 				}
 			}
 		},

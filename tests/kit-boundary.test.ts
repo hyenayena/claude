@@ -14,7 +14,6 @@ function walk(dir: string): string[] {
 	});
 }
 
-// Static `import`/`export ... from` specifiers only; dynamic import() calls are excluded.
 function staticSpecifiers(source: string): string[] {
 	const out: string[] = [];
 	const pattern = /(?:^|\n)\s*(?:import|export)\b(?!\s+type\b)[^'";]*?\bfrom\s*['"]([^'"]+)['"]|(?:^|\n)\s*import\s*['"]([^'"]+)['"]/g;
@@ -41,7 +40,6 @@ function resolveLocal(from: string, spec: string): string | undefined {
 		try {
 			if (statSync(base + ext).isFile()) return base + ext;
 		} catch {
-			// try the next extension
 		}
 	}
 	return undefined;

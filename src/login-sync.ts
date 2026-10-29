@@ -7,11 +7,8 @@ import type {ClaudeVault} from './vault.js';
 export type SyncOutcome = 'clean' | 'saved' | 'adopted' | 'skipped' | 'failed';
 
 export type LoginSync = {
-	/** The working copy holds a login the store does not have yet. */
 	dirty(): boolean;
-	/** The working copy's files changed (size, mtime) since the last sync or check. */
 	changed(): boolean;
-	/** Saves a refreshed login back, or adopts a login made in Claude Code directly; one at a time. */
 	sync(): Promise<SyncOutcome>;
 };
 
@@ -29,7 +26,6 @@ export function createLoginSync(o: LoginSyncOpts): LoginSync {
 		if (bundle.status !== 'ok') return 'skipped';
 		const wc = readWorkingCopy(o.configDir);
 		if (wc.state === 'none') return 'clean';
-		// The CLI may be writing the files; the next sync point tries again.
 		if (wc.state === 'bad') return 'skipped';
 		const f = readAuth(o.dataDir);
 		const logins = storedEntries(bundle).filter(e => e.type === 'login' && e.slot !== undefined);
@@ -42,7 +38,6 @@ export function createLoginSync(o: LoginSyncOpts): LoginSync {
 				writeAuth(o.dataDir, f);
 			}
 			if (slotDigest(owner.slot) === slotDigest(wc.slot)) return 'clean';
-			// Never regress the stored login: two writers (yena, another yena) may race.
 			if ((expiresAt(wc.slot) ?? 0) < (expiresAt(owner.slot) ?? 0)) return 'skipped';
 			await o.vault.saveLogin(owner.name, wc.slot);
 			return 'saved';
@@ -81,7 +76,6 @@ export function createLoginSync(o: LoginSyncOpts): LoginSync {
 
 const shared = new WeakMap<ClaudeVault, LoginSync>();
 
-/** One sync per vault, so the chat, ask and the auth commands of a yena never sync at the same time. */
 export function loginSyncFor(o: LoginSyncOpts): LoginSync {
 	let s = shared.get(o.vault);
 	if (!s) shared.set(o.vault, (s = createLoginSync(o)));

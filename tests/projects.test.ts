@@ -9,7 +9,6 @@ import {buildChatHint, buildOptions, resolvePaths, withProjects} from '../src/co
 import {loadProjectAccess, type ProjectAccess, type ProjectAccessReader} from '../src/deps/project.js';
 import {buildChatSettings, buildScope, classifyEditTarget, isPathAllowed} from '../src/policy.js';
 
-// The state file format is the project module's (tested there); here a fake reader gives the access.
 const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'claude-projects-')));
 after(() => rmSync(tmp, {recursive: true, force: true}));
 
@@ -163,7 +162,6 @@ describe('chat options with projects', () => {
 
 describe('the optional project dependency', () => {
 	it('loads the installed module and reads through its public entry', async () => {
-		// The yena checkout's own module: present wherever the tests run inside the host tree.
 		const loaded = await loadProjectAccess('/data/claude', '/data/md');
 		assert.ok(loaded, 'the project module is installed next to claude');
 		assert.equal(loaded.dataDir, '/data/project');

@@ -34,7 +34,6 @@ export function mountHarness(element: ReactElement, size = {columns: 80, rows: 2
 	return {
 		chunks,
 		press: (sequence: string) => stdin.write(sequence),
-		// Escape is flushed by Ink after 20 ms, so waits must exceed that
 		settle: (ms = 30) => wait(ms),
 		lastFrame: () => chunks.at(-1) ?? '',
 		resize(columns: number, rows: number) {
@@ -55,9 +54,7 @@ export interface FakeController extends ChatController {
 		answers: Array<{id: string; decision: PermissionDecision}>;
 	};
 	pendingPermissions: PermissionRequest[];
-	/** Queues a request and emits `permission-requested`. */
 	request(req: PermissionRequest): void;
-	/** Drops a request without a decision and emits `permission-resolved`. */
 	resolved(id: string): void;
 	emit(event: ChatEvent): void;
 	ui(event: UiEvent): void;

@@ -19,11 +19,6 @@ export interface QuestionPromptProps {
 const ANSWER = 'Your answer: ';
 const MAX_ANSWER_ROWS = 4;
 
-/**
- * The options [first, last] to show in `room` rows when option i takes `heights[i]` rows: the
- * cursor's option always, then as many before it as fit (the cursor moves down to the bottom row,
- * as in a plain list), then those after it.
- */
 export function optionWindow(heights: number[], cursor: number, room: number): [number, number] {
 	if (heights.length === 0) return [0, -1];
 	const at = Math.min(Math.max(0, cursor), heights.length - 1);
@@ -94,7 +89,6 @@ export function QuestionPrompt(props: QuestionPromptProps) {
 	});
 	const optionTotal = optionRows.reduce((n, rows) => n + rows.length, 0);
 
-	// Status bar and hint rows are outside this component's output
 	const avail = Math.max(2, layout.budget - headerRows.length - 1 - 2 - footerRows);
 	const qWrapped = wrapRows(`[${reveal(spec.header)}] ${reveal(spec.question)}`, width, {mode: 'char'});
 	const qRows = Math.min(qWrapped.length, Math.max(1, avail - optionTotal, Math.floor(avail / 3)));

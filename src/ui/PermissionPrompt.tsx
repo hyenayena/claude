@@ -18,7 +18,6 @@ const REASON = 'Reason: ';
 const MAX_REASON_ROWS = 3;
 const MAX_HEADER_ROWS = 3;
 
-// Colours of the full-view pager rows (the bordered Frame is the kit's).
 const PAGER_TONE: Record<Tone, {color?: string; dim?: boolean}> = {
 	plain: {},
 	dim: {dim: true},
@@ -38,7 +37,6 @@ export function toolHeader(req: ToolRequest, reveal: Reveal): string {
 	if (req.toolName === 'Mcp') return `MCP: run ${reveal(String(req.input['__mcpTool'] ?? ''))}?`;
 	return `${req.toolName}: ${reveal(req.path ?? String(req.input['file_path'] ?? ''))}`;
 }
-
 
 export interface PermissionPromptProps {
 	request: ToolRequest;
@@ -78,7 +76,6 @@ export function PermissionPrompt(props: PermissionPromptProps) {
 			? [...headerAll.slice(0, MAX_HEADER_ROWS - 1), truncateCells(headerAll.slice(MAX_HEADER_ROWS - 1).join(' '), layout.width)]
 			: headerAll;
 	const reasonRows = state.view === 'reason' ? Math.min(MAX_REASON_ROWS, labeledInputRows(REASON, state.reason, layout.width)) : 0;
-	// Extra header and reason rows come out of the body, so the prompt keeps its height.
 	const hintRows = layout.showHint && state.view === 'choose' ? wrapRows(props.notice ?? hintText(request), layout.width).slice(0, 2) : [];
 	const extraRows = headerRows.length - 1 + Math.max(0, reasonRows - 1) + Math.max(0, hintRows.length - 1);
 	const baseMax = state.view === 'reason' && layout.compactChoices ? Math.max(1, layout.bodyRows - 1) : layout.bodyRows;

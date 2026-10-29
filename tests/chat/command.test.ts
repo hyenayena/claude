@@ -343,7 +343,6 @@ test('an idle open chat does not block ask, and opening another chat replaces it
 	};
 	const running = s.command.run(['chat'], s.ctx);
 	await new Promise(r => setTimeout(r, 20));
-	// Not refused: the ask gets as far as the (unused) SDK of this fixture.
 	await assert.rejects(s.command.run(['ask', 'x'], s.ctx), (err: Error) => err.message !== 'A chat is already open' && /unused/.test(err.message));
 	const second = s.command.run(['chat'], s.ctx);
 	await running;
@@ -392,7 +391,6 @@ test('closing line carries no control bytes or secret from the model name', asyn
 		},
 	};
 	await cmd.run(['chat'], ctx);
-	// The banner and notices are styled with SGR sequences; anything else would come from the model name.
 	const out = s.printed.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
 	assert.equal(/[\x1b\x07]/.test(out), false);
 	assert.equal(out.includes(OAUTH), false);
@@ -643,7 +641,6 @@ test('a new chat opens with the yena banner sized to the view; a resumed one doe
 			close: () => {},
 			print: (t, o) => {
 				printed.push(t);
-				// The banner renders plain text.
 				if (o?.render) renders.push(o.render as (width: number) => string);
 			},
 			host,
@@ -654,7 +651,6 @@ test('a new chat opens with the yena banner sized to the view; a resumed one doe
 	assert.match(banner, /yena 9\.9\.9/);
 	assert.match(banner, /claude 1\.2\.3/);
 	assert.ok(banner.split('\n').every(row => row.length <= 60));
-	// The transcript lays the banner out again for a new width.
 	assert.equal(renders.length, 1);
 	const narrow = renders[0]!(30).replace(/\x1b\[[0-9;]*m/g, '').split('\n');
 	assert.ok(narrow.every(row => row.length === 30));
@@ -1162,7 +1158,6 @@ test('claude tasks lists the chat tasks and stops the picked running one; claude
 
 test('chat with a Claude Code login: no credentials in the child env', async () => {
 	let runs = 0;
-	// The login is stored by account; claude writes it into its config dir as the CLI's working copy.
 	const fake = fakeCredentials();
 	const login = {credentials: {claudeAiOauth: {accessToken: 'A', refreshToken: 'R'}}, oauthAccount: {emailAddress: 'a@example.com', accountUuid: 'uuid-a'}};
 	seed(fake, 'a-example-com', 'claude-login', JSON.stringify(login), {fields: {email: 'a@example.com', method: 'claude.ai'}});
@@ -1237,7 +1232,6 @@ test('claude start opens a new chat that sends the message and returns while the
 	await s.command.run(['start', 'hello', 'there'], s.ctx);
 	assert.equal(s.props.at(-1)!.initialSend, 'hello there');
 	assert.ok(s.printed.includes('Started a new chat with the message.'));
-	// An assistant or the scheduler (a context with a signal) needs the chat's own view.
 	const s2 = await setup();
 	const agent: CommandContext = {print: () => {}, clear: () => {}, exit: () => {}, signal: new AbortController().signal};
 	await assert.rejects(s2.command.run(['start', 'x'], agent), /No chat view is available/);

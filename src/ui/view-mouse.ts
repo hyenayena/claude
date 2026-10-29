@@ -1,4 +1,3 @@
-// A structural copy of core's mouse event: core provides it at runtime, older cores do not.
 export type ViewMouseEvent = {
 	kind: 'press' | 'release' | 'wheel';
 	button: 'left' | 'middle' | 'right' | 'none';
@@ -15,7 +14,6 @@ export type ViewMouseEvent = {
 export type MouseListener = (event: ViewMouseEvent) => boolean | void;
 export type SubscribeMouse = (listener: MouseListener) => () => void;
 
-/** The host's mouse subscription, or undefined when the host has none. */
 export function mouseHost(host: unknown): SubscribeMouse | undefined {
 	const fn = (host as {subscribeMouse?: unknown} | null | undefined)?.subscribeMouse;
 	if (typeof fn !== 'function') return undefined;

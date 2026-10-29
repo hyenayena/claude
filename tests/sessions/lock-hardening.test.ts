@@ -82,7 +82,6 @@ test('a stale lock is only removed when it is the file that was judged stale', (
 	const stale = {...valid(), pid: 2 ** 22 + 7, procStart: '1'};
 	writeFileSync(lockPath(d), JSON.stringify(stale));
 	let first = true;
-	// The holder check runs between inspection and removal: swap in a live lock at that moment.
 	const r = acquireLock({
 		dir: d,
 		kind: 'ask',

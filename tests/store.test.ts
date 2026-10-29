@@ -47,7 +47,6 @@ test('failed write leaves the old file intact and no tmp', async () => {
 	const dir = await tmp();
 	const store = createStore(dir);
 	await store.update({lastModel: 'old'});
-	// Making the target a directory forces rename to fail.
 	const bad = await tmp();
 	await mkdir(join(bad, 'state.json'));
 	await assert.rejects(createStore(bad).update({lastModel: 'x'}));

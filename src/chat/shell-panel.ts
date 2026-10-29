@@ -11,7 +11,6 @@ export type ShellPanelOptions = {
 	mount: (build: (control: MountControl) => UiElement, options: {target: 'panel'; activity: true}) => Promise<void>;
 	isFocused: () => boolean;
 	build: (watch: ShellWatch, control: MountControl) => UiElement;
-	// False when the private tmp root is unavailable (live output off).
 	hasTmp: boolean;
 	log?: Logger;
 	now?: () => number;
@@ -22,14 +21,12 @@ export interface ShellPanel {
 	dispose(): void;
 }
 
-// Shows the running Bash calls of the chat in the console panel once one lasts a little while.
 export function createShellPanel(opts: ShellPanelOptions): ShellPanel {
 	const log = opts.log ?? noopLog;
 	const now = opts.now ?? Date.now;
 	const after = opts.showAfterMs ?? SHOW_AFTER_MS;
 	let closeView: (() => void) | undefined;
 	let mounting = false;
-	// One attempt per Bash start; a rejected or unfocused attempt is not retried.
 	let attempted = false;
 	let timer: NodeJS.Timeout | undefined;
 	let seen = new Set<string>();

@@ -44,37 +44,24 @@ export type EngineDeps = {
 	probeLogin?: LoginProbe;
 	isMissingModule: (err: unknown) => boolean;
 	onRulesChanged?: () => void;
-	// Private directory for Claude Code's shell output (CLAUDE_CODE_TMPDIR); throws when unusable.
 	shellTmp?: () => string;
-	// Why Bash cannot be sandboxed (bubblewrap missing or blocked); undefined when it can.
 	sandboxProblem?: (pathVar: string | undefined) => string | undefined;
-	// Runs once the credential is resolved, before any dependency loads (e.g. the one-time notice).
 	onCredential?: (cred: Credential) => Promise<void>;
-	// Loaded together with the SDK so one failure mapping covers them (e.g. the chat UI).
 	preload?: () => Promise<void>;
-	// The one-session lock for each turn (local yena or runner); see sessions/turn-lock.ts.
 	turnLock?: (session: () => ChatSession | undefined) => {acquire(): void; release(): void};
-	// An idle chat ends its Claude Code process after this long (IDLE_CLOSE_MS by default).
 	idleCloseMs?: number;
-	// Stored Claude accounts: the credential channel in yena, the pushed bundle in a runner.
 	vault?: ClaudeVault;
-	// The host's redactor (every module's registered secrets), applied after the chat's own.
 	redactExtra?: (text: string) => string;
-	// A runner cannot save a refreshed login itself: it tells the attached yena, which syncs and pushes.
 	onLoginChanged?: () => void;
 	loginPollMs?: number;
 };
 
-/** How often a running turn checks whether Claude Code refreshed its login. */
 export const LOGIN_POLL_MS = 30_000;
 
-/** How long an idle chat keeps its Claude Code process (it may still write the title into the transcript). */
 export const IDLE_CLOSE_MS = 15_000;
 
 export type EngineIo = {
-	// The real bridge or a proxy to one; without it the console tools are not offered.
 	commandBridge?: CommandBridge;
-	// Persists state: the store itself, or a relay to whoever owns state.json.
 	stateUpdate: (patch: Partial<ClaudeState>) => Promise<unknown>;
 	warn: (text: string) => void;
 };
@@ -86,17 +73,14 @@ export type ChatEngine = {
 	scrub: (s: string) => string;
 	reveal: ReturnType<typeof makeReveal>;
 	paths: ClaudePaths;
-	// State as read when the engine started.
 	state: ClaudeState;
 	resume: string | undefined;
 	shellRoot: string | undefined;
 	applyLive: (patch: LivePatch) => void;
-	/** Stops title timers and closes the session; state writes already queued are awaited by `flush`. */
 	close: () => void;
 	flush: () => Promise<void>;
 };
 
-// How long an account stays aside when the limit report gives no reset time, and after a billing error.
 const LIMIT_HOLD_S = 5 * 3600;
 const BILLING_HOLD_S = 24 * 3600;
 
@@ -114,7 +98,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	}
 	registerLogRedaction(log, cred);
 	const loginSync = loginSyncOf(credOpts);
-	// In yena the sync saves the login itself; a runner asks the attached yena to.
 	let lastSync: Promise<unknown> = Promise.resolve();
 	const saveLoginSoon = (): void => {
 		if (deps.onLoginChanged) {
@@ -188,7 +171,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		log.warn('shell tmp unavailable', {error: errClass(err)});
 	}
 	let saving: Promise<void> = Promise.resolve();
-	// Branching and rewinding apply to the query that opens the chat, not to later respawns.
 	let spawned = false;
 	const firstSpawn = (): boolean => {
 		const first = !spawned;
@@ -196,7 +178,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		return first;
 	};
 
-	// Settings changed while the chat is open: applied to the running query and kept for a respawn.
 	let live = {...(model !== undefined && {model}), tuning: {...tuning}};
 	const applyLive = (patch: LivePatch): void => {
 		live = withPatch(live, patch);
@@ -222,8 +203,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 				.catch(() => io.warn('Warning: could not save the permission rule'));
 		},
 		...(state.chatPermissionMode && {initialMode: state.chatPermissionMode}),
-		// The account is chosen again at every start of Claude Code (a limit may have passed or been hit),
-		// under the session lock, so a login can be swapped into the config dir safely.
 		buildOptions: (abortController, id, prompter) => {
 			try {
 				cred = prepareCredential(credOpts);
@@ -233,9 +212,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			}
 			registerLogRedaction(log, cred);
 			const consoleFlags = createConsoleFlags();
-			// Claude Code narrows a running sandbox at once but never widens it past the one it started with,
-			// so a later `project isolate` would not reach Bash. It starts with no project denies, and the
-			// policy hook narrows it to the real access before every Bash command (beforeBash).
 			const access = paths.projects?.readSync();
 			const box = problem === undefined ? buildSandbox(paths, access && {...access, managed: []}, undefined, undefined, sandboxExtras) : undefined;
 			if (box) sandbox.spawned(box);
@@ -292,7 +268,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 				prepareAccount(ctx, next.name);
 			} catch (err) {
 				if (!(err instanceof LoginUnsavedError)) throw err;
-				// Swapping in another login now would overwrite the refreshed one before it is saved.
 				log.info('account switch skipped', {reason: 'login-unsaved'});
 				saveLoginSoon();
 				return undefined;
@@ -302,8 +277,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	});
 	created = session;
 
-	// The chat's name: Claude Code writes a generated title into the transcript some time after a
-	// turn, so it is read after each turn (and again a little later); the first message stands in.
 	const titleTimers = new Set<NodeJS.Timeout>();
 	const refreshTitle = async (): Promise<void> => {
 		const id = session.sessionId;
@@ -341,7 +314,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		if (e.type === 'state' || (e.type === 'ui' && (e.event.kind === 'task' || e.event.kind === 'session'))) writeStatus();
 	});
 
-	// Claude Code refreshes its login during a run: saved after each turn and checked every 30 s while one runs.
 	let loginPoll: NodeJS.Timeout | undefined;
 	const stopLoginPoll = (): void => {
 		if (loginPoll) clearInterval(loginPoll);
@@ -373,7 +345,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 
 	return {
 		session,
-		// The account in use now: it changes when a limit switches it.
 		get cred() {
 			return cred;
 		},

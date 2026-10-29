@@ -16,9 +16,7 @@ export type FakeCredentials = Credentials & {
 	granted: Set<string>;
 	calls: string[];
 	installed: boolean;
-	/** Makes the next reads fail as a broken vault key would. */
 	broken: boolean;
-	/** Changes the value read back for this account (a store that does not keep what it was given). */
 	corrupt?: string;
 };
 
@@ -27,10 +25,6 @@ const accessError = (kind: string, change: boolean): Error =>
 		code: 'CREDENTIAL_ACCESS',
 	});
 
-/**
- * An in-memory stand-in for the account module's provider as the host hands it to claude: names follow
- * account's rule, one name per account across kinds (also kinds claude cannot see), grants per kind.
- */
 export function fakeCredentials(o: {granted?: string[]; installed?: boolean} = {}): FakeCredentials {
 	const accounts = new Map<string, Stored>();
 	const granted = new Set(o.granted ?? DECLARED);
@@ -93,7 +87,6 @@ export function fakeCredentials(o: {granted?: string[]; installed?: boolean} = {
 	return fake;
 }
 
-/** Puts an account straight into the fake store (as the user would with account commands). */
 export const seed = (f: FakeCredentials, name: string, kind: string, secret?: string, extra: Partial<Stored> = {}): void => {
 	f.accounts.set(name, {kind, fields: {}, secrets: secret === undefined ? {} : {[FIELDS[kind]!.secret]: secret}, disabled: false, ...extra});
 };

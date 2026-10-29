@@ -51,7 +51,6 @@ test('the real entry starts idle without the session lock, reports status and st
 		assert.equal(reply?.status.where, 'runner');
 		assert.equal(reply?.status.attached, false);
 		await assert.rejects(spawnRunner({moduleDir, sessionDir: sb.dir, env: sb.env, timeoutMs: 5_000}), /Could not start the background chat/, 'a second runner is refused while one owns the socket');
-		// The runner ends a control connection after its status reply; stop takes a new one.
 		socket.destroy();
 		const stopper = net.createConnection(started.socketPath);
 		stopper.on('error', () => undefined);

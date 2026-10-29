@@ -43,7 +43,6 @@ const main = async (): Promise<number> => {
 			const paths = resolvePaths(dataDir, moduleDir);
 			return runtimeInfo(paths).cli ? probeLogin({bin: paths.runtimeBin, env: cliEnv(env, paths)}) : undefined;
 		};
-		// No credential channel here: the attached yena pushes the stored accounts.
 		const vault = bundleVault();
 		const runner = await runRunner({
 			dir,
@@ -65,7 +64,6 @@ const main = async (): Promise<number> => {
 						onLoginChanged: control.loginChanged,
 						isMissingModule,
 						shellTmp: ensureShellTmp,
-						// The session lock is held per turn, like a chat in yena: an idle runner blocks nobody.
 						turnLock: session =>
 							createTurnLock({
 								dir,
@@ -89,6 +87,5 @@ const main = async (): Promise<number> => {
 	}
 };
 
-// No signal listeners: SIGTERM keeps its default action and the SDK child ends when its stdin closes.
 process.exitCode = await main();
 process.exit();

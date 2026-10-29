@@ -1,11 +1,8 @@
 import {lstatSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 
-// Claude Code writes the output of a running shell command below CLAUDE_CODE_TMPDIR; a private
-// root we own keeps that output unreadable by other users and gives the watcher a known place.
 export const shellTmpRoot = (uid: number, base = '/tmp'): string => path.join(base, `yena-claude-${uid}`);
 
-/** Creates `dir` (mode 0700) or checks an existing one: a real directory, ours, closed to others. */
 export function ensurePrivateDir(dir: string, uid: number, label = 'Directory'): string {
 	try {
 		mkdirSync(dir, {mode: 0o700});
@@ -27,7 +24,6 @@ export function ensureShellTmp(opts: {uid?: number; base?: string} = {}): string
 
 export const sessionDirOf = (shellRoot: string): string => path.join(shellRoot, 'session');
 
-/** Lock file and control socket of the running session live here, below the shell tmp root. */
 export function ensureSessionDir(opts: {uid?: number; base?: string} = {}): string {
 	const uid = opts.uid ?? process.getuid?.();
 	if (uid === undefined) throw new Error('No user id available');

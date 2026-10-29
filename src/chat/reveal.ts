@@ -3,7 +3,6 @@ const LINE_SEP_CHARS = [0x2028, 0x2029];
 const OPEN = '\u27e6';
 const CLOSE = '\u27e7';
 
-// Delimiters make revealed tokens unforgeable: literal delimiters are revealed too.
 const token = (body: string): string => `${OPEN}${body}${CLOSE}`;
 
 const NAMED: Record<number, string> = {
@@ -27,7 +26,6 @@ const isInvisible = (cp: number): boolean =>
 
 const FORMAT = /^\p{Cf}$/u;
 
-/** Approval-view counterpart of makeScrub: control and format characters are shown, never stripped. */
 export const makeReveal =
 	(redact: (s: string) => string) =>
 	(s: string): string => {

@@ -21,7 +21,6 @@ const splitLines = (text: string): string[] => {
 	return lines;
 };
 
-// Carriage returns take part in the comparison but not in the displayed text.
 const shown = (line: string): string => (line.endsWith('\r') ? line.slice(0, -1) : line);
 
 const summary = (added: number, removed: number): Preview => ({
@@ -32,7 +31,6 @@ const summary = (added: number, removed: number): Preview => ({
 	approximate: true,
 });
 
-// Returns the edit script of the middle part, or undefined when the edit distance exceeds maxEdit.
 function myers(a: number[], b: number[], maxEdit: number): ('eq' | 'add' | 'del')[] | undefined {
 	const n = a.length;
 	const m = b.length;
@@ -72,7 +70,6 @@ function myers(a: number[], b: number[], maxEdit: number): ('eq' | 'add' | 'del'
 		const snap = trace[d] as Int32Array;
 		const at = (k: number) => snap[k + d + 1] as number;
 		const k = x - y;
-		// snap holds the state before step d, i.e. the values written during step d-1.
 		const prevK = k === -d || (k !== d && at(k - 1) < at(k + 1)) ? k + 1 : k - 1;
 		const prevX = at(prevK);
 		const prevY = prevX - prevK;

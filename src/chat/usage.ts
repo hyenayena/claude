@@ -1,7 +1,5 @@
-/** Token counts of API calls, as Claude Code reports them on each assistant message. */
 export type Usage = {calls: number; input: number; cacheWrite: number; cacheRead: number; output: number};
 
-/** The main chat and its subagents, counted apart: agents start cold and pay for their own context. */
 export type ChatUsage = {main: Usage; agents: Usage};
 
 export const emptyUsage = (): Usage => ({calls: 0, input: 0, cacheWrite: 0, cacheRead: 0, output: 0});
@@ -12,10 +10,6 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 const MAX_SEEN = 2000;
 
-/**
- * Adds up the usage of assistant messages. One API call can arrive as several assistant messages with the
- * same message id and usage, so each id counts once.
- */
 export class UsageMeter {
 	private readonly seen = new Set<string>();
 	total: ChatUsage = emptyChatUsage();
@@ -50,7 +44,6 @@ export const subtract = (a: Usage, b: Usage): Usage => ({
 
 const k = (v: number): string => (v < 1000 ? `${v}` : v < 1_000_000 ? `${(v / 1000).toFixed(1)}k` : `${(v / 1_000_000).toFixed(2)}M`);
 
-/** One line per part, e.g. "main: 12 calls, context 1.20M (cache write 40.0k), output 8.1k". */
 export const usageLines = (u: ChatUsage): string[] =>
 	(['main', 'agents'] as const).map(part => {
 		const x = u[part];

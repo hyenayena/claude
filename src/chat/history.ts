@@ -50,7 +50,6 @@ function* entries(text: string): Generator<Entry> {
 	}
 }
 
-// A prompt the user typed: string content, not a tool result, not injected context.
 const promptOf = (e: Entry): string | undefined =>
 	e.type === 'user' && e.isMeta !== true && e.isSidechain !== true && typeof e.message?.content === 'string'
 		? e.message.content
@@ -58,7 +57,6 @@ const promptOf = (e: Entry): string | undefined =>
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 
-/** Sessions of this project, newest first, with Claude Code's title or the first prompt. */
 export async function listSessions(configDir: string, projectDir: string, limit = 30): Promise<SessionSummary[]> {
 	const dir = path.dirname(transcriptFile(configDir, projectDir, 'x'));
 	let names: string[];
@@ -101,7 +99,6 @@ export async function listSessions(configDir: string, projectDir: string, limit 
 	return out;
 }
 
-/** The prompts typed in a session, oldest first, with the entry each one follows (for rewinding). */
 export async function listPrompts(file: string): Promise<PromptEntry[]> {
 	const text = await readTail(file);
 	if (text === undefined) return [];
@@ -114,7 +111,6 @@ export async function listPrompts(file: string): Promise<PromptEntry[]> {
 	return out;
 }
 
-/** The last `limit` prompts and answers of a session, for showing a resumed chat; `until` stops before that prompt. */
 export async function readHistory(file: string, limit = 40, until?: string): Promise<HistoryMessage[]> {
 	const text = await readTail(file);
 	if (text === undefined) return [];
@@ -134,7 +130,6 @@ export async function readHistory(file: string, limit = 40, until?: string): Pro
 			.map(b => b.text as string)
 			.join('');
 		if (text.trim() === '') continue;
-		// Claude Code writes one line per content block; blocks of one message are joined.
 		const last = out.at(-1);
 		if (last?.role === 'assistant' && e.message.id !== undefined && e.message.id === lastAssistantId) last.text += text;
 		else if (last?.role === 'assistant') last.text += `\n\n${text}`;
@@ -161,10 +156,6 @@ const capLines = (text: string, max: number): string[] => {
 	return lines.length > max ? [...lines.slice(0, max), `… ${lines.length - max} more lines`] : lines;
 };
 
-/**
- * The whole conversation with every tool call and result, as plain lines for the transcript viewer
- * (Ctrl+O). Lines are raw text: the caller scrubs them before display.
- */
 export async function readTranscriptDetail(file: string): Promise<string[]> {
 	const text = await readTail(file);
 	if (text === undefined) return [];

@@ -27,7 +27,6 @@ const assistantText = (msg: Loose): string => {
 export class TurnFailure extends Error {
 	sessionId?: string;
 	model?: string;
-	// The last limit report of the turn (its reset time decides how long the account stays aside).
 	rateLimit?: RateLimitInfo;
 	kind?: FailureKind | 'auth' | 'resume' | 'cancelled' | 'timeout';
 
@@ -84,7 +83,6 @@ export const runTurn = async (p: {
 		try {
 			q.close?.();
 		} catch {
-			// closing an already finished query is harmless
 		}
 	};
 	signal?.addEventListener('abort', onAbort, {once: true});
@@ -155,7 +153,6 @@ export const runTurn = async (p: {
 		try {
 			q.close?.();
 		} catch {
-			// already closed
 		}
 	}
 

@@ -20,14 +20,11 @@ export interface RunningTool {
 	name: string;
 	input: unknown;
 	elapsedSeconds: number;
-	// For an Agent call: the subagent's latest tool call.
 	activity?: {name: string; input: unknown};
 }
 
 export type StatusLine =
-	// tokens: Claude Code's estimate of the thinking so far.
 	| {kind: 'thinking'; tokens?: number}
-	// Claude is writing the input of a tool call; chars of JSON so far.
 	| {kind: 'tool-input'; name: string; chars: number}
 	| {kind: 'compacting'}
 	| {kind: 'retry'; attempt: number; maxRetries: number; delayMs: number}
@@ -37,7 +34,6 @@ export type Todo = {content: string; status: 'pending' | 'in_progress' | 'comple
 
 const MAX_TODOS = 50;
 
-/** The checklist from a TodoWrite call; malformed items are dropped. */
 export function parseTodos(input: unknown): Todo[] {
 	const list = (input as {todos?: unknown} | null)?.todos;
 	if (!Array.isArray(list)) return [];
@@ -52,7 +48,6 @@ export function parseTodos(input: unknown): Todo[] {
 }
 
 export interface TranscriptState {
-	// Claude's checklist (TodoWrite), shown while something on it is open.
 	todos: Todo[];
 	phase: Phase;
 	liveRaw: string;
@@ -66,15 +61,11 @@ export interface TranscriptState {
 	pending: number;
 	mode: ChatMode;
 	approvals: number;
-	// Latest rate-limit report; the status bar derives its indicator from it.
 	limit?: RateLimitInfo;
-	// Held until the turn ends: a limit or context outcome already says it all.
 	pendingApiError?: string;
-	// The account the chat runs on: the one it started with, then the one it switched to after a limit.
 	account?: string;
 }
 
-// Raw (unscrubbed) items; present.ts turns them into display strings.
 export type Out =
 	| {kind: 'assistant'; text: string; interrupted: boolean}
 	| {kind: 'tool'; name: string; input: unknown; isError: boolean; text: string; patch?: ToolPatch}
@@ -167,8 +158,6 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 		case 'cli-state':
 			return {state, out: []};
 		case 'task':
-			// A background task reports once, when it settles; foreground ones show as their tool call.
-			// A new state object either way: the status bar counts tasks and must render again.
 			if (e.status === 'running' || !e.background) return {state: {...state}, out: []};
 			return {state: {...state}, out: [{kind: 'task', status: e.status, description: e.description ?? 'task', ...(e.summary !== undefined && {summary: e.summary})}]};
 		case 'thinking-text':
@@ -291,7 +280,6 @@ export function reduceTranscript(state: TranscriptState, event: ChatEvent): Step
 			return {state, out: []};
 		case 'account':
 			return {
-				// The limit error that caused the switch is answered by this notice; the turn goes on.
 				state: {...state, account: event.account, limit: undefined, pendingApiError: undefined},
 				out: [{kind: 'account', account: event.account, previous: event.previous, reason: event.reason}],
 			};

@@ -1,8 +1,5 @@
 import {matchTable, renderTable} from './markdown-table.js';
 
-// Terminal styling for Claude's Markdown. Input is already scrubbed (no escapes); the output adds
-// only constant SGR codes. It is a light reading aid, not a full CommonMark renderer.
-
 const S = {
 	reset: '\u001b[0m',
 	dim: '\u001b[2m',
@@ -30,7 +27,6 @@ const KEYWORDS = new Set(
 	).split(' '),
 );
 
-// One token per match: comment, string, number, word.
 const TOKEN = /(\/\/.*$|#.*$|--\s.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b\d[\d_.]*(?:e[+-]?\d+)?\b)|([A-Za-z_$][\w$]*)/g;
 
 function highlightLine(line: string, lang: string): string {
@@ -48,7 +44,6 @@ function highlightLine(line: string, lang: string): string {
 }
 
 function inline(text: string): string {
-	// Code spans first, kept out of the other rules by placeholders.
 	const spans: string[] = [];
 	let out = text.replace(/`([^`\n]+)`/g, (_m, code: string) => {
 		spans.push(`${S.cyan}${code}${S.fgOff}`);
@@ -71,10 +66,6 @@ export function renderMarkdown(text: string, options: MarkdownOptions = {}): str
 	return renderMarkdownBlocks(text, options).text;
 }
 
-/**
- * The rendered text and its fenced code blocks: the index of each header line in the output and the
- * code as written. With `copyLabel` a header of a non-empty block ends with "· copy".
- */
 export function renderMarkdownBlocks(text: string, options: MarkdownOptions = {}): {text: string; codeBlocks: CodeBlock[]} {
 	const width = options.width !== undefined && Number.isFinite(options.width) ? options.width : DEFAULT_WIDTH;
 	const out: string[] = [];
@@ -148,7 +139,6 @@ export function renderMarkdownBlocks(text: string, options: MarkdownOptions = {}
 
 const FENCE = /^\s*(```+|~~~+)\s*([\w+#.-]*)\s*$/;
 
-/** The opening line of the code fence still open at the end of `text`, if any. */
 export function openFenceLine(text: string): string | undefined {
 	let open: {line: string; marker: string} | undefined;
 	for (const line of text.split('\n')) {

@@ -6,7 +6,6 @@ export type CredentialSource = 'env' | 'claude-login' | 'stored';
 export type CredentialInfo = {
 	readonly kind: CredentialKind;
 	readonly source: CredentialSource;
-	// The account it belongs to (see accounts.ts); unset in old callers' literals.
 	readonly account?: string;
 };
 
@@ -28,7 +27,6 @@ export type TurnResult = {
 export type ClaudeState = {
 	lastSessionId?: string;
 	lastModel?: string;
-	// Model for new chats (an alias such as "opus" or a full model id); unset means the account default.
 	chatModel?: string;
 	chatEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 	chatThinking?: 'disabled';
@@ -38,9 +36,7 @@ export type ClaudeState = {
 	chatInputMode?: 'vim';
 	chatMcp?: 'off';
 	chatHooks?: 'on';
-	// The chat finishes its work in a background process after yena exits.
 	chatKeepRunning?: 'on';
-	// Bash commands allowed with "always"; they stay allowed in later chats.
 	allowedCommands?: string[];
 	subscriptionNoticeShown?: boolean;
 };

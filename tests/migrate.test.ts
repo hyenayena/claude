@@ -19,7 +19,6 @@ const login = (token: string, expiresAt: number) => ({
 	oauthAccount: ALICE,
 });
 
-// The stores claude kept before the account module held its credentials.
 const writeLegacy = async (dataDir: string) => {
 	await writeFile(
 		accountsFile(dataDir),
@@ -40,7 +39,6 @@ const writeLegacy = async (dataDir: string) => {
 	await writeFile(legacyFile(dataDir), JSON.stringify({kind: 'api-key', value: KEY2, savedAt: ''}));
 };
 
-// Claude Code refreshed the installed login after it was last saved.
 const writeWorkingCopy = async (dataDir: string, token: string, expiresAt: number) => {
 	await mkdir(join(dataDir, 'config'), {recursive: true});
 	await writeFile(join(dataDir, 'config', '.credentials.json'), JSON.stringify(login(token, expiresAt).credentials));
@@ -94,7 +92,6 @@ test('migration is idempotent: a rerun after a crash before the cleanup reuses w
 	const {dataDir, fake, run} = await setup();
 	await run();
 	const before = JSON.stringify(secretsOf(fake));
-	// As if the process died after writing to the store but before removing the old files.
 	await writeLegacy(dataDir);
 	const created = fake.calls.filter(c => c.startsWith('create')).length;
 	assert.deepEqual(await run(), {moved: 4, skipped: 0});

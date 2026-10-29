@@ -31,7 +31,6 @@ const setup = (over: Record<string, unknown> = {}, makeTasks = true) => {
 };
 type Ctx = ReturnType<typeof setup>;
 
-// The baseline listing runs asynchronously right after the tool-use.
 const begin = async (watch: Ctx['watch'], id: string, input?: unknown) => {
 	watch.feed(use(id, input));
 	await wait(40);
@@ -112,7 +111,6 @@ test('two pending calls, or two candidate files, are ambiguous', async () => {
 	await wait(100);
 	assert.equal(b.watch.get().calls.length, 0);
 	b.watch.feed(result('t1'));
-	// a later call starts clean
 	await begin(b.watch, 't3');
 	writeFileSync(join(b.tasks, 'a3.output'), 'z\n');
 	await wait(100);

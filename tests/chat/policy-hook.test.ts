@@ -196,7 +196,6 @@ test('the hook denies the account secrets to Bash and the file tools', async () 
 });
 
 test('the account vault and every other denied account path are refused in every layer; ssh_config stays readable', async () => {
-	// Inside a readable root, so only the deny list keeps them out.
 	const accountDir = path.join(projectDir, 'mount', 'account');
 	const names = ['accounts.json', 'kinds.json', 'secrets', 'keys', 'disabled', 'vault', 'grants.json'];
 	const secretDirs = names.map(n => path.join(accountDir, n));

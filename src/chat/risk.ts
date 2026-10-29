@@ -10,7 +10,6 @@ type Scan = {
 
 const OPERATORS = new Set(['|', '&', ';', '\n', '(', ')']);
 
-// Single pass, no backtracking: quotes and escapes are tracked only to avoid obvious false positives.
 function scan(command: string): Scan {
 	const segments: Segment[] = [];
 	let words: string[] = [];
@@ -125,7 +124,6 @@ const NAMED = [
 const base = (word: string): string => word.slice(word.lastIndexOf('/') + 1);
 const isAssign = (word: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.test(word);
 
-// Index of the command word, skipping env assignments, wrappers and their options.
 function commandIndex(words: string[]): {at: number; elevated: boolean} {
 	let at = 0;
 	let elevated = false;

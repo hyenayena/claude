@@ -26,19 +26,12 @@ const MAX_COMMANDS = 500;
 export type RemoteOptions = {
 	socketPath: string;
 	log?: Logger;
-	// Runs the console commands the background chat asks for; without it they answer `off`.
 	commandBridge?: CommandBridge;
-	// Shown in confirmation prompts for console commands.
 	cwd: string;
-	// Persists what the runner reports about state.json (this process owns the file).
 	stateUpdate: (patch: StatePatch) => Promise<unknown>;
-	// The connection ended or the chat was closed by the other side.
 	onLost?: (reason: string) => void;
-	// Sent after the hello when this attach starts a fresh runner.
 	open?: {open: OpenSpec; tuning: ChatTuning; mode?: ChatMode; keep: boolean};
-	// The stored accounts the runner may use: sent before the open and again whenever they change.
 	credentials?: {current(): CredentialBundle; onChange(cb: (b: CredentialBundle) => void): () => void};
-	// The runner's working copy holds a login that is not saved yet; this side saves it (and pushes again).
 	onLoginChanged?: () => void;
 	rpcTimeoutMs?: number;
 	connectTimeoutMs?: number;
@@ -57,15 +50,11 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 
 let seq = 0;
 
-/** A chat that runs in a background process, mirrored locally over the runner's unix socket. */
-/** A send refused because another session (another yena or runner) is working right now. */
 export const BUSY_SEND = 'Another session is working right now. Your message stays in the input; send it when that session is done.';
 
 export class RemoteChatSession implements ChatHandle {
 	readonly detachesOnClose = true;
-	/** Set when the attach found a runner that was already working (no `open` was sent). */
 	reattached = false;
-	/** Whether the chat was still answering when this side detached. */
 	detachedWhileRunning = false;
 
 	private readonly log: Logger;
@@ -74,7 +63,6 @@ export class RemoteChatSession implements ChatHandle {
 	private readonly runs = new Map<string, AbortController>();
 	private readonly locals: Local[] = [];
 	private readonly optimistic = new Set<string>();
-	// Bridge ids already approved: by the runner's chat (bridgeRun approved) or by the user through a bridgeAsk (older runners).
 	private readonly approvedRuns = new Set<string>();
 	private remotePending: PermissionRequest[] = [];
 	private readonly _tasks = new Map<string, TaskInfo>();
@@ -101,7 +89,6 @@ export class RemoteChatSession implements ChatHandle {
 		this.log = opts.log ?? noopLog;
 	}
 
-	/** Connects, optionally opens a fresh chat, and resolves with the mirror once the first snapshot arrived. */
 	static connect(opts: RemoteOptions): Promise<RemoteChatSession> {
 		return new Promise((resolve, reject) => {
 			const socket = net.createConnection(opts.socketPath);
@@ -230,7 +217,6 @@ export class RemoteChatSession implements ChatHandle {
 		if (this._state === 'closed') throw new Error('The chat is closed');
 		if (this._state === 'running') throw new Error('A request is already running');
 		if (this._needsNewSession) throw new Error(RESUME_MESSAGE);
-		// The runner holds the session lock only while it works, so a lock here is another session's.
 		let holder;
 		try {
 			holder = readHolder(path.dirname(this.opts.socketPath)).holder;
@@ -238,14 +224,12 @@ export class RemoteChatSession implements ChatHandle {
 			holder = undefined;
 		}
 		if (holder) throw new Error(BUSY_SEND);
-		// The runner confirms with its own state event; the view needs the flip at once.
 		this._state = 'running';
 		this.write({v: 1, type: 'send', text, ...(opts.command && {command: true})});
 	}
 
 	steer(text: string): void {
 		if (this._state !== 'running') throw new Error('No request is running');
-		// The runner answers with "sent", or with "steer-failed" when the turn was already gone.
 		this.write({v: 1, type: 'steer', text});
 	}
 
@@ -317,7 +301,6 @@ export class RemoteChatSession implements ChatHandle {
 		this.write({v: 1, type: 'setKeep', keep});
 	}
 
-	/** Tells the runner which console commands exist; sent after attach and after each console run. */
 	refreshCommands(): void {
 		const list = this.opts.commandBridge?.list();
 		if (!list) return;
@@ -363,13 +346,11 @@ export class RemoteChatSession implements ChatHandle {
 		});
 	}
 
-	/** Asks the runner to close the chat, then leaves. */
 	end(): void {
 		this.write({v: 1, type: 'close'});
 		this.close();
 	}
 
-	/** Leaves the chat; the background process keeps it. Idempotent. */
 	close(): void {
 		if (this._state === 'closed') return;
 		this.detachedWhileRunning = this._state === 'running';
@@ -566,7 +547,6 @@ export class RemoteChatSession implements ChatHandle {
 			});
 	}
 
-	// The same confirmation the chat shows for a command Claude wants to run, kept in this process.
 	private confirmLocal(req: Pick<CommandConfirmRequest, 'line'>, signal: AbortSignal | undefined): Promise<boolean> {
 		if (this._state === 'closed' || signal?.aborted) return Promise.resolve(false);
 		return new Promise<boolean>(resolve => {
@@ -605,7 +585,6 @@ export class RemoteChatSession implements ChatHandle {
 		entry.detach();
 	}
 
-	// The other side ended or the socket broke: the mirror closes and the view is told once.
 	private lose(reason: string): void {
 		if (this._state === 'closed') return;
 		if (!this.lostReported) {
@@ -645,7 +624,6 @@ export class RemoteChatSession implements ChatHandle {
 			try {
 				cb(e);
 			} catch {
-				// a faulty subscriber must not break the mirror
 			}
 		}
 	}

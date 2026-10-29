@@ -7,13 +7,6 @@ import {errClass, noopLog} from './log.js';
 import {expiresAt, isRecord, type LoginSlot, parseSlot, readJson, readWorkingCopy, sameClaudeAccount, slotDigest} from './login-slot.js';
 import {createCredential, type ClaudeVault, type EntryType, FIELD_OF, type VaultEntry} from './vault.js';
 
-/**
- * Moves the keys, tokens and saved logins claude stored itself (before the account module held them)
- * into the account module, once. The old files are the backup: they go only after every account was
- * written, read back and compared; any error leaves them untouched, and a rerun reuses what was written.
- */
-
-// The old stores, written by symbol only (the chat's Bash guard refuses commands naming them).
 export const accountsFile = (dataDir: string): string => path.join(dataDir, 'accounts.json');
 export const accountsDir = (dataDir: string): string => path.join(dataDir, 'accounts');
 export const legacyFile = (dataDir: string): string => path.join(dataDir, 'credentials.json');
@@ -58,7 +51,6 @@ function readLegacy(dataDir: string, configDir: string): Legacy {
 		}
 	}
 	if (typeof f.installed === 'string' && seen.has(f.installed)) out.installed = f.installed;
-	// The installed login may have been refreshed in the working copy since it was saved.
 	const inst = out.accounts.find(a => a.name === out.installed && a.type === 'login');
 	const wc = readWorkingCopy(configDir);
 	if (inst?.slot && wc.state === 'ok' && sameClaudeAccount(wc.slot, inst.slot) && (expiresAt(wc.slot) ?? 0) >= (expiresAt(inst.slot) ?? 0)) inst.slot = wc.slot;
@@ -73,7 +65,6 @@ function readLegacy(dataDir: string, configDir: string): Legacy {
 	return out;
 }
 
-/** How many stored accounts wait in the old files (for `claude auth status`). */
 export function legacyCount(dataDir: string, configDir: string): number {
 	if (!legacyPresent(dataDir)) return 0;
 	return readLegacy(dataDir, configDir).accounts.length;

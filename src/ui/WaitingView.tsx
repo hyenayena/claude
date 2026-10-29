@@ -8,7 +8,6 @@ export const WAIT_POLL_MS = 1000;
 export type WaitState = {free: boolean; title?: string};
 
 export interface WaitingViewProps {
-	// One look at the session lock: whether it is free, and the name of what holds it.
 	check: () => Promise<WaitState>;
 	onFree: () => void;
 	onCancel: () => void;

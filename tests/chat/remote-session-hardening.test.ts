@@ -53,7 +53,6 @@ async function fakeRunner(raw?: string) {
 	return {socketPath, frames, send, until, sendRaw: (t: string) => conn!.write(t), drop: () => conn?.destroy()};
 }
 
-// Real timers are mocked in some tests, so polling there must not use setTimeout.
 const immediately = async (pred: () => boolean) => {
 	for (let i = 0; i < 2000 && !pred(); i++) await new Promise(res => setImmediate(res));
 	assert.ok(pred(), 'condition not reached');
@@ -156,7 +155,6 @@ test('a console prompt that nobody answers is cancelled after the idle limit', a
 	r.send({type: 'bridgeAsk', id: 'a1', request: {line: 'exit', command: 'exit', caller: 'yena'}});
 	await r.until(() => s.pendingPermissions.length === 1);
 	mock.timers.enable({apis: ['setTimeout']});
-	// the timer was armed with real time before mocking, so a fresh prompt is needed under the mock clock
 	r.send({type: 'bridgeAsk', id: 'a2', request: {line: 'exit', command: 'exit', caller: 'yena'}});
 	await immediately(() => s.pendingPermissions.length === 2);
 	mock.timers.tick(PERMISSION_IDLE_MS + 1);

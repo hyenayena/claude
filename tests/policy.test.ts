@@ -233,12 +233,10 @@ describe('chat static policy', () => {
 		assert.deepEqual(s.permissions.allow, [`Edit(/${paths.mdDir}/**)`]);
 		const hubbed = buildChatSettings({...paths, hubDir: '/data/md'}).permissions;
 		assert.deepEqual(hubbed.allow, ['Edit(//data/md/**)']);
-		// Ask rules win over the hub's allow rule: the instructions loaded into every session prompt.
 		assert.deepEqual(hubbed.ask, ['Edit(//data/md/CLAUDE.md)', 'Edit(//data/md/SOUL.md)']);
 		assert.ok(s.permissions.deny.includes('Edit(./CLAUDE.md)'));
 		assert.ok(s.permissions.deny.includes(`Read(/${paths.configDir}/history.jsonl)`));
 		assert.ok(s.permissions.deny.includes(`Read(/${paths.configDir}/projects/**/*.jsonl)`));
-		// Claude Code resolves symlinks in rule paths: no deny rule may name the md link or the linked config folders.
 		for (const rule of hubbed.deny) {
 			assert.ok(!rule.startsWith(`Edit(/${paths.mdDir}`), rule);
 			for (const d of ['agents', 'skills', 'commands', 'output-styles']) {
@@ -246,7 +244,6 @@ describe('chat static policy', () => {
 			}
 		}
 		for (const rule of buildAskSettings(paths).permissions.deny) {
-			// The chat leaves the other env files to the policy hook, so templates can be read and written.
 			if (rule === 'Read(**/.env*)' || rule === 'Read(**/id_rsa*)') continue;
 			assert.ok(s.permissions.deny.includes(rule), rule);
 		}
@@ -379,12 +376,10 @@ describe('classifyEditTarget', () => {
 		for (const name of ['.env.local', '.env.production', '.env.example.bak', '.envrc', 'sub/.env.test']) {
 			assert.equal(await cls(f(name)), 'deny-secret', name);
 		}
-		// Templates are ordinary dotfiles: asked for, never denied.
 		for (const name of ['.env.example', '.env.sample', '.env.template', '.env.dist', '.env.local.example']) {
 			assert.equal(await cls(f(name)), 'prompt-only', name);
 		}
 		assert.equal(await cls(f('sub/.env.EXAMPLE')), 'auto-eligible');
-		// Code named after env files and public keys are not secrets; every SSH private key name is.
 		for (const name of ['.env.d.ts', 'src/.environment.ts', 'docs/id_rsa.pub', 'keys/id_ed25519.pub', 'src/key.ts', 'monkey.json', '.npmrc.example']) {
 			assert.notEqual(await cls(f(name)), 'deny-secret', name);
 		}

@@ -9,7 +9,6 @@ import {isReadOnlyDir, resolvePaths, withProjects} from '../src/config.js';
 import type {ProjectAccess, ProjectAccessReader} from '../src/deps/project.js';
 import {buildScope, classifyEditTarget, isPathAllowed, isYenaCheckout} from '../src/policy.js';
 
-// IMG-9: the read-only image at /app, yena's working copy in the workplace, the host's state dir.
 const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'claude-image-policy-')));
 after(() => rmSync(tmp, {recursive: true, force: true}));
 

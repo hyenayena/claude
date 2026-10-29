@@ -5,7 +5,6 @@ export type LogRecord = {level: 'error' | 'warn' | 'info' | 'debug'; scope: stri
 export type FakeLog = Logger & {
 	records: LogRecord[];
 	redactors: Array<(text: string) => string>;
-	/** Record messages and `addRedactor` calls (as `<addRedactor>`) in call order. */
 	trail: string[];
 };
 

@@ -32,13 +32,10 @@ export const NEEDS_MOUNT_MESSAGE = '"claude chat" needs an interface that can sh
 export type ChatUi = {
 	createChatElement: (props: ChatViewProps) => UiElement;
 	createPickerElement?: (props: ListPickerProps) => UiElement;
-	// Live Bash output in the console panel; without it the panel is never shown.
 	createShellElement?: (watch: ShellWatch, host?: ViewHost) => UiElement;
-	// Shown while another session holds the one-session lock.
 	createWaitingElement?: (props: WaitingViewProps) => UiElement;
 };
 
-// Where a chat runs: this process, a background runner that is attached or spawned, or not yet (the lock is taken).
 export type ChatRoute =
 	| {kind: 'local'; release: () => void}
 	| {kind: 'attach'; socketPath: string; release: () => void}
@@ -46,9 +43,7 @@ export type ChatRoute =
 	| {kind: 'wait'; message: string};
 
 export type ChatRouteRequest = {
-	// A running background chat may be attached to (otherwise the open waits for it).
 	attach: boolean;
-	// Run the chat in a background runner that outlives yena.
 	keep: boolean;
 };
 
@@ -59,62 +54,41 @@ export type ChatRunDeps = {
 	moduleDir?: string;
 	log?: Logger;
 	loadChatQuery: () => Promise<ChatQueryFn>;
-	// SDK helpers for the in-process console tools; without it (or without a command bridge) the tools are not offered.
 	loadConsoleSdk?: () => Promise<ConsoleSdk>;
 	loadUi: () => Promise<ChatUi>;
 	registerAbort?: (c: AbortController) => () => void;
 	store: {read: () => Promise<ClaudeState>; update: (patch: Partial<ClaudeState>) => Promise<unknown>};
 	showNoticeOnce: (cred: CredentialInfo, ctx: CommandContext) => Promise<void>;
-	// Detects a Claude Code login; only consulted when no environment credential is set.
 	probeLogin?: LoginProbe;
 	isMissingModule: (err: unknown) => boolean;
 	acquire: () => () => void;
-	// Receives the view's close function once the chat is shown.
 	onMount?: (close: () => void) => void;
-	// Receives the running session, e.g. to apply a permission mode chosen in the settings.
 	onSession?: (session: ChatHandle | undefined) => void;
-	// Receives the function that applies a settings change to this chat (undefined once it closes).
 	onLive?: (apply: ((patch: LivePatch) => void) | undefined) => void;
-	// Receives the open chat view's way to take a message from outside ("claude send"); undefined once it closes.
 	onInbox?: (deliver: ((text: string) => void) | undefined) => void;
 	onRulesChanged?: () => void;
-	// Private directory for Claude Code's shell output (CLAUDE_CODE_TMPDIR); throws when unusable.
 	shellTmp?: () => string;
-	// 'vim' or 'normal' editing for the chat input, read on every key.
 	inputMode?: () => 'normal' | 'vim';
-	// The one-session lock for each turn of a chat in this process (with `route`).
 	turnLock?: EngineDeps['turnLock'];
-	// With `route` the single-session lock is handled there instead of `acquire`.
 	route?: (req: ChatRouteRequest) => ChatRoute;
-	// One look at the lock while waiting; the title is of whatever holds it.
 	peek?: () => Promise<{free: boolean; title?: string}>;
 	waitPollMs?: number;
 	spawnRunner?: typeof spawnRunner;
-	// Overrides for the connection to a background chat (tests).
 	remote?: {rpcTimeoutMs?: number; connectTimeoutMs?: number};
-	// Stored Claude accounts (the credential channel); without it only the environment variables count.
 	vault?: ClaudeVault;
-	// The host's redactor, applied after the chat's own.
 	redactExtra?: (text: string) => string;
 };
 
-// `resume` names a session to continue; otherwise `fresh` picks a new one or the last one.
 export type ChatOpen = {
 	fresh: boolean;
 	model?: string;
 	tuning?: ChatTuning;
 	resume?: string;
-	// Continue `resume` as a new session (a branch) instead of in place.
 	fork?: boolean;
-	// With `resume`: keep the conversation only up to this entry (rewind).
 	resumeAt?: string;
-	// Shown history stops before this prompt (rewind).
 	historyUntil?: string;
-	// Text put into the input when the chat opens.
 	draft?: string;
-	// A message sent as soon as the chat opens (as if typed and sent).
 	send?: string;
-	// A background chat that is already running may be attached to instead of waiting for it.
 	attach?: boolean;
 };
 
@@ -152,7 +126,6 @@ export const openChat = async (open: ChatOpen, ctx: CommandContext, deps: ChatRu
 	}
 };
 
-// Waits (with a view) while another session holds the lock; undefined when the wait was cancelled.
 const resolveRoute = async (
 	open: ChatOpen,
 	keep: boolean,
@@ -192,7 +165,6 @@ type ViewSource = {
 	reveal: (s: string) => string;
 	paths: ClaudePaths;
 	state: ClaudeState;
-	// The session whose earlier messages are shown.
 	resume: string | undefined;
 	shellRoot: string | undefined;
 	applyLive: (patch: LivePatch) => void;
@@ -258,7 +230,6 @@ const openLocal = async (open: ChatOpen, ctx: CommandContext, deps: ChatRunDeps)
 	};
 };
 
-// The interface half of the chat engine for a chat that runs in a background process.
 const openRemote = async (
 	open: ChatOpen,
 	route: Extract<ChatRoute, {kind: 'attach' | 'spawn'}>,
@@ -322,7 +293,6 @@ const openRemote = async (
 		cwd: paths.projectDir,
 		stateUpdate: patch => deps.store.update(patch),
 		onLost: reason => ctx.print(formatNotice(reason, scrub)),
-		// The runner gets the stored accounts from here and asks this yena to save a refreshed login.
 		credentials: vaultOf(credOpts),
 		onLoginChanged: () => void loginSyncOf(credOpts).sync(),
 		...(ctx.commandBridge && {commandBridge: ctx.commandBridge}),
@@ -407,7 +377,6 @@ const runLocked = async (
 	const {chatUi, session, cred, scrub, reveal, paths, state, resume, shellRoot, applyLive, initialModel, draft, historyUntil, send} = source;
 	const startedAt = Date.now();
 
-	// Project files for @ mentions, read in the background on the first "@" of the chat.
 	let projectFiles: readonly string[] = [];
 	let filesRequested = false;
 	const files = (): readonly string[] => {
@@ -438,7 +407,6 @@ const runLocked = async (
 				})
 			: undefined;
 
-	// A remote chat only detaches here: the background process keeps it.
 	const lifetime = new AbortController();
 	const unregister = deps.registerAbort?.(lifetime);
 	lifetime.signal.addEventListener('abort', () => session.close());
@@ -476,12 +444,10 @@ const runLocked = async (
 				}),
 			});
 		});
-		// A resumed chat shows its earlier messages; the transcript was cleared for the new view.
 		if (resume && printHistory) {
 			const print = printHistory;
 			const earlier = await readHistory(transcriptFile(paths.configDir, paths.projectDir, resume), 40, historyUntil).catch(() => []);
 			for (const m of earlier) {
-				// One empty line before each message, as in the live chat.
 				print(' ');
 				if (m.role === 'user') {
 					print(formatUserLine(m.text, scrub));
@@ -494,7 +460,6 @@ const runLocked = async (
 			if (earlier.length > 0) print(formatNotice('Resumed — earlier messages above.', scrub));
 		}
 		if (!resume && !source.remote?.reattached && printHistory) {
-			// Laid out again by the transcript whenever its width changes; the text is for places without that.
 			const banner = (columns: number): string => formatBanner({build: deps.build, model: initialModel, columns}, scrub);
 			printHistory(banner(chatHost?.columns() || 80), {render: banner});
 		}

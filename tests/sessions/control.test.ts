@@ -26,7 +26,6 @@ test('status and stop over the socket, mode 0600, gone right after close', async
 test('a leftover socket is replaced, a regular file in its place is refused', async () => {
 	const d = dir();
 	const first = await serveControl({dir: d, handlers: {status: () => status, stop: () => {}}});
-	// not closed: simulates a crashed holder that left its socket file behind
 	const second = await serveControl({dir: d, handlers: {status: () => ({...status, state: 'idle'}), stop: () => {}}});
 	assert.equal((await queryStatus(d)).state, 'idle');
 	await second.close();

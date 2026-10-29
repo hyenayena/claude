@@ -29,7 +29,6 @@ export interface PromptKey {
 	char?: string;
 }
 
-/** Normalises Ink's (input, key); anything that is not a single recognised key becomes `other`. */
 export function normalizeKey(input: string, key: Key): PromptKey {
 	if (key.ctrl) return input === 'c' ? {name: 'ctrlC'} : {name: 'other'};
 	if (key.escape) return {name: 'esc'};
@@ -56,7 +55,6 @@ export interface Choice {
 	hotkey: string;
 }
 
-/** Requests that must never be approved with a single keystroke. */
 export const isRestricted = (req: ToolRequest): boolean => req.defaultToNo || req.oversize;
 
 export function choicesFor(req: ToolRequest): Choice[] {
@@ -90,7 +88,6 @@ export interface KeyResult<S> {
 }
 
 export interface Pager {
-	/** Highest valid scroll offset. */
 	max: number;
 	page: number;
 }
@@ -132,7 +129,6 @@ export function toolPromptKey(
 	armMs = ARM_MS,
 	blind = false,
 ): KeyResult<ToolPromptState> {
-	// Stopping is the safe direction, so Ctrl+C is never held back by the typeahead guard
 	if (key.name === 'ctrlC') return decide(state, {kind: 'deny', stop: true}, {stopTurn: true});
 	if (!isArmed(state, now)) return {state};
 	const choices = choicesFor(req);
@@ -182,7 +178,6 @@ export function toolPromptKey(
 		}
 	}
 
-	// Nothing reviewable is on screen, so only refusing is possible
 	if (blind) {
 		const at = choices[state.selected]?.id;
 		if (key.name === 'esc' || (key.name === 'char' && key.char === 'n')) return decide(state, {kind: 'deny'});
@@ -257,7 +252,6 @@ export function initQuestionPrompt(_req: QuestionRequest, now: number, armMs = A
 	return {view: 'choose', index: 0, cursor: 0, picked: [], other: '', otherPicked: false, answers: {}, armedAt: now + armMs};
 }
 
-/** Options plus the synthetic trailing "Other" row. */
 export const questionRows = (spec: QuestionSpec): number => spec.options.length + 1;
 
 const NEED_ONE = 'Select at least one option with Space, then press Enter.';
@@ -387,7 +381,6 @@ export function questionPromptKey(
 }
 
 export interface PromptLayout {
-	/** Rows the whole prompt may use, status bar included. */
 	budget: number;
 	compactChoices: boolean;
 	showHint: boolean;
@@ -395,11 +388,9 @@ export interface PromptLayout {
 	bodyHidden: boolean;
 	pagerRows: number;
 	width: number;
-	/** `tiny` below 10 rows (the command line or path stays in the header), `minimal` below 4: the frame must stay under the terminal height. */
 	tier: 'full' | 'tiny' | 'minimal';
 }
 
-/** Same ceiling as the chat view, minus one more row on very small terminals. */
 export function layoutPrompt(rows: number, columns: number, choiceRows = 5): PromptLayout {
 	const tier = rows < 4 ? 'minimal' : rows < 10 ? 'tiny' : 'full';
 	const budget = tier === 'full' ? Math.max(3, rows >= 12 ? rows - 3 : rows - 2) : Math.max(2, rows - 1);
@@ -461,7 +452,6 @@ function previewRows(preview: Preview, reveal: Reveal, width: number): BodyRow[]
 	return rows;
 }
 
-/** Everything the user should review, already revealed and wrapped to `width` cells. */
 export function toolBodyRows(req: ToolRequest, reveal: Reveal, width: number): BodyRow[] {
 	const rows: BodyRow[] = [];
 	if (req.oversize) {
@@ -528,7 +518,6 @@ export function toolBodyRows(req: ToolRequest, reveal: Reveal, width: number): B
 	return rows;
 }
 
-/** Fits `rows` into `max` rows, ending with a marker row when something was cut. */
 export function clipBody(rows: BodyRow[], max: number, hidden: boolean): BodyRow[] {
 	const marker: BodyRow = {text: '(press v to view)', tone: 'dim'};
 	if (hidden) return rows.length === 0 ? [] : [marker];

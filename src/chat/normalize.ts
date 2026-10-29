@@ -79,7 +79,6 @@ const fromSystem = (msg: Loose): UiEvent[] => {
 		}
 		case 'local_command_output':
 		case 'informational': {
-			// Output of a Claude Code command run from the console; info-level banners stay hidden as in Claude Code.
 			const content = str(msg['content']);
 			if (!content || msg['level'] === 'info') return [];
 			return [{kind: 'text', messageId: str(msg['uuid']) ?? 'local', text: content}];
@@ -175,8 +174,6 @@ const agentActivity = (parent: string, msg: Loose): UiEvent[] => {
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
-// Copies only the hunks of an Edit/Write result; any shape or size problem drops the whole patch,
-// since an oversized runner frame would be dropped together with the tool result.
 const toolPatch = (v: unknown): ToolPatch | undefined => {
 	if (!isRecord(v) || v['staged'] === true) return undefined;
 	const created = v['type'] === 'create';
@@ -191,7 +188,6 @@ const toolPatch = (v: unknown): ToolPatch | undefined => {
 		const hunkLines: string[] = [];
 		for (const l of h['lines']) {
 			if (typeof l !== 'string' || l.length > PATCH_LINE_CAP) return undefined;
-			// Counted as encoded in a runner frame, where escapes and UTF-8 make a line longer.
 			bytes += Buffer.byteLength(JSON.stringify(l));
 			hunkLines.push(l);
 		}
@@ -205,7 +201,6 @@ const toolPatch = (v: unknown): ToolPatch | undefined => {
 const fromUser = (msg: Loose): UiEvent[] => {
 	const out: UiEvent[] = [];
 	const results = blocks(msg).filter(b => b['type'] === 'tool_result');
-	// tool_use_result belongs to the message, so it is only unambiguous with a single result block.
 	const patch = results.length === 1 ? toolPatch(msg['tool_use_result']) : undefined;
 	for (const b of results) {
 		const toolUseId = str(b['tool_use_id']);
@@ -251,7 +246,6 @@ export const normalize = (message: SDKMessage, clock?: Clock): UiEvent[] => {
 	const msg = message as unknown as Loose;
 	if (!isRecord(msg)) return [];
 	const parent = msg['parent_tool_use_id'];
-	// Subagent messages are not shown; only their latest tool call, next to the Agent call that runs them.
 	if (parent != null) return typeof parent === 'string' && msg['type'] === 'assistant' ? agentActivity(parent, msg) : [];
 	switch (msg['type']) {
 		case 'system':

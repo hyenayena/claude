@@ -1,7 +1,6 @@
 export type ChatMode = 'default' | 'acceptEdits' | 'plan' | 'auto';
 export const MODE_CYCLE: readonly ChatMode[] = ['default', 'acceptEdits', 'plan', 'auto'];
 
-/** The SDK permission mode behind a chat mode; accept-edits is implemented by the bridge. */
 export const sdkPermissionMode = (mode: ChatMode): 'auto' | 'plan' | 'default' =>
 	mode === 'auto' || mode === 'plan' ? mode : 'default';
 
@@ -83,7 +82,6 @@ export interface PermissionPrompter {
 	hasApproved(key: string): boolean;
 	remember(key: string): void;
 	audit(entry: AuditEntry): void;
-	// Leaving plan mode after an approved plan.
 	setMode?(mode: ChatMode): void;
 }
 
@@ -109,9 +107,6 @@ export const DENY_REASON_PREFIX = "User's reason: ";
 export const CANCEL_MESSAGE =
 	'The request was cancelled before the user answered (the turn was interrupted or the chat closed).';
 export const DISMISS_MESSAGE = 'The user dismissed the question without answering.';
-// The Bash checks below match the command's text, so they also refuse a command that only mentions a
-// protected name (a heredoc, a sed or grep pattern). The file tools check the real path instead, so
-// pointing the model at them ends the search for a workaround without opening anything up.
 export const BASH_TEXT_NOTE =
 	'This Bash check matches the command text, so it also refuses commands that only mention the name. To write or change a file whose content mentions it (source, tests, docs), use Edit or Write; to search for it, use Grep. Do not read the protected files themselves.';
 export const POLICY_DENY = {
@@ -137,7 +132,6 @@ export const POLICY_DENY = {
 	invalidInput: 'The tool input is invalid.',
 	unknownTool: 'That tool is not available in the chat.',
 } as const;
-// Shown in the prompt when the policy hook forces one.
 export const POLICY_ASK = {
 	instructions: 'CLAUDE.md and SOUL.md are loaded into every session: changes to them always need approval.',
 	newHost: 'First fetch from this host: a URL can carry data out.',

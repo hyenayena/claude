@@ -1,6 +1,5 @@
 import type {EditorAction} from './editor.js';
 
-// A small vim layer for the chat input: INSERT types as usual, NORMAL moves and edits.
 export type VimMode = 'insert' | 'normal';
 export type VimState = {mode: VimMode; pending: '' | 'd' | 'c' | 'y'};
 
@@ -8,22 +7,16 @@ export const vimStart: VimState = {mode: 'insert', pending: ''};
 
 export type VimKey = {input: string; escape?: boolean; return?: boolean; leftArrow?: boolean; rightArrow?: boolean; upArrow?: boolean; downArrow?: boolean; backspace?: boolean};
 
-/** What the chat does for a key in NORMAL mode (or Esc in INSERT). */
 export type VimEffect =
 	| {kind: 'edit'; actions: EditorAction[]}
 	| {kind: 'submit'}
 	| {kind: 'undo'}
 	| {kind: 'history'; step: -1 | 1}
-	// Esc in NORMAL: the chat's own Esc (interrupt, clear, open the console).
 	| {kind: 'escape'}
 	| {kind: 'none'};
 
 const edit = (...actions: EditorAction[]): VimEffect => ({kind: 'edit', actions});
 
-/**
- * One key while vim mode is on. INSERT keys other than Esc are not handled here (the chat types
- * them); `handled: false` tells the chat to treat the key as usual.
- */
 export function vimKey(state: VimState, key: VimKey): {state: VimState; effect: VimEffect; handled: boolean} {
 	if (state.mode === 'insert') {
 		if (key.escape) return {state: {mode: 'normal', pending: ''}, effect: edit({type: 'left'}), handled: true};
@@ -55,7 +48,6 @@ export function vimKey(state: VimState, key: VimKey): {state: VimState; effect: 
 		const actions = ch === op ? whole : killed[ch];
 		if (!actions) return normal({kind: 'none'});
 		if (op === 'y') {
-			// Yank = kill then put the text straight back, so the kill ring holds it and nothing changes.
 			return normal(edit(...actions, {type: 'yank'}));
 		}
 		return normal(edit(...actions), op === 'c' ? 'insert' : 'normal');
@@ -109,7 +101,6 @@ export function vimKey(state: VimState, key: VimKey): {state: VimState; effect: 
 			return normal(edit({type: 'delete'}), 'insert');
 		case 'S':
 			return normal(edit({type: 'home'}, {type: 'killEnd'}), 'insert');
-		// ":" starts typing a command such as ":q" on the line.
 		case ':':
 			return normal(edit({type: 'insert', text: ':'}), 'insert');
 		case 'd':

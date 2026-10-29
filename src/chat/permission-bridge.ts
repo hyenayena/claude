@@ -42,7 +42,6 @@ type Extras = {decisionReasonType?: unknown; requiresUserInteraction?: unknown};
 
 const PREVIEW_TIMEOUT_MS = 1500;
 export const PLAN_ACCEPT_EDITS_LABEL = 'Yes, and accept edits';
-// The MCP tool name travels inside the request input under this key, for the prompt to show.
 export const MCP_TOOL_FIELD = '__mcpTool';
 const ALWAYS_COMMAND_MAX = 2000;
 const ALWAYS_LABEL = 'Always allow this exact command in this chat';
@@ -62,7 +61,6 @@ const countLines = (s: string): number => {
 	return s.endsWith('\n') ? n - 1 : n;
 };
 
-// Resolves symlinks of the nearest existing ancestor, so a target to be created lands where it would be written.
 async function resolveTarget(p: string): Promise<string> {
 	const tail: string[] = [];
 	let cur = p;
@@ -285,7 +283,6 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 
 		const added = countLines(String(input.new_string ?? input.content));
 		const removed = toolName === 'Edit' ? countLines(String(input.old_string)) : 0;
-		// The md hub is Claude's own: no prompt in any mode, even though it lies outside the working dir.
 		const autoEdit =
 			cls === 'free' || (prompter.mode === 'acceptEdits' && cls === 'auto-eligible' && b.reasonType === undefined);
 		if (autoEdit && !b.defaultToNo && !b.interaction) {
@@ -323,8 +320,6 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		return denyFor(d, b.id);
 	};
 
-	// A fetch sends a URL out of the container, so it asks until the user allows its host for good
-	// (the policy hook makes auto mode ask for a new host too).
 	const handleWebFetch = async (input: Record<string, unknown>, opts: Opts): Promise<PermissionResult> => {
 		const b = base(opts);
 		const {url} = input;
@@ -361,7 +356,6 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		return denyFor(d, b.id);
 	};
 
-	// MCP tools ask (in auto mode only when the classifier is unsure); "always" covers that tool from then on.
 	const handleMcp = async (toolName: string, input: Record<string, unknown>, opts: Opts): Promise<PermissionResult> => {
 		const b = base(opts);
 		const key = `mcp:${toolName}`;
@@ -392,7 +386,6 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		return denyFor(d, b.id);
 	};
 
-	// The plan is ready: approving it leaves plan mode (with "always", into accept-edits).
 	const handlePlanExit = async (input: Record<string, unknown>, opts: Opts): Promise<PermissionResult> => {
 		const b = base(opts);
 		const d = await ask(
@@ -425,7 +418,6 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 				prompter.audit({outcome: 'denied-by-policy', toolName, summary: 'outside scope'});
 				return r ?? deny(POLICY_DENY.outside, opts.toolUseID);
 			}
-			// Loading a skill, keeping the checklist, searching and reading or stopping own tasks run without asking.
 			case 'TaskStop':
 			case 'TaskGet':
 			case 'TaskList':
@@ -454,8 +446,6 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 			case 'Edit':
 			case 'Write':
 				return handleEdit(toolName, input, opts);
-			// The console tools confirm inside their handler, so they never prompt here. In auto mode reaching
-			// this point means the classifier was unsure, so the handler is told to confirm the line.
 			case RUN_COMMAND_TOOL:
 				if (prompter.mode === 'auto' && typeof input.command === 'string') {
 					deps.consoleFlags?.flag(input.command.trim());

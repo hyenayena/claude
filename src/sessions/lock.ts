@@ -68,7 +68,6 @@ export function parseLock(text: string): LockInfo | undefined {
 
 type Read = {bytes: Buffer; ino: number; mtimeMs: number};
 
-// The fd is checked, not the path, so a swap between lstat and open cannot make us read a non-regular file.
 function readLockFile(file: string): Read | undefined {
 	let fd: number;
 	try {
@@ -101,7 +100,6 @@ export type LockDeps = {
 	procStartOf?: (pid: number) => string | undefined;
 };
 
-/** Reads the lock and decides whether its holder still exists. */
 export function inspectLock(dir: string, deps: LockDeps = {}): LockState {
 	const read = readLockFile(lockPath(dir));
 	if (!read) return {state: 'none'};
@@ -118,7 +116,6 @@ export function inspectLock(dir: string, deps: LockDeps = {}): LockState {
 		} catch {
 			json = false;
 		}
-		// An empty or half-written file may be a lock that is just being created.
 		const young = !json && now() - read.mtimeMs < UNPARSEABLE_STALE_MS;
 		return young ? {state: 'held', read} : {state: 'stale', read};
 	}
@@ -127,7 +124,6 @@ export function inspectLock(dir: string, deps: LockDeps = {}): LockState {
 	return {state: 'held', info, read};
 }
 
-// Removes the lock only if it is still the file and the bytes that were judged stale.
 function removeIfUnchanged(dir: string, read: Read): boolean {
 	const file = lockPath(dir);
 	let again: Read | undefined;
@@ -147,9 +143,7 @@ function removeIfUnchanged(dir: string, read: Read): boolean {
 
 export type SessionLock = {
 	readonly info: LockInfo;
-	/** Rewrites the lock atomically; ignored once the lock is no longer ours. */
 	update(patch: {sessionId?: string; socket?: string}): void;
-	/** Idempotent; removes the file only when it is still our lock. */
 	release(): void;
 };
 
@@ -199,7 +193,6 @@ export function acquireLock(opts: AcquireOptions): AcquireResult {
 				try {
 					unlinkSync(file);
 				} catch {
-					// nothing to clean up
 				}
 				throw err;
 			}
@@ -230,7 +223,6 @@ export function acquireLock(opts: AcquireOptions): AcquireResult {
 						try {
 							unlinkSync(tmp);
 						} catch {
-							// already gone
 						}
 					}
 				},
@@ -249,7 +241,6 @@ export function acquireLock(opts: AcquireOptions): AcquireResult {
 						unlinkSync(file);
 						log.info('session lock', {action: 'released', kind: info.kind, where: info.where});
 					} catch {
-						// removed by someone else
 					}
 				},
 			};
@@ -268,7 +259,6 @@ export function acquireLock(opts: AcquireOptions): AcquireResult {
 	return {ok: false, unknown: true};
 }
 
-/** The live holder of the lock, if any. A stale lock is reported as `stale` and left in place. */
 export function readHolder(dir: string, deps: LockDeps = {}): {holder?: LockInfo; stale?: LockInfo; unknown?: true} {
 	const seen = inspectLock(dir, deps);
 	if (seen.state === 'none') return {};

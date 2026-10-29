@@ -29,7 +29,6 @@ const registerAbort = (controller: AbortController): (() => void) => {
 	};
 };
 
-// Lazy import: a missing SDK must not break plugin load or `ping`.
 const loadQuery = async (): Promise<QueryFn> => {
 	const sdk = await import('@anthropic-ai/claude-agent-sdk');
 	return sdk.query as unknown as QueryFn;
@@ -45,7 +44,6 @@ const loadConsoleSdk = async (): Promise<ConsoleSdk> => {
 	return {createSdkMcpServer: sdk.createSdkMcpServer, tool: sdk.tool, z};
 };
 
-// Lazy import: ping and ask must never load React or Ink.
 const loadUi = (): Promise<ChatUi> => import('./ui/mount.js');
 
 const plugin: ModulePlugin = host => {

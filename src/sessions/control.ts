@@ -24,13 +24,11 @@ export type ControlStatus = {
 
 export type ControlHandlers = {
 	status(): ControlStatus | Promise<ControlStatus>;
-	/** Interrupts the turn, then closes the chat or aborts the ask. Not awaited by the server. */
 	stop(): void | Promise<void>;
 };
 
 export type ControlServer = {
 	readonly path: string;
-	/** Starts closing; the socket file is unlinked before this returns. */
 	close(): Promise<void>;
 };
 
@@ -65,7 +63,6 @@ export function parseStatus(raw: unknown): ControlStatus | undefined {
 	};
 }
 
-// Only the holder of the lock serves the socket, so a socket file already there is a leftover.
 export function removeLeftoverSocket(file: string): void {
 	let st;
 	try {

@@ -24,10 +24,7 @@ import {
 import {accepts, runnerSocketPath} from './spawn.js';
 
 export const NO_ATTACH_MS = 10_000;
-// Bound for a detached runner that keeps an unsent queue after a failed turn, waiting for the user.
 export const LINGER_MS = 30 * 60_000;
-// After a background task ends Claude Code usually starts a turn to read its notification; a detached
-// runner waits this long for it before it decides nothing is left.
 export const TASK_SETTLE_MS = 5000;
 const LOG_RING = 200;
 const MAX_CLIENTS = 8;
@@ -78,17 +75,10 @@ export type RunnerEngine = {
 export type RunnerExit = {reason: string; turns: number; ms: number};
 
 export type RunnerOptions = {
-	/** Session directory: `runner.sock` and `control.sock` live here. */
 	dir: string;
-	/**
-	 * Builds the engine for the first attach; `log` is the runner's logger (frames to the client, ring
-	 * while detached); `control` answers "claude stop" and status while a turn holds the session lock.
-	 */
 	createEngine: (open: EngineOpen, io: EngineIo, log: Logger, control: RunnerControl) => Promise<RunnerEngine>;
 	store: {update: (patch: Partial<ClaudeState>) => Promise<unknown>};
-	/** The stored accounts the attached yena pushed; only the last one is kept (in the runner's vault). */
 	onCredentials?: (bundle: CredentialBundle) => void;
-	/** Local sink for the runner's records (the runner itself has no log file). */
 	log?: Logger;
 	noAttachMs?: number;
 	lingerMs?: number;
@@ -99,7 +89,6 @@ export type RunnerOptions = {
 export type RunnerControl = {
 	status: () => ControlStatus;
 	stop: () => void;
-	/** Tells the attached yena that the login working copy is not saved; nothing while detached. */
 	loginChanged: () => void;
 };
 
@@ -138,10 +127,6 @@ const policyFor = (list: CommandInfo[], line: string): {request: CommandConfirmR
 	};
 };
 
-/**
- * Serves one chat to at most one attached client, outliving the client when it asked for that.
- * Resolves `done` once everything is released; it never touches the process itself.
- */
 export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 	const now = opts.now ?? Date.now;
 	const startedAt = now();
@@ -301,9 +286,6 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 					write(target, {type: 'bridgeRun', id, line: req.line, timeoutMs, ...(approved && {approved: true})});
 				};
 
-				// The chat's own confirmation decides, as in a chat without the runner: auto mode, a saved "always",
-				// or the prompt through the chat's permission queue (shown by the attached client). The client
-				// still asks itself for a line the runner thought needed nothing, if its bridge says it does.
 				const found = req.confirm ? policyFor(lastCommands, req.line) : undefined;
 				const confirm = req.confirm;
 				if (found && found.policy === 'confirm' && confirm) {
@@ -366,7 +348,6 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 		lingerTimer.unref();
 	};
 
-	// Detached with nothing to wait for: leave right away; a kept queue waits for the user.
 	const settleDetached = (): void => {
 		if (closing || client || !engine) return;
 		const s = engine.session;
@@ -532,7 +513,6 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 			pendingRuns.get(frame.id)?.(frame.result);
 			return;
 		}
-		// Older runners asked the client with bridgeAsk; this one confirms through the chat, so answers are ignored.
 		if (frame.type === 'bridgeConfirm') return;
 		const s = engine?.session;
 		if (!s) return;
@@ -542,7 +522,6 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 					try {
 						s.send(frame.text, frame.command ? {command: true} : {});
 					} catch (err) {
-						// The client already shows the turn as running: end it with the reason instead of leaving it hanging.
 						const error = clip(redact(err instanceof Error ? err.message : 'The message was not sent'), 1000);
 						write(c, {type: 'event', event: {type: 'turn-end', outcome: 'error', error}});
 						write(c, {type: 'event', event: {type: 'state', state: 'idle'}});
@@ -676,7 +655,6 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 		});
 	});
 
-	// A live runner (idle, attached to another yena) keeps its socket; this one does not start.
 	if (await accepts(socketPath)) throw new Error('A background chat is already running');
 	removeLeftoverSocket(socketPath);
 	await new Promise<void>((resolve, reject) => {

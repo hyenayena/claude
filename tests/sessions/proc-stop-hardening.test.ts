@@ -67,7 +67,6 @@ test('the runner identity is re-checked before SIGKILL', async () => {
 		stopRequest: async () => {
 			throw new Error('down');
 		},
-		// the pid is recycled right after the SIGTERM
 		cmdlineOf: () => (calls++ < 1 ? ['node', '/app/src/runner/main.ts'] : ['node', 'unrelated.js']),
 		kill: (_p, s) => void sent.push(s),
 	});

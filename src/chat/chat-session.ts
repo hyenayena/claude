@@ -35,26 +35,16 @@ export type ChatSessionOptions = {
 	graceMs?: number;
 	initialResume?: string;
 	initialMode?: ChatMode;
-	// Commands allowed with "always" in earlier chats, and where new ones are saved.
 	savedApprovals?: readonly string[];
 	onRemember?: (key: string) => void;
 	log?: Logger;
 	clock?: Clock;
-	/** Held only while the chat works (a turn, or background tasks it started); see sessions/turn-lock.ts. */
 	turnLock?: {acquire(): void; release(): void};
-	/** An idle chat ends its Claude Code process after this long; the next message resumes the session. */
 	idleCloseMs?: number;
-	/**
-	 * The account ran out (usage limit or billing): returns the account to go on with, or undefined to
-	 * end the turn. The chat then restarts Claude Code (buildOptions picks the new account) in the same
-	 * session and asks it to continue.
-	 */
 	onUsageLimit?: (p: {reason: 'usage-limit' | 'billing'; rateLimit?: RateLimitInfo}) => {from: string; to: string} | undefined;
 };
 
-// Sent after an account switch, so Claude picks up the turn the limit cut off.
 export const CONTINUE_TEXT = 'Continue from where you stopped; the previous attempt was cut off by a usage limit.';
-// Account switches within one turn, at most (each needs another account anyway).
 const MAX_SWITCHES = 8;
 
 export type SlashCommandInfo = {name: string; description?: string; argumentHint?: string};
@@ -65,7 +55,6 @@ export type TaskInfo = {
 	background: boolean;
 	startedAt: number;
 	summary?: string;
-	// Claude Code's task type: local_agent for a subagent, local_bash for a shell command, …
 	taskType?: string;
 };
 const MAX_TASKS = 100;
@@ -147,13 +136,10 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private turnRemaining: number | undefined;
 	private holds = 0;
 	private readonly meter = new UsageMeter();
-	// The meter's totals when the current turn started; the turn's share is logged when it ends.
 	private turnUsageFrom: ChatUsage | undefined;
-	// A sent turn waiting for Claude's first output; `warm`: the Claude Code process was already running.
 	private firstOutput: {at: number; warm: boolean} | undefined;
 	private lockHeld = false;
 	private idleTimer: NodeJS.Timeout | undefined;
-	// Bumped when the counter is reset, so a release from an earlier turn cannot touch the next one.
 	private holdEpoch = 0;
 	private permissionHold: (() => void) | undefined;
 	private switches = 0;
@@ -188,12 +174,10 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	get needsNewSession(): boolean {
 		return this._needsNewSession;
 	}
-	/** Cumulative cost reported by the latest result; replaced, never summed. */
 	get costUsd(): number | undefined {
 		return this._costUsd;
 	}
 
-	/** Latest subscription limit report, kept across turns. */
 	get rateLimit(): RateLimitInfo | undefined {
 		return this._rateLimit;
 	}
@@ -201,7 +185,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	get mode(): ChatMode {
 		return this._mode;
 	}
-	/** Applies model, effort, thinking, fast mode or output style to the running query; a new query gets them from its options. */
 	applyLive(patch: LivePatch): void {
 		const q = this.handle?.q;
 		if (!q || this._state === 'closed') return;
@@ -216,7 +199,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.log.info('live settings applied', {keys: Object.keys(patch)});
 	}
 
-	/** Replaces the Bash sandbox of the running query; without one, the next query gets it from its options. */
 	async applySandbox(sandbox: Record<string, unknown>): Promise<void> {
 		const q = this.handle?.q;
 		if (!q || this._state === 'closed') return;
@@ -224,12 +206,10 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		await q.applyFlagSettings({sandbox});
 	}
 
-	/** Tokens of this chat since it opened: the main chat and its subagents apart. */
 	get usage(): ChatUsage {
 		return {main: {...this.meter.total.main}, agents: {...this.meter.total.agents}};
 	}
 
-	/** Tasks of this chat (background Bash and subagents), newest first. */
 	get tasks(): readonly TaskInfo[] {
 		return [...this._tasks.values()].reverse();
 	}
@@ -240,7 +220,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		await q.stopTask(id);
 	}
 
-	/** Moves the running Bash commands and subagents to the background (Ctrl+B); false when there were none. */
 	async backgroundTasks(): Promise<boolean> {
 		const q = this.handle?.q;
 		if (!q?.backgroundTasks || this._state !== 'running') return false;
@@ -258,14 +237,12 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		await q.reconnectMcpServer(name);
 	}
 
-	/** Restores the files Claude changed after the given prompt (file checkpoints of this run). */
 	async rewindFiles(userMessageId: string): Promise<RewindResult> {
 		const q = this.handle?.q;
 		if (!q?.rewindFiles) return {canRewind: false, error: 'no file checkpoints in this run of the chat'};
 		return q.rewindFiles(userMessageId);
 	}
 
-	/** The chat's name: Claude Code's session title, or a stand-in until it exists. */
 	get title(): string | undefined {
 		return this._title;
 	}
@@ -274,7 +251,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this._title = title;
 		this.emit({type: 'title', title});
 	}
-	/** Claude Code commands of this session (names without the slash), known once a query has started. */
 	get commands(): readonly SlashCommandInfo[] {
 		return this._commands;
 	}
@@ -294,7 +270,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		if (this._state === 'running') throw new Error('A request is already running');
 		if (this._needsNewSession) throw new Error(RESUME_MESSAGE);
 
-		// Throws while another session works: nothing is sent and the caller keeps the text.
 		if (!this.lockHeld && this.opts.turnLock) {
 			this.opts.turnLock.acquire();
 			this.lockHeld = true;
@@ -323,10 +298,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.emit({type: 'sent', text});
 	}
 
-	/**
-	 * A message typed while a turn runs: Claude Code folds it in at the next step (priority "next"), as
-	 * its own REPL does. When the turn ends before that, Claude Code answers it in a turn of its own.
-	 */
 	steer(text: string): void {
 		const handle = this.handle;
 		if (this._state !== 'running' || !handle || this.turnHandle !== handle) throw new Error('No request is running');
@@ -345,15 +316,10 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			uuid: randomUUID(),
 			session_id: this._sessionId ?? '',
 			origin: {kind: 'human'},
-			// Typed text that starts with "/" is a message, not a command; commands come from the console.
 			...(!command && text.startsWith('/') && {client_composed: true as const}),
 		});
 	}
 
-	/**
-	 * A turn cut off by the account's limit: when another account is there, Claude Code restarts with it
-	 * in the same session and the turn goes on; otherwise the turn ends as before.
-	 */
 	private limitTurn(kind: FailureKind): void {
 		const reason = kind === 'usage-limit' || kind === 'billing' ? kind : undefined;
 		if (reason && this.opts.onUsageLimit && this.switches < MAX_SWITCHES && this._state === 'running' && !this.pending) {
@@ -401,7 +367,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this._mode = mode;
 		this.log.info('permission mode set', {mode});
 		this.emit({type: 'mode', mode});
-		// A query that is already running learns the change here; a new one gets it in its options.
 		const handle = this.handle;
 		if (!handle?.q.setPermissionMode || sdkPermissionMode(previous) === sdkPermissionMode(mode)) return;
 		handle.q.setPermissionMode(sdkPermissionMode(mode)).catch((error: unknown) => {
@@ -429,7 +394,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		return this.approved.has(key) || this.saved.has(key);
 	}
 
-	/** Drops an "always" approval, saved or not (from the Permissions settings). */
 	forget(key: string): void {
 		this.approved.delete(key);
 		this.saved.delete(key);
@@ -566,10 +530,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		return handle;
 	}
 
-	/**
-	 * Claude Code started a turn on its own (a background task finished and it reads the notification):
-	 * the chat works like after a send, so the idle close cannot end the process mid-turn.
-	 */
 	private beginCliTurn(handle: Handle): void {
 		if (this._state !== 'idle' || this.handle !== handle) return;
 		this.clearIdleTimer();
@@ -578,7 +538,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 				this.opts.turnLock.acquire();
 				this.lockHeld = true;
 			} catch {
-				// Another session took the lock meanwhile; the turn is Claude Code's already and goes on.
 				this.log.warn('turn lock busy for a Claude Code turn');
 			}
 		}
@@ -629,7 +588,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		let ev = event;
 		if (ev.kind === 'cli-state' && ev.state === 'running') this.beginCliTurn(handle);
 		if (this.firstOutput && FIRST_OUTPUT.has(ev.kind)) {
-			// How long a reply takes to start, with a running process and after a respawn (IDLE_CLOSE_MS).
 			this.log.info('first output', {ms: Date.now() - this.firstOutput.at, warm: this.firstOutput.warm});
 			this.firstOutput = undefined;
 		}
@@ -656,9 +614,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			});
 			if (this._tasks.size > MAX_TASKS) this._tasks.delete(this._tasks.keys().next().value!);
 			const t = this._tasks.get(ev.id)!;
-			// A background task that ends while the chat is idle may be the last work it had.
 			if (ev.status !== 'running') queueMicrotask(() => this.settleIdle());
-			// task_notification does not repeat whether the task ran in the background.
 			ev = {...ev, background: t.background, description: t.description};
 		}
 		if (ev.kind === 'result' && ev.sessionId) this._sessionId = ev.sessionId;
@@ -675,7 +631,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			return;
 		}
 		if (ev.ok && !this.authFailed) {
-			// A message steered in too late for this turn: Claude Code goes straight on with it.
 			if (ev.queuedTurns !== undefined && ev.queuedTurns > 0) {
 				this.log.info('turn continues', {queued: ev.queuedTurns});
 				return;
@@ -752,7 +707,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		if (this.turnTimer) clearTimeout(this.turnTimer);
 		this.turnTimer = undefined;
 		this.turnRemaining = undefined;
-		// Armed before the await so a hung interrupt() cannot stall the turn.
 		this.graceTimer = setTimeout(() => {
 			this.graceTimer = undefined;
 			if (this._state !== 'running' || this.handle !== handle) return;
@@ -768,7 +722,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 				this.endTurn(p.outcome, p.error);
 			}
 		} catch {
-			// a failed interrupt falls through to the grace recycle
 		}
 	}
 
@@ -800,10 +753,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		return false;
 	}
 
-	/**
-	 * Idle and nothing left running: the session is no longer active. The lock goes at once; the Claude
-	 * Code process a little later, so it can still write the transcript (title included).
-	 */
 	private settleIdle(): void {
 		if (this._state !== 'idle' || this.hasRunningTasks()) return;
 		if (this.lockHeld) {
@@ -839,13 +788,11 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		try {
 			h.input.close();
 		} catch {
-			// already closed
 		}
 		h.ac.abort();
 		try {
 			h.q.close?.();
 		} catch {
-			// already closed
 		}
 	}
 
@@ -860,7 +807,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.permissionHold = undefined;
 	}
 
-	// Pauses the turn timeout until every hold is released (permission prompts, console commands).
 	holdTurnTimer(): () => void {
 		const epoch = this.holdEpoch;
 		let released = false;
@@ -887,8 +833,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.turnTimer.unref();
 	}
 
-	// The timeout counts silence, not total time: any SDK message (subagents included) restarts it,
-	// so long pipelines keep going while a hung request still ends.
 	private keepTurnAlive(handle: Handle): void {
 		if (!this.turnTimer || this.turnHandle !== handle || this._state !== 'running') return;
 		clearTimeout(this.turnTimer);
@@ -896,7 +840,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.armTurnTimer(this.timeoutMs);
 	}
 
-	// Human waiting time must not count against the turn timeout.
 	private pauseTurnTimer(): void {
 		if (!this.turnTimer) return;
 		clearTimeout(this.turnTimer);
@@ -953,7 +896,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			try {
 				cb(e);
 			} catch {
-				// a faulty subscriber must not break the engine
 			}
 		}
 	}

@@ -36,7 +36,6 @@ export const parseLoginStatus = (stdout: string): LoginStatus | undefined => {
 	return out;
 };
 
-// Resolves on timeout without waiting for 'close': a grandchild may keep the pipes open.
 const runCli = (
 	p: CliOpts,
 	args: string[],

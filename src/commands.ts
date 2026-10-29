@@ -50,7 +50,6 @@ import {stopHolder} from './sessions/stop.js';
 import {createStore, isModelId} from './store.js';
 import type {ChatQueryFn, Credential, CredentialInfo, QueryFn} from './types.js';
 
-// Saved "always" rules: a Bash command, or a prefixed key for an MCP tool, a console command or a fetched host.
 const ruleKind = (rule: string): string =>
 	rule.startsWith('mcp:')
 		? 'MCP tool allowed with "always"'
@@ -70,44 +69,32 @@ const limitKind = (err: unknown): string | undefined =>
 
 export type ClaudeDeps = {
 	dataDir: string;
-	// The host's record of a failed dev start, for `fix`; absent in older hosts.
 	devFailure?: () => Promise<DevFailure | undefined>;
-	// Versions of the host and modules, shown at the top of a new chat.
 	build?: BuildInfo;
 	env: NodeJS.ProcessEnv;
 	loadQuery: () => Promise<QueryFn>;
 	loadChatQuery?: () => Promise<ChatQueryFn>;
 	loadConsoleSdk?: ChatRunDeps['loadConsoleSdk'];
 	shellTmp?: ChatRunDeps['shellTmp'];
-	// Starts the background runner for a chat; without it the chat always runs in this process.
 	spawnRunner?: ChatRunDeps['spawnRunner'];
-	// Timing overrides for waiting on another session and for the runner connection (tests).
 	chatTiming?: Pick<ChatRunDeps, 'waitPollMs' | 'remote'>;
 	loadUi?: () => Promise<ChatUi>;
 	moduleDir?: string;
-	// Runs bin/claude on the terminal for "claude code"; replaceable so tests never start the CLI.
 	runCode?: (bin: string, args: string[], env: NodeJS.ProcessEnv) => number | undefined;
-	// Private directory for the single-session lock and control socket; absent or throwing means no global lock.
 	sessionDir?: () => string;
 	log?: Logger;
-	// Stored Claude accounts (the host's credential channel); without it only the environment variables count.
 	vault?: ClaudeVault;
-	// The host's redactor (every module's registered secrets), applied after claude's own.
 	redactExtra?: (text: string) => string;
 	timeoutMs?: number;
 	registerAbort?: (c: AbortController) => () => void;
-	// Claude Code's own login: status probe, interactive run and non-interactive logout.
 	login?: {
 		probe?: LoginProbe;
 		run?: (bin: string, args: string[], env: NodeJS.ProcessEnv) => boolean;
 		logout?: (bin: string, env: Record<string, string | undefined>) => Promise<boolean>;
-		// Terminal prompts, replaceable so tests never read the real terminal.
 		wait?: (message: string) => void;
 		readSecret?: (prompt: string) => string;
-		// Asks for a key or token with hidden input ('' when cancelled); replaceable so tests never mount a view.
 		promptSecret?: (ctx: CommandContext, label: string) => Promise<string>;
 		readName?: (prompt: string) => string;
-		// Asks for the new account's name, prefilled with `initial` (undefined when cancelled).
 		promptName?: (ctx: CommandContext, label: string, initial: string, validate: (value: string) => string | undefined) => Promise<string | undefined>;
 	};
 };
@@ -127,7 +114,6 @@ const STOP_USAGE = 'Usage: claude stop [session]';
 
 const SLOT_WORD = /^(?:<([A-Za-z0-9_][\w-]*)(?:…|\.\.\.)?>|\[([A-Za-z0-9_][\w-]*)(?:…|\.\.\.)?\])(?:…|\.\.\.)?$/u;
 
-// Claude Code's argument hints are free text: one goes into the usage only when every word is a plain slot.
 const passthroughUsage = (name: string, hint: string | undefined): Pick<Subcommand, 'usage' | 'args'> => {
 	const words = (hint ?? '').trim().split(/\s+/u).filter(w => w !== '');
 	const slots = words.map(w => {
@@ -164,7 +150,6 @@ const kindLabel = (info: CredentialInfo): string => {
 	return isSubscription(info) ? 'subscription token' : 'API key';
 };
 
-/** Takes "--name <account>" out of the arguments. */
 const takeName = (args: string[]): {name: string | undefined; rest: string[]} => {
 	const at = args.indexOf('--name');
 	if (at < 0) return {name: undefined, rest: args};
@@ -202,7 +187,6 @@ const isMissingModule = (err: unknown): boolean => {
 
 export const createClaudeCommand = (deps: ClaudeDeps): Command => createClaudeCommands(deps).find(c => c.name === 'claude')!;
 
-/** The `claude` command and the top-level `chat` command, sharing one chat slot. */
 export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const {dataDir, env} = deps;
 	const log = deps.log ?? noopLog;
@@ -228,7 +212,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const readSecret = deps.login?.readSecret ?? readHidden;
 	const readName = deps.login?.readName ?? readLine;
 	const logoutCli = deps.login?.logout ?? ((bin, e) => runLogout({bin, env: e}));
-	// In this process: a chat view is open, an ask is running (they may overlap while the chat is idle).
 	let chatOpen = false;
 	let askRunning = false;
 	let askAbort: (() => void) | undefined;
@@ -249,7 +232,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		return `A session is running (${what} since ${clockTime(holder.startedAt)}). Wait for it or run "claude stop".`;
 	};
 
-	// What the control socket reports for the chat or ask that lives in this process.
 	const localStatus = (kind: LockKind, startedAt: number): ControlStatus => {
 		const s = kind === 'chat' && openSession && openSession.state !== 'closed' ? openSession : undefined;
 		const pending = s?.pendingPermissions.length ?? 0;
@@ -281,7 +263,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	type Acquired = {ok: true; release: () => void} | {ok: false; holder?: LockInfo; unknown?: true};
 
-	// One chat or ask at a time across every yena on this machine; the in-process flag stays the fast path.
 	const tryAcquire = (kind: LockKind): Acquired => {
 		if (askRunning) throw new Error('An ask is already running');
 		if (kind === 'chat' && chatOpen) throw new Error('A chat is already open');
@@ -348,7 +329,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		return got.release;
 	};
 
-	// Like acquireShared, but a refusal names the session by its title when it answers on its control socket.
 	const acquireAsk = async (): Promise<() => void> => {
 		const got = tryAcquire('ask');
 		if (got.ok) return got.release;
@@ -358,7 +338,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		throw new Error(title ? `A session is running (${title}). Wait for it or run "claude stop".` : busyMessage(got.holder));
 	};
 
-	// Where the next chat runs, given who holds the one-session lock.
 	const routeChat = (req: ChatRouteRequest): ChatRoute => {
 		if (askRunning) throw new Error('An ask is already running');
 		if (chatOpen) throw new Error('A chat is already open');
@@ -380,14 +359,12 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			if (seen.unknown) return {kind: 'wait', message: busyMessage(undefined)};
 			if (req.keep && deps.spawnRunner) return {kind: 'spawn', sessionDir: dir, release: claimBusy('chat')};
 		}
-		// The lock is taken per turn (chatTurnLock), so an idle chat here never blocks another terminal.
 		return {kind: 'local', release: claimBusy('chat')};
 	};
 
 	const turnBusy = (holder: LockInfo | undefined): string =>
 		`${busyMessage(holder).replace(/ Wait for it or run "claude stop"\.$/, '')} Your message stays in the input; send it when that session is done.`;
 
-	// The one-session lock for a turn of the chat in this process, with the control socket for "claude stop".
 	const chatTurnLock = (): TurnLock =>
 		createTurnLock({
 			dir: sessionsDir(),
@@ -402,7 +379,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			log,
 		});
 
-	// One look at the lock while an open waits for it.
 	const peekLock = async (): Promise<{free: boolean; title?: string}> => {
 		const dir = sessionsDir();
 		if (!dir) return {free: true};
@@ -450,12 +426,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 
-	// After a usage limit or billing error: the account is set aside until its reset and the next one is
-	// prepared (swapped in, for a login); undefined when there is none left.
 	const switchAfterLimit = async (err: unknown, cred: Credential): Promise<Credential | undefined> => {
 		const kind = limitKind(err);
 		if ((kind !== 'usage-limit' && kind !== 'billing') || cred.account === undefined) return undefined;
-		// A login refreshed during the turn is saved before another one may be swapped in.
 		await loginSync().sync();
 		const ctx = accountsCtx(credOpts);
 		const now = Date.now() / 1000;
@@ -474,7 +447,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 
-	// The ask lock is held: a login account can be swapped into the config dir.
 	const prepareAsk = async (): Promise<Credential> => {
 		await loadBundle(credOpts);
 		try {
@@ -542,7 +514,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				result = await runTurn({query, prompt, options, signal: controller.signal, redact, log});
 				break;
 			} catch (err) {
-				// The account ran out: the next one in priority order takes the same session over.
 				const next = !timedOut && switches < MAX_ASK_SWITCHES ? await switchAfterLimit(err, cred) : undefined;
 				if (next) {
 					ctx.print(`Account "${cred.account}" ${limitKind(err) === 'billing' ? 'cannot be billed' : 'reached its usage limit'}; continuing with "${next.account}".`);
@@ -555,7 +526,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 					continue;
 				}
 				const failure = timedOut ? new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds`) : err;
-				// A failed turn (limit, timeout) can still have created a session worth resuming.
 				if (err instanceof TurnFailure && err.sessionId && err.kind !== 'resume') {
 					await store
 						.update({lastSessionId: err.sessionId, ...(err.model && {lastModel: err.model})})
@@ -637,7 +607,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	let applyOpenChat: ((patch: LivePatch) => void) | undefined;
 	let deliverToOpenChat: ((text: string) => void) | undefined;
 
-	// Chat input editing, cached so every key can read it.
 	let inputMode: 'normal' | 'vim' = 'normal';
 	void store.read().then(
 		s => {
@@ -646,7 +615,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		() => {},
 	);
 
-	// Saved "always" rules, cached so the settings tab can be built synchronously.
 	let rules: string[] = [];
 	const refreshRules = async (): Promise<void> => {
 		try {
@@ -682,10 +650,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		};
 	};
 
-	// Opening a chat replaces the one that is open.
 	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>, endIdleRemote = true, onOpened?: () => void): Promise<void> => {
 		if (askRunning) throw new Error('An ask is already running');
-		// Opening a different chat ends an idle background chat; a busy one is waited for.
 		if (endIdleRemote && openSession?.state === 'idle') openSession.end?.();
 		const previous = openHandle;
 		if (previous) {
@@ -698,7 +664,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			chatDeps(c => {
 				close = c;
 				onOpened?.();
-				// Deferred: the host registers the view only after `build` returns.
 				if (closeRequested) queueMicrotask(c);
 			}),
 		);
@@ -719,12 +684,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	const chat = (args: string[], ctx: CommandContext): Promise<void> => replaceChat(d => runChat(args, ctx, d), args.includes('--new'));
 
-	// The context of the chat's own command (autostart or typed): it can show the chat in the main area,
-	// which a command run by an assistant or the scheduler cannot.
 	let mainCtx: CommandContext | undefined;
 
-	// "claude start <message…>": a new chat that sends the message at once. Returns when the chat is up,
-	// so an assistant or the scheduler can call it; the chat itself stays open.
 	const startChat = async (args: string[], ctx: CommandContext): Promise<void> => {
 		const text = args.join(' ').trim();
 		if (text === '') throw new Error(START_USAGE);
@@ -748,7 +709,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		ctx.print('Started a new chat with the message.');
 	};
 
-	// Into the chat view that is open (into the running turn while it answers); with none open, a new chat as "claude start".
 	const sendToChat = async (args: string[], ctx: CommandContext): Promise<void> => {
 		const text = args.join(' ').trim();
 		if (text === '') throw new Error(SEND_USAGE);
@@ -772,7 +732,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await replaceChat(d => openChat({fresh: true, attach, ...(model && {model}), tuning: tuningFromState(state)}, ctx, d), !attach);
 	};
 
-	// Shows a list in the console panel and resolves with the picked id (undefined on Esc).
 	const pick = async (
 		ctx: CommandContext,
 		what: {title: string; empty: string; action: string; items: PickerItem[]},
@@ -797,7 +756,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		return picked;
 	};
 
-	// Opens a chat with the current settings plus the given resume options.
 	const openWith = async (ctx: CommandContext, open: Omit<ChatOpen, 'model' | 'tuning'>): Promise<void> => {
 		const state = await store.read();
 		await replaceChat(d =>
@@ -805,7 +763,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		);
 	};
 
-	// The session the chat commands act on: the open chat's, else the last one.
 	const currentSessionId = async (): Promise<string | undefined> =>
 		(openSession && openSession.state !== 'closed' ? openSession.sessionId : undefined) ?? (await store.read()).lastSessionId;
 
@@ -814,7 +771,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		return transcriptFile(paths.configDir, paths.projectDir, sessionId);
 	};
 
-	// Continues an earlier chat of this project: by id prefix, or picked from a list in the console.
 	const resumeChat = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 1) throw new Error(RESUME_USAGE);
 		const paths = resolvePaths(dataDir, deps.moduleDir);
@@ -840,7 +796,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (picked) await start(picked);
 	};
 
-	// Opens a branch of the current chat: same history, new session; the original stays as it was.
 	const forkChat = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 0) throw new Error('Usage: claude fork');
 		const id = await currentSessionId();
@@ -849,8 +804,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await openWith(ctx, {fresh: false, resume: id, fork: true});
 	};
 
-	// Goes back to before one of your messages: files Claude changed since then are restored and the
-	// conversation continues on a branch from that point, with that message back in the input.
 	const rewindChat = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 0) throw new Error('Usage: claude rewind');
 		const session = openSession && openSession.state !== 'closed' ? openSession : undefined;
@@ -881,7 +834,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		else await openWith(ctx, {fresh: false, resume: id, fork: true, resumeAt: target.parentUuid, historyUntil: target.uuid, draft: target.text});
 	};
 
-	// Names the chat: a custom-title entry in the transcript, as Claude Code's /rename writes it.
 	const renameChat = async (args: string[], ctx: CommandContext): Promise<void> => {
 		const name = args.join(' ').trim();
 		if (!name || name.length > 120 || /[\u0000-\u001f\u007f]/.test(name)) throw new Error('Usage: claude rename <name> (up to 120 characters)');
@@ -892,7 +844,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		ctx.print(`Renamed the chat to "${name}"`);
 	};
 
-	// Writes the conversation (prompts and answers) as Markdown.
 	const exportChat = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 1) throw new Error('Usage: claude export [file]');
 		const id = await currentSessionId();
@@ -918,7 +869,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		ctx.print(`Exported ${messages.length} messages to ${target}`);
 	};
 
-	// Copies Claude's latest answer (or the Nth latest) to the clipboard of your terminal.
 	const copyAnswer = async (args: string[], ctx: CommandContext): Promise<void> => {
 		const n = args[0] === undefined ? 1 : Number(args[0]);
 		if (args.length > 1 || !Number.isInteger(n) || n < 1) throw new Error('Usage: claude copy [n]');
@@ -955,14 +905,12 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (active) ctx.print(`Active credential: ${describeCredential(active)}`);
 	};
 
-	// A turn in progress anywhere (this yena or a background runner) holds the session lock.
 	const chatRunning = (): boolean => {
 		if (openSession?.state === 'running') return true;
 		const dir = sessionsDir();
 		return dir !== undefined && readHolder(dir).holder !== undefined;
 	};
 
-	// One line per account, in priority order: the one a new turn uses is marked.
 	const accountLines = (list: AccountView[]): string[] => {
 		const chosen = chooseAccount(accountsCtx(credOpts));
 		const scrub = makeScrub(redactor());
@@ -1037,7 +985,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await printActive(ctx);
 	};
 
-	// In the app a hidden input in the console panel; from a terminal (./yena claude auth add) a read without echo.
 	const promptSecret =
 		deps.login?.promptSecret ??
 		(async (ctx: CommandContext, label: string): Promise<string> => {
@@ -1051,7 +998,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			throw new Error('"claude auth add" needs the app (./yena) or a terminal: the key is typed into a hidden input');
 		});
 
-	// The account name, prefilled with `initial`: a text input in the app, a line on the terminal; undefined when cancelled.
 	const promptName =
 		deps.login?.promptName ??
 		(async (ctx: CommandContext, label: string, initial: string, validate: (v: string) => string | undefined): Promise<string | undefined> => {
@@ -1074,7 +1020,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			});
 		});
 
-	// A key or token is typed into a hidden input only: never an argument, a file, the history or the log.
 	const authAdd = async (rawArgs: string[], ctx: CommandContext): Promise<void> => {
 		const {name: given, rest} = takeName(rawArgs);
 		if (rest.length > 0) {
@@ -1103,7 +1048,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (account.type === 'token') await showNoticeOnce({kind: 'oauth', source: 'stored'}, ctx);
 	};
 
-	// Says so when a new account is not the one used next.
 	const noteIfShadowed = async (name: string, ctx: CommandContext): Promise<void> => {
 		const active = await resolveCredential(credOpts);
 		if (active && active.account !== name) {
@@ -1111,7 +1055,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 
-	// A login counts as present when Claude Code reports one, or, if it cannot be asked, its file exists.
 	const loginPresent = async (): Promise<boolean> => {
 		const status = await probe().catch(() => undefined);
 		return status?.loggedIn === true;
@@ -1143,7 +1086,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await printActive(ctx);
 	};
 
-	// Runs the Claude Code CLI (bin/claude) on the terminal; arguments go to it as they are, without a shell.
 	const code = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (!ctx.suspend) throw new Error('"claude code" needs an interface that can hand over the terminal');
 		const bin = join(loginPaths().moduleDir, 'bin', 'claude');
@@ -1154,7 +1096,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 		const status = await ctx.suspend(() => runCode(bin, args, env));
 		log.info('claude code finished', {args: args.length, status});
-		// Claude Code may have refreshed the login, or signed in to another account.
 		await loadBundle(credOpts);
 		await loginSync().sync();
 		if (status === 0) return;
@@ -1171,7 +1112,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		return authLoginBrowser(bin, request, ctx, name);
 	};
 
-	// Claude Code's own browser login; yena never sees the tokens, it only asks the CLI afterwards.
 	const authLoginBrowser = async (
 		bin: string,
 		request: LoginRequest,
@@ -1183,7 +1123,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (chatRunning()) throw new Error('A chat is answering; wait for it (a sign-in replaces the login Claude Code is using)');
 		const reason = degradedReason((await loadBundle(credOpts)).status);
 		if (reason) throw new Error(reason);
-		// The login there now is kept in its account before Claude Code replaces it.
 		await loginSync().sync();
 		if (loginSync().dirty()) throw new LoginUnsavedError();
 		log.info('claude login started', {method: meta.console ? 'console' : 'claude.ai', sso: meta.sso, email: meta.email});
@@ -1215,7 +1154,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await showNoticeOnce({kind: status.method === 'claude.ai' ? 'oauth' : 'api-key', source: 'claude-login'}, ctx);
 	};
 
-	// Lists the chat's tasks (background Bash, subagents); picking a running one stops it.
 	const tasksCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 0) throw new Error('Usage: claude tasks');
 		const session = openSession && openSession.state !== 'closed' ? openSession : undefined;
@@ -1242,7 +1180,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		ctx.print(`Stopping "${makeScrub(s => s)(task.description).slice(0, 80)}"`);
 	};
 
-	// Shows the MCP servers of the open chat, or reconnects one.
 	const mcpCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
 		const session = openSession && openSession.state !== 'closed' ? openSession : undefined;
 		const scrub = makeScrub(s => s);
@@ -1266,7 +1203,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		for (const s of status) ctx.print(`${scrub(s.name)}: ${scrub(s.status)}${s.error ? ` (${scrub(s.error).slice(0, 120)})` : ''}`);
 	};
 
-	// Opens one of the md instruction files (CLAUDE.md by default) in the editor.
 	const memory = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 1) throw new Error('Usage: claude memory [file]');
 		if (!ctx.suspend) throw new Error('"claude memory" needs an interface that can hand over the terminal');
@@ -1303,7 +1239,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 
-	// Lists the session that holds the global lock (at most one), asking it over its control socket.
 	const sessionsCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 0) throw new Error('Usage: claude sessions');
 		const dir = sessionsDir();
@@ -1474,7 +1409,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 					name: 'login',
 					usage: 'claude auth login [--name <account>] [--console | --claudeai] [--sso] [--email <address>]',
 					description: "Sign in with Claude Code's browser login",
-					// Hands over the terminal (ctx.suspend), which an assistant run does not have.
 					agent: 'deny',
 					options: [
 						NAME_OPTION,
@@ -1510,7 +1444,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			],
 		},
 	];
-	// `help` stays reserved: a Claude Code /help listed here would replace core's help subcommand.
 	const ownNames = new Set([...OWN_SUBCOMMANDS.map(s => s.name), 'help']);
 
 	const claudeCodeSubcommands = (): Subcommand[] => {
@@ -1523,7 +1456,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			.map(c => ({name: c.name, description: passthroughDescription(c.description), ...passthroughUsage(c.name, c.argumentHint)}));
 	};
 
-	// Runs a Claude Code command in the open chat, as if typed there with a leading slash.
 	const runClaudeCodeCommand = async (name: string, args: string[], ctx: CommandContext): Promise<void> => {
 		if (!isCommandName(name)) throw new Error(`Unknown subcommand "${makeScrub(s => s)(name).slice(0, 64)}". ${USAGE}`);
 		const session = openSession;
@@ -1628,7 +1560,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		run: (args, ctx) => newChat(args, ctx, args.length === 0),
 	};
 
-	// `chat` first: its Claude tab leads the settings screen, before claude's Permissions tab.
 	const fix = createFixCommand({...(deps.devFailure && {devFailure: deps.devFailure}), start: (message, ctx) => startChat([message], ctx)});
 	return [chatCommand, claude, fix];
 };

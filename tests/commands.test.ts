@@ -49,7 +49,6 @@ const setup = async (over: Partial<ClaudeDeps> & {env?: NodeJS.ProcessEnv; fake?
 	const dataDir = await mkdtemp(join(tmpdir(), 'claude-cmd-'));
 	const fake = over.fake ?? fakeCredentials();
 	const vault = over.vault ?? hostVault(fake);
-	// Stores a key or token as the user would with "claude auth add".
 	const store = (value: string, name?: string) => storeSecret({env: {}, dataDir, vault}, value, name);
 	const printed: string[] = [];
 	const ctx: CommandContext = {print: t => printed.push(t), clear: () => {}, exit: () => {}};
@@ -332,7 +331,6 @@ test('auth order, use and remove manage the priority', async () => {
 	await assert.rejects(async () => command.run(['auth', 'remove', 'env-key'], ctx), /unset the variable/);
 });
 
-// A hidden-input stand-in: answers the queued values in turn and records the labels it was shown.
 const secrets = (...values: string[]) => {
 	const labels: string[] = [];
 	const promptSecret = async (_ctx: CommandContext, label: string) => (labels.push(label), values.shift() ?? '');
@@ -563,7 +561,6 @@ test('only credentials.ts reads credential env values or credential files', asyn
 	const offenders: string[] = [];
 	for (const file of await listSources(dir)) {
 		const name = file.slice(dir.length + 1);
-		// The accounts store and its front end are the two places that handle credentials.
 		if (name === 'credentials.ts' || name === 'accounts.ts') continue;
 		const lines = (await readFile(file, 'utf8')).split('\n');
 		lines.forEach((line, i) => {
@@ -773,13 +770,11 @@ test('ask at a usage limit goes on with the next account in the same session', a
 	const file = JSON.parse(await readFile(join(dataDir, 'auth.json'), 'utf8'));
 	assert.equal(file.limits.work.reason, 'usage-limit');
 	assert.ok(fake.accounts.has('work'));
-	// The next ask starts on the account that still has quota.
 	await command.run(['ask', 'again'], ctx);
 	assert.equal((q.calls[2]!.options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN, OAUTH2);
 });
 
 const EMAIL = 'owner.person@example.com';
-// The account name claude gives a login: the email's local part, in the account module's rules.
 const NAME = 'owner-person';
 
 const loginSetup = async (over: {env?: NodeJS.ProcessEnv; status?: LoginStatus; runOk?: boolean; afterRun?: LoginStatus; logoutOk?: boolean; token?: string; log?: ReturnType<typeof makeFakeLog>} = {}) => {
@@ -791,7 +786,6 @@ const loginSetup = async (over: {env?: NodeJS.ProcessEnv; status?: LoginStatus; 
 	const logouts: Array<{bin: string; env: Record<string, string | undefined>}> = [];
 	let status: LoginStatus | undefined = over.status;
 	let probes = 0;
-	// What Claude Code's login leaves in its config dir (yena reads it to keep the login as an account).
 	const signIn = async (dataDir: string) => {
 		await mkdir(join(dataDir, 'config'), {recursive: true});
 		await writeFile(join(dataDir, 'config', '.credentials.json'), JSON.stringify({claudeAiOauth: {accessToken: 'LOGIN-ACCESS', refreshToken: 'LOGIN-REFRESH'}}));

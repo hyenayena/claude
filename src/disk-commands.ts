@@ -29,7 +29,6 @@ const list = (dir: string): string[] => {
 	}
 };
 
-/** Custom commands and skills in the Claude config dir, for hints before a chat session reports its own list. */
 export function diskCommands(configDir: string): SlashCommandInfo[] {
 	const out: SlashCommandInfo[] = [];
 	const add = (name: string, meta: Record<string, string>) => {

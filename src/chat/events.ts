@@ -1,7 +1,6 @@
 import type {RateLimitInfo} from './limits.js';
 import type {AuditEntry, ChatMode, PermissionDecision, PermissionRequest} from './permission.js';
 
-// The change an Edit or Write made, from Claude Code's structured patch; `created` marks a new file.
 export type ToolPatch = {hunks: {oldStart: number; newStart: number; lines: string[]}[]; created?: true};
 
 export type UiEvent =
@@ -9,23 +8,16 @@ export type UiEvent =
 	| {kind: 'text-delta'; text: string}
 	| {kind: 'text'; messageId: string; text: string; aborted?: boolean}
 	| {kind: 'thinking'}
-	// A background or subagent task started, progressed or settled.
 	| {kind: 'task'; id: string; status: 'running' | 'completed' | 'failed' | 'stopped'; description?: string; background?: boolean; summary?: string; toolUseId?: string; taskType?: string}
-	// The text of a finished thinking block (empty when the API omits it).
 	| {kind: 'thinking-text'; text: string}
 	| {kind: 'tool-use'; toolUseId: string; name: string; input: unknown}
-	// Claude started writing the input of a tool call (shown until the call itself arrives).
 	| {kind: 'tool-input'; name: string}
 	| {kind: 'tool-input-delta'; chars: number}
 	| {kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; patch?: ToolPatch}
 	| {kind: 'tool-progress'; toolUseId: string; name: string; elapsedSeconds: number}
-	// What a subagent started by tool `toolUseId` is doing now (its latest tool call).
 	| {kind: 'agent-activity'; toolUseId: string; name: string; input: unknown}
 	| {kind: 'status'; status: 'compacting' | 'requesting' | null}
-	// Claude Code's own turn state (CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS): it also starts turns itself,
-	// e.g. to read the notification of a background task that finished.
 	| {kind: 'cli-state'; state: 'running' | 'idle' | 'requires_action'}
-	// Estimated thinking tokens of the current reply so far (the thinking text itself is mostly omitted).
 	| {kind: 'thinking-tokens'; tokens: number}
 	| {kind: 'retry'; attempt: number; maxRetries: number; delayMs: number; errorCode?: string}
 	| {kind: 'api-error'; code: string; detail?: string}
@@ -40,7 +32,6 @@ export type UiEvent =
 			costUsd?: number;
 			numTurns?: number;
 			terminalReason?: string;
-			// Messages sent during the turn that Claude Code still answers in turns of its own.
 			queuedTurns?: number;
 	  };
 
@@ -56,10 +47,8 @@ export type ChatEvent =
 	| {type: 'audit'; entry: AuditEntry}
 	| {type: 'mode'; mode: ChatMode; error?: string}
 	| {type: 'sent'; text: string}
-	// A steered message the chat's process could not hand to the turn; the view queues it again.
 	| {type: 'steer-failed'; text: string}
 	| {type: 'title'; title: string}
-	// The account ran out mid-turn; the chat goes on with `account` (see accounts.ts).
 	| {type: 'account'; account: string; previous: string; reason: 'usage-limit' | 'billing'};
 
 export interface ChatController {
@@ -69,21 +58,15 @@ export interface ChatController {
 	readonly needsNewSession: boolean;
 	readonly mode: ChatMode;
 	readonly title: string | undefined;
-	// Background tasks and subagents of this chat (newest first), when the controller tracks them.
 	readonly tasks?: readonly {status: string; background: boolean; taskType?: string}[];
 	backgroundTasks?(): Promise<boolean>;
 	readonly pendingPermissions: readonly PermissionRequest[];
-	// Closing only leaves a chat that lives in another process: its pending permissions stay pending.
 	readonly detachesOnClose?: boolean;
-	// Messages that were queued in the chat's process before this view attached.
 	readonly queued?: readonly string[];
-	// Called whenever the view's message queue changes, so a detached chat does not lose it.
 	setQueued?(lines: readonly string[]): void;
 	setMode(mode: ChatMode): void;
 	answerPermission(id: string, decision: PermissionDecision): boolean;
-	// `command: true` lets Claude Code run a leading /command; otherwise the text is delivered as written.
 	send(text: string, opts?: {command?: boolean}): void;
-	// Hands a message to the running turn: Claude Code reads it between steps instead of after the turn.
 	steer?(text: string): void;
 	interrupt(): Promise<void>;
 	reset(): void;

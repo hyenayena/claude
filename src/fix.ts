@@ -3,14 +3,12 @@ import type {Command, CommandContext, DevFailure} from '../../../src/api.js';
 export const NOTHING_TO_FIX = 'Nothing to fix: the last dev start succeeded';
 export const NO_RECORDS = 'This yena does not record dev start failures; update the host';
 
-// Indented, so no text in the record can close a fence and leave the data block.
 const indent = (text: string): string =>
 	text
 		.split('\n')
 		.map(line => `    ${line}`)
 		.join('\n');
 
-/** The first message of the repair chat. The record comes sanitized and capped from the host. */
 export function buildFixPrompt(f: DevFailure): string {
 	const error = f.stack && f.stack.trim() !== '' ? f.stack : `${f.name}: ${f.message}`;
 	return [
@@ -38,7 +36,6 @@ export function createFixCommand(deps: FixDeps): Command {
 		name: 'fix',
 		description: 'Start a chat that repairs the dev-mode working copy after it failed to start',
 		usage: 'fix',
-		// A repair chat edits yena itself: only the user starts it.
 		agent: 'deny',
 		run: async (args, ctx) => {
 			if (args.length > 0) throw new Error('Usage: fix');

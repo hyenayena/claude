@@ -128,9 +128,7 @@ type Rig = {
 	io: () => EngineIo;
 	log: () => Logger;
 	updates: unknown[];
-	/** The runner finished (its turn lock, if any, goes with the engine). */
 	released: () => boolean;
-	/** What the runner gives the engine for "claude stop" and status while a turn holds the lock. */
 	control: () => RunnerControl;
 	handle: RunnerHandle;
 };

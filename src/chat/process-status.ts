@@ -9,7 +9,6 @@ export type StatusSnapshot = {
 	tasks: readonly {status: string; taskType?: string}[];
 };
 
-/** What `./yena kill` prints for a process with an open chat, e.g. `chat 9cc5de25: working, 2 subagents`. */
 export function statusLine(s: StatusSnapshot): string {
 	const id = (s.sessionId ?? '').replace(/[^0-9a-f]/gi, '').slice(0, 8) || 'new';
 	if (s.state !== 'running') return `chat ${id}: idle`;
@@ -19,10 +18,6 @@ export function statusLine(s: StatusSnapshot): string {
 
 export type ProcessStatus = {set: (line: string) => void; clear: () => void};
 
-/**
- * Keeps `<dir>/<pid>` holding one line about this process for `./yena kill` (the yena script sets
- * YENA_STATUS_DIR). Without a directory it does nothing; a failed write is logged once and the chat goes on.
- */
 export function createProcessStatus(dir: string | undefined, log: Logger, pid = process.pid): ProcessStatus {
 	if (!dir) return {set() {}, clear() {}};
 	const file = path.join(dir, String(pid));

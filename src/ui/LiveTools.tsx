@@ -26,7 +26,6 @@ export function LiveTools({tools, scrub, maxRows}: {tools: RunningTool[]; scrub:
 	);
 }
 
-// With a single row available, collapse everything into one summary line.
 export function toolLayout(count: number, maxRows: number): {shown: number; more: number; rows: number} {
 	if (count === 0 || maxRows <= 0) return {shown: 0, more: 0, rows: 0};
 	const cap = Math.min(maxRows, LIVE.maxTools + 1);

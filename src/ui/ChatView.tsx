@@ -63,28 +63,18 @@ export interface ChatViewProps {
 	scrub: Scrub;
 	initialModel?: string;
 	initialSessionId?: string;
-	// The account the chat starts on, shown first in the status bar.
 	initialAccount?: string;
-	// Text the input starts with (e.g. the prompt a rewind went back to).
 	initialDraft?: string;
-	// Sent once when the view mounts, as if typed and sent.
 	initialSend?: string;
-	// Called on mount with a function that sends a message as if typed (queued while a turn runs), and with undefined on unmount.
 	onInbox?: (deliver: ((text: string) => void) | undefined) => void;
-	// Project files for @ mentions (read lazily, may be empty until loaded).
 	files?: () => readonly string[];
-	// Opens the draft in an external editor (Ctrl+G); resolves with the new text, or undefined.
 	openEditor?: (text: string) => Promise<string | undefined>;
-	// The whole conversation with full tool input and output, for Ctrl+O (raw lines, scrubbed here).
 	loadTranscript?: () => Promise<string[]>;
-	// 'vim' turns on NORMAL/INSERT editing; read on every key so a settings change applies at once.
 	inputMode?: () => 'normal' | 'vim';
 	reveal?: (s: string) => string;
 	projectDir?: string;
 	armMs?: number;
-	// Set when the chat shares the screen with the console: focus, width and reserved keys.
 	host?: ViewHost;
-	// Time source for the rate-limit indicator; tests inject a fake.
 	clock?: Clock;
 }
 
@@ -101,10 +91,8 @@ export const BUSY_HINT = 'Wait for the answer or press Esc to interrupt';
 export const NEW_CHAT_TITLE = 'New chat';
 export const MAX_QUEUED = 20;
 const MAX_UNDO = 100;
-// setTimeout overflows past 2^31-1 ms.
 const MAX_TIMER_MS = 2_000_000_000;
 
-/** Calls `fire` once `clock` reaches `atMs`, re-arming while a capped wait ends early. Returns the canceller. */
 export function armExpiry(atMs: number, clock: Clock, fire: () => void, maxMs = MAX_TIMER_MS): () => void {
 	let timer: NodeJS.Timeout | undefined;
 	const arm = (): void => {
@@ -122,7 +110,6 @@ export function armExpiry(atMs: number, clock: Clock, fire: () => void, maxMs = 
 const MENTION_ROWS = 6;
 const MAX_HISTORY = 200;
 
-// Messages sent in this run of yena, for ↑/↓ in any chat.
 const sentHistory: string[] = [];
 export const rememberSent = (text: string): void => {
 	if (sentHistory.at(-1) === text) return;
@@ -135,8 +122,6 @@ export const clearSentHistory = (): void => {
 const COMMAND_LIST_MS = 1000;
 type Viewer = {lines: string[]; top: number; wrapped?: {width: number; rows: string[]}};
 
-// Wrapping a long transcript takes tens of milliseconds; doing it on every scroll step made the
-// viewer lag, so the rows are kept until the width changes.
 export function viewerRowsOf(v: Viewer, columns: number): string[] {
 	const width = Math.max(1, columns - 1);
 	if (v.wrapped?.width !== width) v.wrapped = {width, rows: wrapLines(v.lines, width, {mode: 'char'})};
@@ -145,13 +130,10 @@ export function viewerRowsOf(v: Viewer, columns: number): string[] {
 
 const MODE_NAME: Record<ChatMode, string> = {default: 'default', acceptEdits: 'accept-edits', plan: 'plan', auto: 'auto'};
 
-// Claude Code's colours for the mode hint under the input.
 const MODE_COLOR: Record<ChatMode, string | undefined> = {default: undefined, acceptEdits: 'magenta', plan: 'cyan', auto: 'yellow'};
 
 export function ChatView(props: ChatViewProps) {
 	const {controller, print: printRaw, close, scrub} = props;
-	// Claude Code's rhythm: one empty line before every block. A notice line (audit, mode) belongs to
-	// the block that follows it, so no gap is left after it.
 	const gapRef = useRef(true);
 	const print = useCallback(
 		(text: string, options?: PrintOptions) => {
@@ -169,10 +151,8 @@ export function ChatView(props: ChatViewProps) {
 		},
 		[printRaw],
 	);
-	// When the running turn started, for the seconds on the working line.
 	const sinceRef = useRef(Date.now());
 	const lastEventRef = useRef(Date.now());
-	// Answers and tool calls printed so far; the working line picks a new verb on each.
 	const beatRef = useRef(0);
 	const reveal = props.reveal ?? scrub;
 	const armMs = props.armMs ?? ARM_MS;
@@ -182,7 +162,6 @@ export function ChatView(props: ChatViewProps) {
 	const host = props.host;
 	const clock = props.clock ?? systemClock;
 
-	// Keys and events can arrive faster than React re-renders, so refs hold the truth.
 	const tRef = useRef<TranscriptState>(
 		initialTranscript({
 			model: props.initialModel ?? controller.model,
@@ -195,12 +174,10 @@ export function ChatView(props: ChatViewProps) {
 	const promptRef = useRef<PromptEntry | null>(null);
 	const batchRef = useRef(0);
 	const pendingModeRef = useRef<{mode: ChatMode; armedAt: number} | undefined>(undefined);
-	// Messages queued while detached, with no turn left to send them, come back as draft text.
 	const strandedRef = useRef(controller.state === 'running' ? '' : (controller.queued ?? []).join('\n\n'));
 	const initialText = [props.initialDraft ?? '', strandedRef.current].filter(Boolean).join('\n');
 	const edRef = useRef<EditorState>(initialText ? editorReduce(emptyEditor, {type: 'insert', text: initialText}) : emptyEditor);
 	const closedRef = useRef(false);
-	// Messages typed while Claude answers; sent together when the turn ends.
 	const queueRef = useRef<string[]>(controller.state === 'running' ? [...(controller.queued ?? [])] : []);
 	const setQueue = useCallback(
 		(next: string[]) => {
@@ -209,23 +186,16 @@ export function ChatView(props: ChatViewProps) {
 		},
 		[controller],
 	);
-	// Position while browsing the history with ↑/↓ (-1: not browsing) and the draft it replaced.
 	const historyRef = useRef<{index: number; draft: EditorState}>({index: -1, draft: emptyEditor});
-	// Ctrl+R: the query, the history index it matched, and the draft to restore on Esc.
 	const searchRef = useRef<{query: string; index: number; draft: EditorState} | undefined>(undefined);
-	// @ mentions: the highlighted suggestion; dismissed after Esc until the text changes.
 	const mentionRef = useRef<{selected: number; dismissed: boolean}>({selected: 0, dismissed: false});
-	// "/" command hints: the highlighted command; dismissed after Esc until the text changes.
 	const commandRef = useRef<{selected: number; dismissed: boolean}>({selected: 0, dismissed: false});
 	const commandListRef = useRef<{at: number; list: ViewCommandInfo[]} | undefined>(undefined);
 	const vimRef = useRef<VimState>(vimStart);
-	// Ctrl+O: the full transcript and the first row shown (-1 means the bottom).
 	const viewerRef = useRef<Viewer | undefined>(undefined);
-	// What the last render showed, for mouse events that arrive between renders.
 	const shownRef = useRef({columns: 0, rows: 0, inputRows: 0, vimNormal: false, statusBar: false, waiting: false, belowInput: 0});
 	const [, setTick] = useState(0);
 	const render = useCallback(() => setTick(n => n + 1), []);
-	// Core reports 0 columns while the console covers the chat; tables are laid out to the last real width.
 	const lastWidthRef = useRef(0);
 	if (columns > 0) lastWidthRef.current = columns;
 
@@ -236,7 +206,6 @@ export function ChatView(props: ChatViewProps) {
 		},
 		[render],
 	);
-	// Earlier drafts for undo (Ctrl+_ or vim u).
 	const undoRef = useRef<EditorState[]>([]);
 	const edit = useCallback(
 		(...actions: EditorAction[]) => {
@@ -271,7 +240,6 @@ export function ChatView(props: ChatViewProps) {
 				return;
 			}
 			if (event.type === 'steer-failed') {
-				// The chat's process got it after the turn: queue it, or back to the draft when nothing runs.
 				if (tRef.current.phase !== 'idle' && queueRef.current.length < MAX_QUEUED) setQueue([...queueRef.current, event.text]);
 				else {
 					const draft = edRef.current.text;
@@ -290,7 +258,6 @@ export function ChatView(props: ChatViewProps) {
 				if (out.kind === 'blank') continue;
 				if (out.kind === 'assistant') {
 					beatRef.current++;
-					// The transcript keeps a row's last column empty, so the first layout leaves it too.
 					const width = lastWidthRef.current > 1 ? lastWidthRef.current - 1 : undefined;
 					const block = assistantPrint(out.text, scrub, {interrupted: out.interrupted, width, copyLabel: true});
 					print(block.text, block.options);
@@ -298,7 +265,6 @@ export function ChatView(props: ChatViewProps) {
 				}
 				if (out.kind === 'tool' || out.kind === 'audit') {
 					if (out.kind === 'tool') beatRef.current++;
-					// A call stays on one row and its output within a few rows; laid out again at every width.
 					const width = lastWidthRef.current > 1 ? lastWidthRef.current - 1 : undefined;
 					const text = formatOut(out, scrub, reveal, width);
 					const options: PrintOptions = {render: w => formatOut(out, scrub, reveal, w)};
@@ -311,7 +277,6 @@ export function ChatView(props: ChatViewProps) {
 				else print(text);
 			}
 			if (event.type === 'turn-end' && queueRef.current.length > 0) {
-				// After an interrupt, limit or context failure the queued text comes back to the draft instead of being sent.
 				if (event.outcome === 'interrupted' || event.outcome === 'limit' || event.outcome === 'context') {
 					const back = queueRef.current.join('\n\n');
 					setQueue([]);
@@ -344,7 +309,6 @@ export function ChatView(props: ChatViewProps) {
 	}, [controller, print, render, scrub, setQueue]);
 
 	const cancelPending = useCallback(() => {
-		// A chat in another process keeps its pending permissions for the next attach.
 		if (controller.detachesOnClose) return;
 		for (const req of [...controller.pendingPermissions]) {
 			controller.answerPermission(req.id, {kind: 'cancel', cause: 'closed'});
@@ -352,7 +316,6 @@ export function ChatView(props: ChatViewProps) {
 	}, [controller]);
 
 	useLayoutEffect(() => {
-		// The stranded queue now lives in the draft; the chat's process must not keep a copy.
 		if (strandedRef.current) controller.setQueued?.([]);
 	}, [controller]);
 
@@ -362,7 +325,6 @@ export function ChatView(props: ChatViewProps) {
 			unsubscribe();
 			closedRef.current = true;
 			cancelPending();
-			// Synchronous so the child process is killed even when the app unmounts on a signal
 			controller.close();
 		};
 	}, [controller, feed, cancelPending]);
@@ -401,7 +363,6 @@ export function ChatView(props: ChatViewProps) {
 				setT(setNotice(tRef.current, `Already in ${MODE_NAME[mode]} mode.`));
 				return;
 			}
-			// Default and plan only take permissions away, so they need no confirmation.
 			if (mode === 'default' || mode === 'plan') {
 				pendingModeRef.current = undefined;
 				controller.setMode(mode);
@@ -419,16 +380,13 @@ export function ChatView(props: ChatViewProps) {
 		requestMode(MODE_CYCLE[(at + 1) % MODE_CYCLE.length] as ChatMode);
 	}, [controller, requestMode]);
 
-	// A message typed while a turn runs goes into that turn (read between steps); false when the queue is full.
 	const steerOrQueue = useCallback(
 		(text: string): boolean => {
-			// Messages already queued go first, so a later one cannot overtake them.
 			if (tRef.current.phase === 'running' && controller.steer && queueRef.current.length === 0) {
 				try {
 					controller.steer(text);
 					return true;
 				} catch {
-					// The turn is just ending: the message waits for the next one.
 				}
 			}
 			if (queueRef.current.length >= MAX_QUEUED) return false;
@@ -441,7 +399,6 @@ export function ChatView(props: ChatViewProps) {
 	const submit = useCallback(() => {
 		const text = edRef.current.text.trim();
 		if (text === '') return;
-		// Vim-style ":q" exits the application (or leaves the chat when there is no host).
 		if (text === ':q' || text === ':q!') {
 			edRef.current = emptyEditor;
 			if (host?.quit) host.quit();
@@ -450,7 +407,6 @@ export function ChatView(props: ChatViewProps) {
 		}
 		const slash = parseSlash(text);
 		const commands = commandHost(host);
-		// A yena console command: it runs in the console (which opens beside the chat), not in Claude.
 		if (slash?.kind === 'command' && commands?.runLine(slash.line)) {
 			historyRef.current = {index: -1, draft: emptyEditor};
 			rememberSent(text);
@@ -477,7 +433,6 @@ export function ChatView(props: ChatViewProps) {
 		try {
 			controller.send(message);
 		} catch (error) {
-			// Refused (e.g. another session is working): the text goes back into the input.
 			edRef.current = editorReduce(emptyEditor, {type: 'insert', text});
 			print(formatError(error instanceof Error ? error.message : String(error), scrub));
 			render();
@@ -486,7 +441,6 @@ export function ChatView(props: ChatViewProps) {
 		if (controller.state === 'running') feed({type: 'state', state: 'running'});
 	}, [controller, feed, host, leave, print, printNotice, render, requestMode, scrub, setT, steerOrQueue]);
 
-	// "claude start <message>": the message goes out once, right after the view is up.
 	const sentInitial = useRef(false);
 	useEffect(() => {
 		const text = props.initialSend;
@@ -534,11 +488,9 @@ export function ChatView(props: ChatViewProps) {
 	const escape = useCallback(() => {
 		const phase = tRef.current.phase;
 		if (phase === 'running') interrupt();
-		// Next to the console the chat is the main screen: only Ctrl+C leaves it.
 		else if (phase === 'interrupting') {
 			if (!host) leave();
 		} else if (edRef.current.text !== '') edit({type: 'clear'});
-		// The chat is the main screen next to the console, so Esc never leaves it there.
 		else if (!host) leave();
 	}, [edit, host, interrupt, leave]);
 
@@ -556,7 +508,6 @@ export function ChatView(props: ChatViewProps) {
 		}
 		if (promptRef.current?.id !== head.id) {
 			pendingModeRef.current = undefined;
-			// Held shut until the prompt has been rendered; the effect below arms it
 			const closed = {armedAt: Number.POSITIVE_INFINITY};
 			promptRef.current =
 				head.kind === 'tool'
@@ -626,7 +577,6 @@ export function ChatView(props: ChatViewProps) {
 		}
 	};
 
-	// The @ mention at the cursor and its suggestions, unless dismissed or nothing matches.
 	const activeMention = (): {start: number; matches: string[]} | undefined => {
 		if (mentionRef.current.dismissed || !props.files) return undefined;
 		const ed = edRef.current;
@@ -636,14 +586,12 @@ export function ChatView(props: ChatViewProps) {
 		return matches.length > 0 ? {start: at.start, matches} : undefined;
 	};
 
-	// The "/command sub…" being typed and what may come next, unless dismissed.
 	const activeCommand = (): SlashHints | undefined => {
 		if (commandRef.current.dismissed) return undefined;
 		const commands = commandHost(host);
 		if (!commands) return undefined;
 		const ed = edRef.current;
 		if (!ed.text.startsWith('/')) return undefined;
-		// Listing may read command files from disk, so it is taken at most once a second while typing.
 		const now = Date.now();
 		if (!commandListRef.current || now - commandListRef.current.at > COMMAND_LIST_MS) commandListRef.current = {at: now, list: commands.listCommands()};
 		return slashHints(commandListRef.current.list, ed.text, ed.cursor, MENTION_ROWS);
@@ -656,7 +604,6 @@ export function ChatView(props: ChatViewProps) {
 		undoRef.current.push(ed);
 		const text = `/${[...c.path, choice.name].join(' ')} `;
 		edRef.current = {...ed, text, cursor: text.length, truncated: false};
-		// The list stays: a command with subcommands shows them next.
 		commandRef.current = {selected: 0, dismissed: false};
 		render();
 	};
@@ -702,7 +649,6 @@ export function ChatView(props: ChatViewProps) {
 			searchRef.current = {...s, query, index: findInHistory(query, sentHistory.length - 1)};
 			return render();
 		}
-		// Any other key takes the match into the draft (Enter does not send it yet).
 		searchRef.current = undefined;
 		if (s.index >= 0) edit({type: 'set', text: sentHistory[s.index]!});
 		else render();
@@ -771,7 +717,6 @@ export function ChatView(props: ChatViewProps) {
 		const ed = edRef.current;
 		let cursor = cursorFromClick(ed.text, ed.cursor, shown.columns, shown.inputRows, row, raw.x);
 		if (cursor === undefined) return false;
-		// NORMAL mode sits on a character, never after the last one of a line.
 		if (shown.vimNormal && cursor > 0 && (cursor === ed.text.length || ed.text[cursor] === '\n') && ed.text[cursor - 1] !== '\n') cursor--;
 		edit({type: 'moveTo', cursor});
 		return true;
@@ -823,7 +768,6 @@ export function ChatView(props: ChatViewProps) {
 		if (searchRef.current) return searchKey(input, key);
 		const mention = activeMention();
 		if (props.inputMode?.() === 'vim' && !key.ctrl && !key.meta && !key.tab && !mention) {
-			// Esc while Claude answers still interrupts, whatever the vim mode.
 			const busyEscape = key.escape && tRef.current.phase !== 'idle';
 			if (!busyEscape) {
 				const r = vimKey(vimRef.current, {
@@ -870,11 +814,9 @@ export function ChatView(props: ChatViewProps) {
 				commandRef.current = {...commandRef.current, selected: (commandRef.current.selected + (key.upArrow ? n - 1 : 1)) % n};
 				return render();
 			}
-			// Enter on a name typed in full, or right after a space, runs the line; otherwise Enter and Tab take the highlighted one.
 			const exact = command.query === '' && command.path.length > 0 ? true : command.matches.some(c => c.name === command.query);
 			if (key.tab || (key.return && !key.meta && !key.shift && !exact)) return acceptCommand(command);
 		}
-		// Tab with nothing to complete opens or closes the console beside the chat.
 		if (key.tab) {
 			host?.togglePanel?.();
 			return;
@@ -893,7 +835,6 @@ export function ChatView(props: ChatViewProps) {
 		}
 		if (key.home) return edit({type: 'home'});
 		if (key.end) return edit({type: 'end'});
-		// Ctrl+_ (also Ctrl+/ in many terminals) arrives as 0x1f.
 		if (input === '\u001f' || (key.ctrl && (input === '_' || input === '/'))) return undo();
 		if (key.ctrl) {
 			if (input === 'a') return edit({type: 'home'});
@@ -953,7 +894,6 @@ export function ChatView(props: ChatViewProps) {
 	const ed = edRef.current;
 	const limit = limitIndicator(t.limit, clock);
 	const resetsAt = t.limit?.resetsAt;
-	// Drops an expired indicator while the chat is idle.
 	useEffect(() => {
 		if (resetsAt === undefined) return;
 		return armExpiry(resetsAt * 1000, clock, render);
@@ -970,7 +910,6 @@ export function ChatView(props: ChatViewProps) {
 		},
 		scrub,
 	);
-	// A host with a title bar shows the chat's name and this status above the chat instead.
 	const barTitle = scrub(controller.title ?? NEW_CHAT_TITLE);
 	const statusBar = host?.setTitle ? null : <StatusBar text={barStatusFull} />;
 	shownRef.current = {columns, rows, inputRows: 0, vimNormal: false, statusBar: statusBar !== null, waiting: false, belowInput: 0};
@@ -1039,10 +978,8 @@ export function ChatView(props: ChatViewProps) {
 				: t.notice;
 	const hint = modeHint(t.mode);
 	const rule = '─'.repeat(Math.max(1, columns - 1));
-	// Stay under the terminal height or Ink falls back to clearing the screen every frame
 	const cap = rows >= 12 ? rows - 3 : rows - 1;
 	let rem = Math.max(0, cap - 1);
-	// The rules around the input go first when the terminal is too short for everything.
 	const ruleRows = rem >= 6 ? 2 : 0;
 	rem -= ruleRows;
 	const hintRows = hint && rem >= 4 ? 1 : 0;
@@ -1071,7 +1008,6 @@ export function ChatView(props: ChatViewProps) {
 	const toolRows = toolLayout(tools.length, t.liveRaw ? Math.floor(rem / 2) : rem).rows;
 	rem -= toolRows;
 	const tail = liveTail(t.liveRaw, scrub, Math.min(LIVE.maxTailRows, Math.max(0, rem)), columns);
-	// The bottom rule and the mode hint sit between the input and the status bar.
 	shownRef.current = {...shownRef.current, inputRows, vimNormal, waiting: running && ed.text === '', belowInput: ruleRows / 2 + hintRows};
 
 	return (

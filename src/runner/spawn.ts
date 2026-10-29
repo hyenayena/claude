@@ -20,7 +20,6 @@ export type SpawnRunnerOptions = {
 	timeoutMs?: number;
 };
 
-// The entry is resolved through realpath so a symlinked src/ cannot point the spawn outside the module.
 const entryPath = (moduleDir: string): string => {
 	const root = realpathSync(moduleDir);
 	const entry = realpathSync(path.join(root, RUNNER_ENTRY_TAIL));
@@ -38,12 +37,10 @@ export const accepts = (file: string): Promise<boolean> =>
 		s.once('error', () => resolve(false));
 	});
 
-/** Starts a detached runner for the chat and resolves once it listens on its socket. */
 export async function spawnRunner(opts: SpawnRunnerOptions): Promise<{socketPath: string; pid: number}> {
 	const log = opts.log ?? noopLog;
 	const started = Date.now();
 	const socketPath = runnerSocketPath(opts.sessionDir);
-	// An idle runner of another yena still owns the socket (it holds no lock while idle).
 	if (await accepts(socketPath)) {
 		log.warn('runner spawn failed', {reason: 'busy'});
 		throw new Error(START_ERROR);
@@ -76,7 +73,6 @@ export async function spawnRunner(opts: SpawnRunnerOptions): Promise<{socketPath
 			try {
 				process.kill(child.pid, 'SIGKILL');
 			} catch {
-				// already gone
 			}
 		}
 		log.warn('runner spawn failed', {reason});

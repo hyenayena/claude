@@ -46,14 +46,12 @@ function setup({title = false, vim = false} = {}) {
 		{columns: COLUMNS, rows: 24},
 	);
 	cleanup.push(() => h.unmount());
-	// Debug frames are full writes; cursor toggles arrive as separate chunks.
 	const frame = (): string[] => {
 		const last = [...h.chunks].reverse().find(c => c.replace(SGR, '').trim() !== '') ?? '';
 		const lines = last.replace(SGR, '').split('\n');
 		while (lines.length > 0 && lines.at(-1) === '') lines.pop();
 		return lines;
 	};
-	// Aims at the first cell showing `needle`, with the view height core would report: the rendered one.
 	const clickOn = (needle: string, offset = 0) => {
 		const lines = frame();
 		const y = lines.findIndex(l => l.includes(needle));

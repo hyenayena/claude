@@ -3,7 +3,6 @@ import {test} from 'node:test';
 import {sanitizeBlock, sanitizeMultilineInput} from '../../src/kit.js';
 import {makeScrub} from '../../src/chat/scrub.js';
 
-// Reference copy of the pre-kit claude implementation, kept to prove the kit is never weaker.
 const OSC_LIKE = /\u001b[\]PX^_][\s\S]*?(?:\u0007|\u001b\\|$)/g;
 const CSI = /\u001b\[[0-?]*[ -/]*[@-~]?/g;
 const C1_OSC_LIKE = /[\u009d\u0090\u0098\u009e\u009f][\s\S]*?(?:\u0007|\u001b\\|\u009c|$)/g;
@@ -21,7 +20,6 @@ const oldStrip = (t: string): string =>
 const oldDisplay = (t: string): string => oldStrip(t.replace(/\r\n/g, '\n').replace(SEP, '\n')).replace(/\t/g, '    ');
 const oldInput = (t: string): string => oldStrip(t.replace(/\r\n?/g, '\n').replace(SEP, '\n'));
 
-// Lone surrogates are excluded from the differential: the old code let separated halves rejoin after stripping, the kit does not.
 const LONE_ATOM = new RegExp(LONE.source, 'g');
 
 const UNSAFE = new RegExp(

@@ -190,7 +190,6 @@ test('loginChanged makes the attached yena save the runner login and push a fres
 		onLoginChanged: () => void loginSyncOf({env: {}, dataDir, vault, log}).sync(),
 	});
 	await until(() => r.vault.current().entries.length === 1, 'first push');
-	// Claude Code in the runner refreshed the login: the runner's copy of the store is now behind.
 	const refreshed = {...SLOT, credentials: {claudeAiOauth: {...SLOT.credentials.claudeAiOauth, accessToken: 'RUNNER-ACCESS-NEW-0123456789', expiresAt: 2000}}};
 	writeFileSync(path.join(configDir, '.credentials.json'), JSON.stringify(refreshed.credentials));
 	writeFileSync(path.join(configDir, '.claude.json'), JSON.stringify({oauthAccount: SLOT.oauthAccount}));

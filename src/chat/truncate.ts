@@ -7,7 +7,6 @@ export const clampChars = (text: string, max: number): string =>
 
 const one = (v: unknown): string => (typeof v === 'string' ? v : JSON.stringify(v) ?? '');
 
-/** Data-only one-line summary (<= 100 chars); callers scrub it. */
 export const summarizeArgs = (name: string, input: unknown, cap = ARGS_CAP): string => {
 	const rec = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
 	const pick = (...keys: string[]): string =>

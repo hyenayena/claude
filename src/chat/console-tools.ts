@@ -12,16 +12,12 @@ export const LIST_COMMANDS_TOOL = `mcp__${CONSOLE_SERVER_NAME}__list_commands`;
 export const RUN_COMMAND_TOOL = `mcp__${CONSOLE_SERVER_NAME}__run_command`;
 export const CONSOLE_TOOL_NAMES: readonly string[] = [LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL];
 
-// The SDK and zod are loaded lazily by the caller, so this file stays free of runtime imports of either.
 export type ConsoleSdk = {
 	createSdkMcpServer: typeof createSdkMcpServer;
 	tool: typeof tool;
 	z: typeof Zod;
 };
 
-// In auto mode the classifier reviews every run_command call before it runs. A call it was unsure about
-// reaches canUseTool, which flags the line here; only flagged lines are confirmed by the user, the rest
-// run without asking (deny-level commands stay refused by the bridge in every mode).
 export type ConsoleFlags = {
 	flag(line: string): void;
 	take(line: string): boolean;
@@ -49,14 +45,11 @@ export type ConsoleServerDeps = {
 	prompter: PermissionPrompter;
 	flags?: ConsoleFlags;
 	redact: (s: string) => string;
-	// Working directory shown in the confirmation prompt.
 	cwd: string;
 	log: Logger;
-	// Pauses the chat turn timeout while a command runs; returns the release.
 	holdTurn?: () => () => void;
 };
 
-// Core's maximum; the bridge answers with a formatted timeout before the MCP call limit below.
 export const CONSOLE_TIMEOUT_MS = 600_000;
 export const CONSOLE_MCP_TIMEOUT_MS = 610_000;
 
@@ -64,20 +57,16 @@ type ToolResult = {content: {type: 'text'; text: string}[]; isError?: boolean};
 
 let seq = 0;
 
-// "Always" covers a command with its subcommand (canonical names from the bridge), whatever the arguments.
-// The prefix keeps these rules apart from saved Bash commands.
 export const COMMAND_KEY_PREFIX = 'cmd:';
 export const commandKey = (req: Pick<CommandConfirmRequest, 'command' | 'subcommand'>): string =>
 	`${COMMAND_KEY_PREFIX}${req.subcommand === undefined ? req.command : `${req.command} ${req.subcommand}`}`;
 
-// Credentials stay behind a prompt every time, on every path below `claude auth`.
 export const neverAlways = (key: string): boolean => key === 'cmd:claude auth' || key.startsWith('cmd:claude auth ');
 
 const signalOf = (extra: unknown): AbortSignal | undefined => {
 	const s = typeof extra === 'object' && extra !== null ? (extra as {signal?: unknown}).signal : undefined;
 	return s instanceof AbortSignal ? s : undefined;
 };
-
 
 export function createConsoleServer(deps: ConsoleServerDeps): ReturnType<typeof createSdkMcpServer> {
 	const {bridge, sdk, prompter, redact, log, cwd} = deps;

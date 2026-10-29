@@ -2,7 +2,6 @@ import type {BuildInfo} from '../../../../src/api.js';
 import {stringCells, truncateCells} from '../kit.js';
 import {SGR, type Scrub} from './present.js';
 
-// A paw print in the same shadowed block style as the wordmark.
 export const MASCOT = [
 	'     ███╗ ███╗',
 	'███╗ ███║ ███║ ███╗',
@@ -24,7 +23,6 @@ export const WORDMARK = [
 export const PLAIN_LOGO = 'YENA';
 
 const MAX_WIDTH = 100;
-// Between the paw and the wordmark, and between the logo and the info on its right.
 const ART_GAP = ' ';
 const INFO_GAP = '   ';
 const MODULES_LABEL = 'modules  ';
@@ -44,16 +42,13 @@ const pawWithWordmark = (): string[] => {
 	return MASCOT.map((m, i) => (padTo(m, paw) + ART_GAP + (WORDMARK[i] ?? '')).trimEnd());
 };
 
-/** The logos from widest to narrowest; the banner uses the first that fits. */
 export const LOGOS: readonly (readonly string[])[] = [pawWithWordmark(), MASCOT, [PLAIN_LOGO]];
 
-// Plain text and its style are kept apart so padding is measured on the visible cells only.
 type Segment = {text: string; style?: string};
 type Row = Segment[];
 
 const rowCells = (row: Row): number => row.reduce((n, s) => n + stringCells(s.text), 0);
 
-// Greedy wrap of `items` joined by " · ", continuation lines indented under the first item.
 function wrapItems(label: string, items: string[], width: number): string[] {
 	const indent = ' '.repeat(stringCells(label));
 	const lines: string[] = [];
@@ -71,8 +66,6 @@ function wrapItems(label: string, items: string[], width: number): string[] {
 	return lines;
 }
 
-// The most compact form that fits `width`: the head splits into version and model, the module list
-// moves under its label, and is left out when even that does not fit (`complete` is then false).
 function infoLines(info: BannerInfo, scrub: Scrub, width: number): {rows: Row[]; complete: boolean} {
 	const version = `yena ${scrub(info.build?.version ?? 'unknown')}`;
 	const model = `model ${scrub(info.model ?? 'default')}`;
@@ -104,10 +97,6 @@ const truncateRow = (row: Row, width: number): Row => {
 	});
 };
 
-/**
- * The box shown at the top of a new chat: the widest logo that fits (paw with wordmark, paw, or the
- * plain word), with the versions and model on its right when all of it fits there, else below it.
- */
 export function formatBanner(info: BannerInfo, scrub: Scrub): string {
 	const width = Math.min(Math.max(info.columns, 0), MAX_WIDTH);
 	const inner = width - 4;
@@ -117,7 +106,6 @@ export function formatBanner(info: BannerInfo, scrub: Scrub): string {
 	const logoStyle = logo.length === 1 ? SGR.bold + SGR.yellow : SGR.yellow;
 
 	const rightWidth = inner - logoWidth - INFO_GAP.length;
-	// The right side takes the info only whole: a module list it would have to drop goes below instead.
 	const side = rightWidth > 0 ? infoLines(info, scrub, rightWidth) : {rows: [], complete: false};
 	const right = side.rows;
 	const fitsRight = side.complete && right.length > 0 && right.length <= logo.length && right.every(r => rowCells(r) <= rightWidth);

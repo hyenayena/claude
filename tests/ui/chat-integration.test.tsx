@@ -186,6 +186,5 @@ test('a write through a directory symlink shows where it resolves and audits bot
 	t.h.press('y');
 	await wait(150);
 	assert.equal((t.results[0] as {behavior: string}).behavior, 'allow');
-	// One row in the chat: a long line loses its middle, never the resolved target at the end.
 	assert.ok(t.printed.some(p => /^Allowed Write: .*realdir\/n\.txt$/.test(p) && !p.includes('\n')), t.printed.join('|'));
 });

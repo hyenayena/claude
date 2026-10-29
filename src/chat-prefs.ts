@@ -8,19 +8,15 @@ export const OUTPUT_STYLES = ['Explanatory', 'Learning'] as const;
 export type Effort = (typeof EFFORTS)[number];
 export type OutputStyle = (typeof OUTPUT_STYLES)[number];
 
-/** Per-chat tuning beyond the model; unset fields keep the Claude Code defaults. */
 export type ChatTuning = {
 	effort?: Effort;
 	thinking?: 'disabled';
 	fastMode?: true;
 	outputStyle?: OutputStyle;
-	// MCP servers from the Claude Code config are on unless this is set.
 	noMcp?: true;
-	// Hooks from settings files run only when this is set.
 	hooks?: true;
 };
 
-/** A change to the running chat; null returns a field to its default. */
 export type LivePatch = {
 	model?: string | null;
 	effort?: Effort | null;
@@ -29,7 +25,6 @@ export type LivePatch = {
 	outputStyle?: OutputStyle | null;
 };
 
-/** The live change a settings value stands for. */
 export function livePatch(key: string, value: string): LivePatch | undefined {
 	switch (key) {
 		case 'chatModel':
@@ -47,7 +42,6 @@ export function livePatch(key: string, value: string): LivePatch | undefined {
 	}
 }
 
-/** Model and tuning after a live change, for the next query the chat spawns. */
 export function withPatch(cur: {model?: string; tuning: ChatTuning}, patch: LivePatch): {model?: string; tuning: ChatTuning} {
 	const tuning: ChatTuning = {...cur.tuning};
 	let model = cur.model;
@@ -87,8 +81,6 @@ export function tuningFromState(state: ClaudeState): ChatTuning {
 
 export function applyTuning(options: Options, tuning: ChatTuning | undefined): Options {
 	const next: Options = {...options};
-	// MCP servers configured for Claude Code (user and project) load unless turned off; the
-	// in-process servers passed in `mcpServers` (yena's console tools) stay either way.
 	if (!tuning?.noMcp) next.strictMcpConfig = false;
 	if (tuning?.hooks) {
 		const base = typeof next.settings === 'object' && next.settings !== null ? next.settings : {};
@@ -135,11 +127,9 @@ type PrefSpec = {
 	label: string;
 	description: string;
 	options: SettingOption[];
-	// Converts a chosen option value into the stored value; throws on anything not offered.
 	parse: (value: string) => ClaudeState[PrefKey];
 	show: (state: ClaudeState) => string;
 	onSet?: (value: string) => void;
-	// Takes effect only in chats opened after the change.
 	newChatsOnly?: true;
 };
 
@@ -189,13 +179,9 @@ const STYLE_OPTIONS: SettingOption[] = [
 ];
 
 export type ChatSettingsHooks = {
-	// Applies a newly chosen permission mode to the open chat, if any.
 	applyMode?: (mode: 'default' | 'acceptEdits' | 'plan' | 'auto') => void;
-	// Switches the chat input between normal and vim editing.
 	applyInputMode?: (mode: 'normal' | 'vim') => void;
-	// Applies model, effort, thinking, fast mode or output style to the open chat, if any.
 	applyLive?: (patch: LivePatch) => void;
-	// Tells a chat running in the background whether to keep working after yena exits.
 	applyKeep?: (keep: boolean) => void;
 };
 

@@ -11,9 +11,6 @@ const messages = JSON.parse(
 	readFileSync(new URL('../fixtures/real-foreground-bash.json', import.meta.url), 'utf8'),
 ) as SDKMessage[];
 
-// Recorded live: a foreground Bash call emits no task_started or tool_progress message, so the
-// shell watcher has no start signal on this stream. The output file does exist under
-// CLAUDE_CODE_TMPDIR (/tmp/yena-claude-<uid>/claude-<uid>/<slug>/<session>/tasks/<id>.output).
 test('a recorded foreground Bash call yields tool events but no task or progress events', () => {
 	assert.equal(JSON.stringify(messages).includes('sk-ant'), false);
 	const kinds = messages.flatMap(m => normalize(m)).map(e => e.kind);
@@ -24,8 +21,6 @@ test('a recorded foreground Bash call yields tool events but no task or progress
 	assert.equal(messages.some(m => m.type === 'system' && (m as {subtype?: string}).subtype === 'task_started'), false);
 });
 
-// The start signal is the output file, not the stream: replay the recording with a file that
-// appears after the tool_use and check the call runs and ends on the tool_result.
 test('the recorded stream without task events still yields a running call bound from the file', async () => {
 	const root = mkdtempSync(join(tmpdir(), 'shell-stream-'));
 	const uid = process.getuid?.() ?? 0;

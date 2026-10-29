@@ -32,7 +32,6 @@ const OAUTH2 = 'sk-ant-oat-SECONDVALUE0123456789abcdef';
 const tmp = () => mkdtemp(join(tmpdir(), 'claude-cred-'));
 const shape = (c?: {kind: string; source: string; account?: string}) => c && {kind: c.kind, source: c.source, account: c.account};
 
-// `null`: a host without the credential channel.
 const setup = async (env: NodeJS.ProcessEnv = {}, fake: FakeCredentials | null = fakeCredentials(), now?: () => number) => {
 	const dataDir = await tmp();
 	const log = makeFakeLog();
@@ -48,7 +47,6 @@ const slotOf = (who: Who, expires = 1000) => ({
 	oauthAccount: {emailAddress: who.email, accountUuid: who.uuid},
 });
 
-// A Claude Code login as it sits in the config dir (the working copy).
 const writeLogin = async (dataDir: string, who: Who, expires = 1000, extra: Record<string, unknown> = {}) => {
 	const config = join(dataDir, 'config');
 	await mkdir(config, {recursive: true});
@@ -283,7 +281,6 @@ test('logins are swapped into the config dir only when the working copy is saved
 	const claude = JSON.parse(await readFile(join(dataDir, 'config', '.claude.json'), 'utf8'));
 	assert.deepEqual(claude.mcpServers, {x: {command: 'y'}}, 'other settings stay');
 	assert.ok(!(await readdir(join(dataDir, 'config'))).includes('policy-limits.json'), "the other organisation's cache goes");
-	// Claude Code refreshes Alice's login while she is in: the working copy is now ahead of the store.
 	await writeLogin(dataDir, {...ALICE, token: 'ALICE-REFRESHED-0123456789'}, 2000);
 	assert.equal(prepareCredential(opts).account, 'alice', 'the refreshed login is used as it is');
 	assert.equal(await loginToken(dataDir), 'ALICE-REFRESHED-0123456789');

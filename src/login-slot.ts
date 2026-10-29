@@ -2,16 +2,11 @@ import {createHash, randomBytes} from 'node:crypto';
 import {lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 
-/**
- * A Claude Code login as the CLI keeps it in its config dir (the working copy): its credentials file and
- * two fields of .claude.json. The account module stores it as one JSON blob; claude installs it before a run.
- */
 export type LoginSlot = {credentials: unknown; oauthAccount?: unknown; primaryApiKey?: string};
 
 const FILE_MAX = 1024 * 1024;
 const SLOT_MAX = 64 * 1024;
 const LOGIN_FIELDS = ['oauthAccount', 'primaryApiKey'] as const;
-// Signed per-organisation caches of Claude Code; another account fetches its own.
 const ORG_CACHES = /^(policy-limits|remote-settings)\.json/;
 
 export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -33,7 +28,6 @@ export function writeAtomic(file: string, data: string): void {
 
 type Read = {state: 'none'} | {state: 'bad'} | {state: 'ok'; value: unknown};
 
-// A regular file only (never through a symlink), bounded; 'bad' when it exists but cannot be parsed.
 function readJsonState(file: string): Read {
 	let size: number;
 	try {
@@ -70,7 +64,6 @@ const slotFrom = (credentials: unknown, claude: unknown): LoginSlot | undefined 
 
 export type WorkingCopy = {state: 'none'} | {state: 'bad'} | {state: 'ok'; slot: LoginSlot};
 
-/** The login in the config dir; 'bad' while a file there cannot be read (the CLI may be writing it). */
 export function readWorkingCopy(configDir: string): WorkingCopy {
 	const credentials = readJsonState(loginCredentialsFile(configDir));
 	const claude = readJsonState(claudeJsonFile(configDir));
@@ -79,13 +72,11 @@ export function readWorkingCopy(configDir: string): WorkingCopy {
 	return slot ? {state: 'ok', slot} : {state: 'none'};
 }
 
-/** The login now in the config dir, or undefined when there is none or it cannot be read. */
 export function snapshotLogin(configDir: string): LoginSlot | undefined {
 	const wc = readWorkingCopy(configDir);
 	return wc.state === 'ok' ? wc.slot : undefined;
 }
 
-/** Size and mtime of the working copy's files, to notice a change without reading them. */
 export function workingCopyStamp(configDir: string): string {
 	return [loginCredentialsFile(configDir), claudeJsonFile(configDir)]
 		.map(f => {
@@ -99,7 +90,6 @@ export function workingCopyStamp(configDir: string): string {
 		.join('|');
 }
 
-/** A stored login blob, checked for shape; undefined when it is not one. */
 export function parseSlot(raw: unknown): LoginSlot | undefined {
 	let v = raw;
 	if (typeof raw === 'string') {
@@ -129,14 +119,12 @@ export const slotUuid = (slot: LoginSlot): string | undefined => {
 	return isRecord(a) && typeof a.accountUuid === 'string' && a.accountUuid.length <= 64 ? a.accountUuid : undefined;
 };
 
-/** When the login's access token expires (epoch ms), as Claude Code records it; undefined when unknown. */
 export const expiresAt = (slot: LoginSlot): number | undefined => {
 	const c = slot.credentials;
 	const oauth = isRecord(c) ? c.claudeAiOauth : undefined;
 	return isRecord(oauth) && typeof oauth.expiresAt === 'number' && Number.isFinite(oauth.expiresAt) ? oauth.expiresAt : undefined;
 };
 
-/** Both logins belong to the same Claude account (uuid, else email, else the same Console key). */
 export const sameClaudeAccount = (a: LoginSlot, b: LoginSlot): boolean => {
 	const [ua, ub] = [slotUuid(a), slotUuid(b)];
 	if (ua !== undefined && ub !== undefined) return ua === ub;
@@ -153,10 +141,8 @@ const canonical = (v: unknown): unknown => {
 	return out;
 };
 
-/** SHA-256 of the login in a canonical form; compared in memory only, never logged. */
 export const slotDigest = (slot: LoginSlot): string => createHash('sha256').update(JSON.stringify(canonical(slot))).digest('hex');
 
-/** The secret strings inside a login (tokens, the Console key), for redaction. */
 export function slotLeaves(slot: LoginSlot): string[] {
 	const out: string[] = [];
 	const walk = (v: unknown, depth: number): void => {
@@ -171,7 +157,6 @@ export function slotLeaves(slot: LoginSlot): string[] {
 	return out;
 }
 
-/** Puts a login into the config dir; the rest of .claude.json (settings, MCP servers, projects) stays. */
 export function installSlot(configDir: string, slot: LoginSlot): void {
 	if (slot.credentials) writeAtomic(loginCredentialsFile(configDir), JSON.stringify(slot.credentials, null, 2));
 	else rmSync(loginCredentialsFile(configDir), {force: true});
@@ -184,11 +169,9 @@ export function installSlot(configDir: string, slot: LoginSlot): void {
 	try {
 		for (const f of readdirSync(configDir)) if (ORG_CACHES.test(f)) rmSync(path.join(configDir, f), {force: true});
 	} catch {
-		// no config dir yet
 	}
 }
 
-/** Takes the login out of the config dir (signs Claude Code out); the rest of .claude.json stays. */
 export function clearLogin(configDir: string): void {
 	rmSync(loginCredentialsFile(configDir), {force: true});
 	const claude = readJson(claudeJsonFile(configDir));

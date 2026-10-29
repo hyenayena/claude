@@ -44,7 +44,6 @@ const sanitize = (raw: unknown): ClaudeState => {
 	return state;
 };
 
-// Module-level so that several stores over the same file still serialise.
 let chain: Promise<unknown> = Promise.resolve();
 
 export const createStore = (dataDir: string, log: Logger = noopLog) => {

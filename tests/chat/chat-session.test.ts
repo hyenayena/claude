@@ -943,7 +943,6 @@ test('a usage limit with another account restarts Claude Code in the same sessio
 	queries[1]?.emit(ok());
 	await tick();
 	assert.deepEqual(ends().map(e => (e as {outcome: string}).outcome), ['ok']);
-	// The next limit has no account left: the turn ends as before.
 	session.send('two');
 	queries[1]?.emit(limitError());
 	queries[1]?.emit(errResult({result: CLI_TEXT}));

@@ -279,10 +279,8 @@ describe('buildChatOptions', () => {
 		for (const k of ['cwd', 'additionalDirectories', 'settingSources', 'pathToClaudeCodeExecutable'] as const) {
 			assert.deepEqual(o[k], a[k], k);
 		}
-		// Only the one-shot ask has a turn limit.
 		assert.equal(typeof a.maxTurns, 'number');
 		assert.ok(!('maxTurns' in o));
-		// The chat loads MCP servers from the Claude Code config; ask never does.
 		assert.equal(a.strictMcpConfig, true);
 		assert.equal(o.strictMcpConfig, false);
 		assert.deepEqual(o.mcpServers, {});

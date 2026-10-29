@@ -27,7 +27,6 @@ afterEach(() => {
 function setup(size?: {columns: number; rows: number}, extra: Partial<ChatViewProps> = {}) {
 	const controller: FakeController = fakeController();
 	const printed: string[] = [];
-	// Every print in order, the empty gap lines between blocks included.
 	const raw: string[] = [];
 	const closed = {count: 0};
 	const h = mountHarness(
@@ -1018,7 +1017,6 @@ test('mouse: a click on the input moves the cursor there; malformed events are i
 	assert.equal(m.listeners.length, 1);
 	t.press('hello world');
 	await t.settle();
-	// The status bar is the bottom row, above it the rule under the input, then the input.
 	assert.equal(m.click(7, 8), false);
 	assert.equal(m.click(7, 7), true);
 	assert.equal(m.send({kind: 'press', button: 'left', x: 60, y: 7}), false);
@@ -1042,7 +1040,6 @@ test('mouse: in vim NORMAL the input sits above its rule and the mode line, and 
 	await t.settle();
 	t.press(ESC);
 	await t.settle(60);
-	// From the bottom: status bar, mode line, the rule under the input, the input.
 	assert.equal(m.click(2, 8), false);
 	assert.equal(m.click(2, 7), false);
 	assert.equal(m.click(2, 6), true);
@@ -1179,7 +1176,6 @@ test('the indicator disappears by itself when the reset time passes', async () =
 	const t = limitSetup(clock);
 	await t.settle();
 	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed_warning', type: 'five_hour', utilization: 0.5, resetsAt: start / 1000 + 1.5}});
-	// The reset is 1.5 s away: wide enough to wait for a full render first.
 	await t.settle();
 	assert.match(t.bars.at(-1)![1] ?? '', /5h limit/);
 	await new Promise(r => setTimeout(r, Math.max(0, start + 1700 - Date.now())));
@@ -1358,7 +1354,6 @@ test('after "/claude " the hints list its subcommands; Tab takes one, Enter afte
 	t.press('\t');
 	await t.settle();
 	assert.match(t.lastFrame(), /> \/claude\s*$/m);
-	// The list stays and shows what comes next.
 	assert.match(t.lastFrame(), /\/claude resume +Resume a chat/);
 	assert.match(t.lastFrame(), /\/claude compact +Claude Code: compact the context/);
 	t.press('re');
@@ -1372,7 +1367,6 @@ test('after "/claude " the hints list its subcommands; Tab takes one, Enter afte
 	await t.settle();
 	assert.match(t.lastFrame(), /> \/claude rename\s*$/m);
 	assert.deepEqual(c.ran, [], 'Enter on a partial word only completes it');
-	// Arguments get no hints; an alias leads to the same level as the name.
 	assert.doesNotMatch(t.lastFrame(), /Resume a chat/);
 	t.press('\u0015');
 	await t.settle();

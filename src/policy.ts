@@ -69,64 +69,41 @@ export const PLANS_DIR = 'plans';
 export type Scope = {
 	roots: string[];
 	denied: string[];
-	/** The project dir when it is the read-only image (`/app`): writes there are refused with a pointer to the working copy. */
 	image?: string;
-	/** What a shell command must not name: the host's state dir (module overlay, start mode, failure record). */
 	hostStateDenied?: string[];
-	/** Roots where Claude may change anything without asking, in every mode (the md hub). */
 	free?: string[];
-	/** Files inside the free roots that still need the user's approval in every mode (the hub's CLAUDE.md, SOUL.md). */
 	askFiles?: string[];
-	/** Dirs whose `.jsonl` files (session transcripts) are closed to Read, Glob and Grep. */
 	transcriptDirs?: string[];
-	/** Dirs Claude may not write into, by the given or the resolved path (yena's Claude data dir). */
 	locked?: string[];
-	/** Parts of the locked dirs that stay writable (plan mode's plans dir). */
 	lockedExcept?: string[];
-	/** The project module's current isolation, read on every check (it changes during a chat). */
 	projects?: () => Promise<ProjectAccess | undefined>;
-	/** The project module's data dir (its state decides what is writable); shell commands naming it are refused. */
 	projectDataDir?: string;
-	/** What a shell command must not name: the account module's data dir and the tails of its secret dirs. */
 	shellDenied?: string[];
-	/** The ssh-agent socket yena was started with (compose forwards the host's); shell commands naming it are refused. */
 	agentSocket?: string;
 };
 
 export type PolicyPaths = {
 	projectDir: string;
 	mdDir: string;
-	/** The md hub that mdDir links to; the one place Claude edits freely (defaults to mdDir). */
 	hubDir?: string;
-	/** yena's Claude data dir; closed for writes when given. */
 	dataDir?: string;
 	configDir: string;
 	stateFile: string;
 	credentialsFile: string;
-	/** The project module's access reader; projects are read-only unless it isolates them. */
 	projects?: ProjectAccessReader;
-	/** The account module's secret dirs; denied to every tool. */
 	accountSecrets?: AccountSecretPaths;
-	/** The ssh-agent socket from yena's environment (the chat's own env drops SSH_AUTH_SOCK). */
 	agentSocket?: string;
-	/** projectDir is on a read-only filesystem (the image). */
 	imageReadOnly?: boolean;
-	/** The host's state dir (`YENA_HOST_STATE`, published by the host): executable overlay and launcher state. */
 	hostState?: string;
 };
 
-// Instructions loaded into every session and agent: a change there is a persistent prompt injection, so it asks.
 export const HUB_ASK_FILES = ['CLAUDE.md', 'SOUL.md'];
 
-// Earlier sessions and the prompt history: whatever was once pasted or fetched would come back into the context.
 export const CONFIG_TRANSCRIPTS = 'projects';
 export const CONFIG_HISTORY = 'history.jsonl';
 
-// `auth login --console` writes primaryApiKey into .claude.json and its backups.
 export const CONFIG_SECRET = ['.credentials.json', '.claude.json', 'backups'];
 
-// Env files (`.env`, `.envrc`, `.env.local`, `.env-prod`…), PEM files and private keys, key stores
-// (`*.key`, `*.p12`, `*.pfx`), SSH private keys and files that hold login tokens (`.netrc`, `.npmrc`, `.pgpass`).
 const SECRET_BASENAMES = [
 	/^\.env(rc)?$/,
 	/^\.env[.\-_]/,
@@ -134,38 +111,28 @@ const SECRET_BASENAMES = [
 	/^id_(rsa|dsa|ecdsa|ed25519)/,
 	/^\.(netrc|npmrc|pgpass)$/,
 ];
-// Templates of an env file hold no secrets by convention and are meant to be committed.
 export const ENV_TEMPLATE = /^\.env(\.[\w-]+)*\.(example|sample|template|dist)$/i;
-// Not secrets either: type declarations named after env files and public SSH keys.
 const NOT_SECRET = [ENV_TEMPLATE, /\.d\.ts$/, /^id_\w+\.pub$/];
 
 export const isSecretName = (name: string): boolean =>
 	SECRET_BASENAMES.some(re => re.test(name)) && !NOT_SECRET.some(re => re.test(name));
 
-// The accounts (keys, tokens, saved logins; see accounts.ts) sit next to credentials.json.
 export const accountPaths = (paths: PolicyPaths): [string, string] => {
 	const dir = path.dirname(paths.credentialsFile);
 	return [path.join(dir, 'accounts.json'), path.join(dir, 'accounts')];
 };
 
-// Order, limits and the installed login (no secrets, but names and state the model has no use for).
 export const authStatePath = (paths: PolicyPaths): string => path.join(path.dirname(paths.credentialsFile), 'auth.json');
 
-/**
- * Strings a shell command naming the account secrets would contain: the data dir and each secret dir's
- * last two segments ("account/keys"), which also catch a relative path after a cd.
- */
 export function accountShellDenied(secrets: AccountSecretPaths | undefined): string[] {
 	if (!secrets) return [];
 	const tails = secrets.secretDirs.map(d => path.join(path.basename(path.dirname(d)), path.basename(d)));
 	return [path.resolve(secrets.dataDir), ...tails];
 }
 
-// Each entry may be a file or a folder: both rules, so neither form slips through.
 const accountSecretRules = (paths: PolicyPaths, tool: 'Read' | 'Edit'): string[] =>
 	(paths.accountSecrets?.secretDirs ?? []).flatMap(d => [`${tool}(${absRule(d)})`, `${tool}(${absRule(d)}/**)`]);
 
-// Claude Code permission rules: "//path" is absolute, "~/" is the home directory.
 const absRule = (p: string) => `/${p}`;
 
 export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
@@ -229,13 +196,6 @@ export function buildAskSettings(paths: PolicyPaths): {
 	};
 }
 
-// Edit rules also cover Write.
-// Everything in the Claude config dir except plans/ (where plan mode writes its plan file): settings
-// rules cannot express "all but", so the parts are listed; the policy hook still refuses any other
-// write into the config dir.
-// agents, skills, commands and output-styles are not listed: they are symlinks into the md hub, and
-// Claude Code resolves symlinks in rule paths, so a deny rule on them would deny the hub itself. The
-// policy hook still refuses writes through those links (class 'deny-locked').
 export const CONFIG_EDIT_DENY = [
 	'*.json',
 	'*.jsonl',
@@ -254,15 +214,10 @@ export const CONFIG_EDIT_DENY = [
 	'ide/**',
 ];
 
-
-// The md hub is Claude's to change: edits there are allowed without asking in every mode,
-// auto mode's classifier included. Deny rules still win over these.
 export const freeEditAllow = (paths: PolicyPaths): string[] => [`Edit(${absRule(paths.hubDir ?? paths.mdDir)}/**)`];
 
-// Ask rules the chat narrows: its policy hook checks the rest by name (`isSecretName`), templates and public keys excepted.
 const CHAT_NARROWED: Record<string, string> = {'Read(**/.env*)': 'Read(**/.env)', 'Read(**/id_rsa*)': 'Read(**/id_rsa)'};
 
-// Ask rules win over the hub's allow rule, so these files prompt even though the rest of the hub is free.
 export const hubAskEdit = (paths: PolicyPaths): string[] =>
 	HUB_ASK_FILES.map(f => `Edit(${absRule(path.join(paths.hubDir ?? paths.mdDir, f))})`);
 
@@ -270,9 +225,6 @@ export function buildChatSettings(paths: PolicyPaths): {
 	permissions: {allow: string[]; ask: string[]; deny: string[]};
 	disableAllHooks: true;
 } {
-	// Settings rules cannot say "but not .env.example": the chat names only `.env` and `id_rsa` here and
-	// leaves the other env files and keys to the policy hook, which runs in every mode and lets the
-	// templates and public keys through (`isSecretName`).
 	const editDeny = [
 		`Edit(${absRule(paths.credentialsFile)})`,
 		`Edit(${absRule(accountPaths(paths)[0])})`,
@@ -301,8 +253,6 @@ export function buildChatSettings(paths: PolicyPaths): {
 	};
 }
 
-// Resolves symlinks of the nearest existing ancestor, so nonexistent targets
-// still land where they would be created.
 export async function resolveReal(p: string): Promise<string> {
 	const tail: string[] = [];
 	let cur = path.resolve(p);
@@ -348,8 +298,6 @@ export async function isPathAllowed(p: string, scope: Scope): Promise<boolean> {
 	const extra = (await scope.projects?.())?.roots ?? [];
 	const roots = await realList([...scope.roots, ...extra]);
 	const denied = await realList(scope.denied);
-	// A project's .yena is a yena data dir (a checkout's own data, secrets included), whatever the project:
-	// the project roots (workplace, stages) hold projects one level down.
 	for (const r of await realList(extra)) {
 		if (!within(real, r)) continue;
 		const segs = path.relative(r, real).split(path.sep);
@@ -359,7 +307,6 @@ export async function isPathAllowed(p: string, scope: Scope): Promise<boolean> {
 	if (rootLen < 0) {
 		return false;
 	}
-	// A root nested inside a denied dir (the md dir under .yena) stays readable.
 	const deniedLen = Math.max(-1, ...denied.filter(d => within(real, d)).map(d => d.length));
 	if (deniedLen >= rootLen) {
 		return false;
@@ -378,11 +325,6 @@ const isPlainRelative = (pattern: string) =>
 
 const GLOB_CHARS = /[*?[\]{}!]/;
 
-/**
- * The folder a glob pattern starts from: the part before its first wildcard, resolved against the
- * search path ("/app/src" for an absolute pattern under /app/src). Undefined when the pattern could
- * leave that folder (".." after a wildcard, "~").
- */
 export function globBase(pattern: string, from: string): string | undefined {
 	if (pattern.startsWith('~')) return undefined;
 	const segs = pattern.split(/[\\/]/);
@@ -424,7 +366,6 @@ export function createCanUseTool(scope: Scope): CanUseTool {
 			case 'Glob':
 				if (!optionalString(input.path) || typeof input.pattern !== 'string') return pathDenied;
 				paths = [(input.path as string | undefined) ?? cwd];
-				// An absolute pattern or one with ".." is checked by the folder it starts from.
 				if (!isPlainRelative(input.pattern)) {
 					const base = globBase(input.pattern, path.resolve(cwd, paths[0]!));
 					if (base === undefined) return pathDenied;
@@ -483,7 +424,6 @@ function noAutoAccept(rel: string): boolean {
 	return false;
 }
 
-/** A folder holding yena's own repo: the host script, the host entry and the compose file. */
 export async function isYenaCheckout(dir: string): Promise<boolean> {
 	const has = (rel: string) =>
 		stat(path.join(dir, rel)).then(
@@ -493,10 +433,6 @@ export async function isYenaCheckout(dir: string): Promise<boolean> {
 	return (await has('yena')) && (await has('compose.yaml')) && (await has(path.join('src', 'cli.ts')));
 }
 
-/**
- * A write under a managed dir (workplace, stages, the hub's projects dir) is allowed only inside a
- * writable folder (an isolated project, its docs or its stages). Undefined: not a project path.
- */
 async function projectTarget(real: string, access: ProjectAccess): Promise<'readonly' | {dir: string; docs: boolean} | undefined> {
 	const managed = await realList(access.managed);
 	if (!managed.some(d => within(real, d))) return undefined;
@@ -507,7 +443,6 @@ async function projectTarget(real: string, access: ProjectAccess): Promise<'read
 	return {dir, docs: within(dir, docsRoot)};
 }
 
-/** Whether a write target is one of the files that ask in every mode (checked by the given and the resolved path). */
 export async function isAskFile(filePath: string, scope: Scope): Promise<boolean> {
 	const projectDir = scope.roots[0];
 	if (projectDir === undefined || !scope.askFiles?.length) return false;
@@ -547,7 +482,6 @@ export async function classifyEditTarget(filePath: string, scope: Scope): Promis
 			const rel = path.relative(verdict.dir, real);
 			const [first] = rel.split(path.sep);
 			if (first === undefined || first.startsWith('.')) return 'prompt-only';
-			// In a yena checkout (the working copy, its stages) the files that run on the host keep asking (SEC-8).
 			return (await isYenaCheckout(verdict.dir)) && noAutoAccept(rel) ? 'prompt-only' : 'auto-eligible';
 		}
 	}

@@ -1,7 +1,5 @@
 import {readFileSync} from 'node:fs';
 
-// Field 22 of /proc/<pid>/stat. The command name (field 2) may contain spaces and parentheses,
-// so parsing starts after its last ")".
 export function procStart(pid: number, procRoot = '/proc'): string | undefined {
 	if (!Number.isInteger(pid) || pid <= 0) return undefined;
 	try {
@@ -14,7 +12,6 @@ export function procStart(pid: number, procRoot = '/proc'): string | undefined {
 	}
 }
 
-/** The process's arguments, or undefined when it does not exist or cannot be read. */
 export function procCmdline(pid: number, procRoot = '/proc'): string[] | undefined {
 	if (!Number.isInteger(pid) || pid <= 0) return undefined;
 	try {

@@ -28,26 +28,19 @@ export type ClaudePaths = {
 	moduleDir: string;
 	projectDir: string;
 	dataDir: string;
-	/** The shared md hub of the md module, <YENA_DATA>/md; mdDir links to it. */
 	hubDir: string;
 	mdDir: string;
 	configDir: string;
 	runtimeBin: string;
 	stateFile: string;
 	credentialsFile: string;
-	/** Written by Claude Code's own login; only its metadata is ever inspected. */
 	loginFile: string;
-	/** The project module's access reader, when it is installed (see withProjects). */
 	projects?: ProjectAccessReader;
-	/** Where the account module keeps secrets, when it is installed (see withProjects). */
 	accountSecrets?: AccountSecretPaths;
-	/** projectDir is on a read-only filesystem: the image (see withProjects). */
 	imageReadOnly?: boolean;
-	/** The host's state dir, as the host publishes it in YENA_HOST_STATE. */
 	hostState?: string;
 };
 
-/** True only for a read-only filesystem (EROFS): permissions do not count, the container runs as root. */
 export function isReadOnlyDir(dir: string): boolean {
 	try {
 		accessSync(dir, constants.W_OK);
@@ -79,17 +72,8 @@ export function resolvePaths(dataDir: string, moduleDir?: string): ClaudePaths {
 	};
 }
 
-/**
- * Claude Code config folders kept in the md hub (where Claude may edit them) and linked into the config
- * dir, where Claude Code looks for them. settings and hooks stay in the config dir: they can run code
- * and change permissions.
- */
 export const MD_LINKED_DIRS = ['agents', 'skills', 'commands', 'output-styles'] as const;
 
-/**
- * The paths plus what the optional modules tell the policy (loaded at runtime): the project module's
- * access reader and the account module's secret dirs.
- */
 export async function withProjects(
 	paths: ClaudePaths,
 	env: NodeJS.ProcessEnv = process.env,
@@ -124,7 +108,6 @@ const isEmptyDir = (p: string): boolean => {
 	}
 };
 
-/** True when the hub is missing or holds nothing but empty hub folders (as the md module creates them). */
 function hubIsBlank(hub: string): boolean {
 	if (!lexists(hub)) return true;
 	try {
@@ -136,22 +119,12 @@ function hubIsBlank(hub: string): boolean {
 	}
 }
 
-/** Removes a blank hub; rmdir only removes empty folders, so nothing with content can be lost. */
 function removeBlankHub(hub: string): void {
 	if (!lexists(hub)) return;
 	for (const n of readdirSync(hub)) rmdirSync(path.join(hub, n));
 	rmdirSync(hub);
 }
 
-/**
- * Links Claude's md dir to the shared hub of the md module and the config dir to the hub's folders:
- *   <data>/claude/md           -> ../md        (the hub, <YENA_DATA>/md)
- *   <data>/claude/config/<dir> -> ../md/<dir>  (each of MD_LINKED_DIRS)
- * A real md dir from before the hub is moved into the hub when the hub is blank; otherwise it is left
- * alone (and keeps being used). A real config folder moves into the hub while the hub's folder is empty;
- * otherwise it is left alone.
- * Best effort: errors are ignored, so a chat still starts.
- */
 export function ensureMdLinks(paths: Pick<ClaudePaths, 'hubDir' | 'mdDir' | 'configDir'>): void {
 	try {
 		const md = lstatSync(paths.mdDir, {throwIfNoEntry: false});
@@ -170,7 +143,6 @@ export function ensureMdLinks(paths: Pick<ClaudePaths, 'hubDir' | 'mdDir' | 'con
 			const hubSub = path.join(paths.mdDir, name);
 			const link = path.join(paths.configDir, name);
 			const own = lstatSync(link, {throwIfNoEntry: false});
-			// A real config folder from before the hub moves into it while the hub's folder is empty.
 			if (own?.isDirectory() && (!lexists(hubSub) || isEmptyDir(hubSub))) {
 				if (lexists(hubSub)) rmdirSync(hubSub);
 				renameSync(link, hubSub);
@@ -183,11 +155,6 @@ export function ensureMdLinks(paths: Pick<ClaudePaths, 'hubDir' | 'mdDir' | 'con
 	}
 }
 
-/**
- * Closes yena's Claude data dir and the Claude Code config dir to other users: transcripts, file
- * history and shell snapshots inside are created world-readable by Claude Code. Only real dirs are
- * changed (never through a symlink); a failed chmod (some bind mounts) is ignored.
- */
 export function restrictDataDirs(paths: Pick<ClaudePaths, 'dataDir' | 'configDir'>): void {
 	for (const dir of [paths.dataDir, paths.configDir]) {
 		try {
@@ -222,7 +189,6 @@ export function buildEnv(
 	env.CLAUDE_CONFIG_DIR = paths.configDir;
 	env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1';
 	env.DISABLE_AUTOUPDATER = '1';
-	// Turn start and end as Claude Code sees them, including the turns it starts itself.
 	env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
 	if (onPath('rg', base.PATH)) {
 		env.USE_BUILTIN_RIPGREP = '0';
@@ -230,7 +196,6 @@ export function buildEnv(
 	delete env.ANTHROPIC_AUTH_TOKEN;
 	if (shellTmp !== undefined) env.CLAUDE_CODE_TMPDIR = shellTmp;
 	if (cred.source === 'claude-login') {
-		// The CLI must use its own login, which credentials from the environment would override.
 		delete env.ANTHROPIC_API_KEY;
 		delete env.CLAUDE_CODE_OAUTH_TOKEN;
 	} else if (cred.kind === 'api-key') {
@@ -243,7 +208,6 @@ export function buildEnv(
 	return env;
 }
 
-// Must stay identical to HINT in bin/claude (a test compares them).
 export function buildHint(paths: ClaudePaths): string {
 	return (
 		`This project's Claude files live outside the project, in ${paths.dataDir}: ` +
@@ -306,7 +270,6 @@ const SECRET_ENV_NAMES = [
 
 const VALUE_SCAN_MAX = 8192;
 
-// Linear scan for scheme://user[:pass]@ in the first 8 KiB of a value.
 function hasUrlUserinfo(value: string): boolean {
 	const v = value.length > VALUE_SCAN_MAX ? value.slice(0, VALUE_SCAN_MAX) : value;
 	let i = v.indexOf('://');
@@ -322,7 +285,6 @@ function hasUrlUserinfo(value: string): boolean {
 const SAFE_ENV_NAME =
 	/^(PATH|HOME|USER|LOGNAME|SHELL|PWD|OLDPWD|TERM|COLORTERM|LANG|LANGUAGE|TZ|TMPDIR|TEMP|TMP|NO_COLOR|FORCE_COLOR|HOSTNAME|NODE_ENV|EDITOR|PAGER|SHLVL|_)$|^LC_/;
 
-// keep lists names exempt from the deny-list (the credential injected for the CLI).
 export function scrubChatEnv(
 	env: Record<string, string | undefined>,
 	keep: readonly string[] = [],
@@ -345,7 +307,6 @@ export function scrubChatEnv(
 	return out;
 }
 
-/** Environment for Claude Code CLI subprocesses (auth status/login/logout): no credentials from the environment. */
 export function cliEnv(
 	base: NodeJS.ProcessEnv,
 	paths: Pick<ClaudePaths, 'configDir'>,
@@ -353,7 +314,6 @@ export function cliEnv(
 	return {...scrubChatEnv(base), CLAUDE_CONFIG_DIR: paths.configDir, DISABLE_AUTOUPDATER: '1'};
 }
 
-/** The workplace and stage dirs, when the project module manages them and they exist. */
 function projectRoots(paths: Pick<ClaudePaths, 'projects'>): string[] {
 	const access = paths.projects?.readSync();
 	return (access?.roots ?? []).filter(dir => lexists(dir));
@@ -383,11 +343,6 @@ export function buildChatHint(paths: ClaudePaths): string {
 
 const SOUL_MAX_BYTES = 16 * 1024;
 
-/**
- * The persona from the md hub's SOUL.md for the main chat. CLAUDE.md's `@SOUL.md` import is skipped in the
- * SDK (a file outside the working directory, no approval dialog), so the model had to Read it in every
- * session; in the system prompt it is cached with the rest. Subagents get their own prompts, without it.
- */
 export function soulSection(paths: Pick<ClaudePaths, 'mdDir'>): string {
 	let text: string;
 	try {
@@ -405,7 +360,6 @@ export function buildChatOptions(p: {
 	cred: Credential;
 	abortController: AbortController;
 	canUseTool: CanUseTool;
-	// In-process MCP server with yena's console tools; kept even when MCP servers are turned off.
 	consoleServer?: McpServerConfig;
 	resume?: string;
 	model?: string;
@@ -415,10 +369,8 @@ export function buildChatOptions(p: {
 	sandbox?: SandboxSettings;
 }): Options {
 	const {canUseTool, tuning, consoleServer, sandbox, ...rest} = p;
-	// The turn limit is for one-shot asks; a chat turn runs as long as Claude Code needs, as in Claude Code.
 	const {maxTurns: _askLimit, ...base} = buildOptions(rest);
 	const full = base.env ?? {};
-	// The credential is found by value, so no variable names are read here.
 	const keep = Object.keys(full).filter(k => full[k] === p.cred.value && p.cred.value !== '');
 	return applyTuning(
 		{
@@ -432,7 +384,6 @@ export function buildChatOptions(p: {
 			permissionMode: 'default',
 			canUseTool,
 			...(consoleServer && {mcpServers: {...base.mcpServers, [CONSOLE_SERVER_NAME]: consoleServer}}),
-			// Lets "claude rewind" restore files to their state at an earlier prompt.
 			enableFileCheckpointing: true,
 		},
 		tuning,

@@ -16,14 +16,11 @@ const resolve = (from: string, spec: string): string | undefined => {
 		try {
 			if (statSync(base + ext).isFile()) return base + ext;
 		} catch {
-			// next extension
 		}
 	}
 	return undefined;
 };
 
-// Everything the runner process loads statically. A signal or uncaughtException listener would change
-// how the detached process dies, so none may appear anywhere in this graph.
 test('nothing in the runner import graph registers process-level listeners', () => {
 	const seen = new Set<string>();
 	const queue = [path.join(srcDir, 'runner', 'main.ts')];

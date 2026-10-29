@@ -96,7 +96,6 @@ export type ClientFrame = Base &
 		| {type: 'close'}
 		| {type: 'stop'}
 		| {type: 'status'}
-		// The stored accounts the chat may use, values included: sent after hello, before open, and on change.
 		| {type: 'credentials'; bundle: WireBundle}
 	);
 
@@ -105,7 +104,6 @@ export type RunnerFrame = Base &
 		| ({type: 'snapshot'} & Snapshot)
 		| {type: 'event'; event: ChatEvent}
 		| {type: 'rpcResult'; id: string; ok: boolean; value?: unknown; error?: string}
-		// approved: the chat already confirmed the line (auto mode, a saved "always" or the user's answer).
 		| {type: 'bridgeRun'; id: string; line: string; timeoutMs: number; approved?: boolean}
 		| {type: 'bridgeAbort'; id: string}
 		| {type: 'bridgeAsk'; id: string; request: CommandConfirmRequest}
@@ -113,7 +111,6 @@ export type RunnerFrame = Base &
 		| {type: 'log'; level: 'error' | 'warn' | 'info' | 'debug'; msg: string; fields?: Record<string, unknown>}
 		| {type: 'statusReply'; status: SessionStatus}
 		| {type: 'bye'; reason: string}
-		// The runner's login working copy changed and is not saved; no payload, the client reads the files.
 		| {type: 'loginChanged'}
 	);
 
@@ -717,7 +714,6 @@ const RUNNER: Record<string, Reader> = {
 	loginChanged: () => ({}),
 };
 
-/** Validates one parsed frame; null for a well-formed frame of an unknown type. */
 export const validateFrame = (raw: unknown, direction: FrameDirection): Frame | null => {
 	const o = rec(raw, 'frame');
 	if (o.v !== PROTOCOL_VERSION) fail('unsupported version');
@@ -734,7 +730,6 @@ export const encodeFrame = (frame: Frame): string => {
 };
 
 export type FrameDecoder = {
-	/** Frames completed by `chunk`; throws ProtocolError on an oversize, malformed or invalid frame (the caller closes). */
 	push(chunk: Buffer | string): Frame[];
 };
 

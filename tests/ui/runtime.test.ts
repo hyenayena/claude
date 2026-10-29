@@ -3,8 +3,6 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {test} from 'node:test';
 
-// The host runs tsx from the repo root, where the module tsconfig (automatic JSX runtime) does
-// not apply, so every .tsx needs its own `import React`.
 const hostRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const src = (name: string) => pathToFileURL(fileURLToPath(new URL('../../src/ui/' + name, import.meta.url))).href;
 const testkit = pathToFileURL(fileURLToPath(new URL('./testkit.ts', import.meta.url))).href;

@@ -24,7 +24,6 @@ afterEach(() => {
 
 type Script = (s: net.Socket, frame: ClientFrame) => void;
 
-// A runner stand-in that answers the hello through `script`.
 const startRunner = async (dir: string, script: Script) => {
 	const frames: ClientFrame[] = [];
 	const server = net.createServer(s => {
@@ -173,7 +172,6 @@ test('a runner snapshot with escapes and a secret in the title never reaches the
 	hold(t.sessionDir, 'runner', runnerSocketPath(t.sessionDir));
 	await t.chat.run(['chat'], t.ctx);
 	const controller = t.props[0]!.controller;
-	// The mirror keeps the raw value; the view scrubs it (ChatView `scrub(controller.title)`), so the scrub handed over must clean it.
 	const scrub = t.props[0]!.scrub;
 	const clean = scrub(controller.title ?? '');
 	assert.doesNotMatch(clean, /\u001b|\u0007/);

@@ -24,7 +24,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export type ShellCall = {
 	toolUseId: string;
 	command: string;
-	// When the call was bound to its output file, i.e. when it started running.
 	startedAt: number;
 	lines: readonly string[];
 	bytes: number;
@@ -35,10 +34,8 @@ export type ShellSnapshot = {calls: readonly ShellCall[]};
 
 export interface ShellWatch {
 	feed(event: ChatEvent): void;
-	// Only calls bound to an output file; pending, ambiguous and failed calls are never listed.
 	get(): ShellSnapshot;
 	subscribe(cb: () => void): () => void;
-	// Total output bytes read over the watch's life.
 	readonly totalBytes: number;
 	close(): void;
 }
@@ -66,7 +63,6 @@ type Entry = {
 type Listing = {dir: string; names: string[]};
 
 export type ShellWatchOptions = {
-	// Private root given to Claude Code as CLAUDE_CODE_TMPDIR; without it nothing is tracked.
 	root: string | undefined;
 	sessionId: () => string | undefined;
 	scrub: (s: string) => string;
@@ -85,7 +81,6 @@ export function createShellWatch(opts: ShellWatchOptions): ShellWatch {
 	const pollMs = opts.pollMs ?? POLL_MS;
 	const uid = process.getuid?.();
 	const entries = new Map<string, Entry>();
-	// Background Bash calls (and foreground ones past the limit) may create files too: decoys.
 	const decoys = new Set<string>();
 	const listeners = new Set<() => void>();
 	let snapshot: ShellSnapshot = {calls: []};
@@ -105,7 +100,6 @@ export function createShellWatch(opts: ShellWatchOptions): ShellWatch {
 			try {
 				cb();
 			} catch {
-				// a listener must not break the watch
 			}
 		}
 	};
@@ -117,7 +111,6 @@ export function createShellWatch(opts: ShellWatchOptions): ShellWatch {
 
 	const inside = (root: string, file: string): boolean => file.startsWith(root + path.sep);
 
-	// <root>/<claude-top>/<slug>/<session>/tasks for every top we own and every plain slug directory.
 	const computeDirs = async (session: string): Promise<string[]> => {
 		const root = await getRealRoot();
 		if (root === undefined) return [];
@@ -136,7 +129,6 @@ export function createShellWatch(opts: ShellWatchOptions): ShellWatch {
 				const slugs = (await readdir(topPath, {withFileTypes: true})).filter(d => d.isDirectory()).slice(0, MAX_SLUGS);
 				for (const slug of slugs) out.push(path.join(topPath, slug.name, session, 'tasks'));
 			} catch {
-				// unreadable top: skipped
 			}
 		}
 		return out;
@@ -176,7 +168,6 @@ export function createShellWatch(opts: ShellWatchOptions): ShellWatch {
 				if (!missing(err)) log.debug('shell dir unreadable', {code: code(err)});
 			}
 		}
-		// The slug directory may not exist before the first Bash of a project: look again next time.
 		if (!anyExists) dirs = undefined;
 		return out;
 	};
@@ -293,7 +284,6 @@ export function createShellWatch(opts: ShellWatchOptions): ShellWatch {
 				consume(e, tail.decoder.write(buf.subarray(0, bytesRead)));
 			}
 		} catch (err) {
-			// The file is removed when the command ends: keep what was read.
 			if (missing(err) || code(err) === 'EBADF') closeTail(tail);
 			else fail(e, 'nofile', code(err));
 		} finally {
@@ -336,7 +326,6 @@ export function createShellWatch(opts: ShellWatchOptions): ShellWatch {
 			}
 		}
 		if (candidates.length === 0) return false;
-		// An exact task id from the stream wins when one ever arrives.
 		for (const e of pending) {
 			const key = e.taskId !== undefined ? byName.get(e.taskId) : undefined;
 			if (key !== undefined && candidates.some(c => c.key === key)) {
@@ -426,7 +415,6 @@ export function createShellWatch(opts: ShellWatchOptions): ShellWatch {
 		}
 		if (entries.has(toolUseId)) return;
 		const command = typeof rec['command'] === 'string' ? rec['command'] : '';
-		// Baseline before the command can run; later baselines happen when no call is outstanding.
 		if (entries.size === 0 && decoys.size === 0) rememberKnown(true);
 		entries.set(toolUseId, {
 			call: {
