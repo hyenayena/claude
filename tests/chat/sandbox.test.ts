@@ -72,6 +72,7 @@ test('the Claude config dir is read-only for Bash except plans, and the hub inst
 test('the sandbox hides the secrets from Bash', () => {
 	const read = buildSandbox(paths, undefined, list, '/root').filesystem.denyRead;
 	for (const p of [
+		'/proc',
 		paths.credentialsFile,
 		'/data/claude/accounts.json',
 		'/data/claude/accounts',

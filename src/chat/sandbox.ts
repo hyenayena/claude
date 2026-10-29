@@ -82,6 +82,8 @@ export function buildSandbox(paths: PolicyPaths, access: ProjectAccess | undefin
 		...(paths.projects?.dataDir ? [paths.projects.dataDir] : []),
 		...(paths.hostState ? [paths.hostState] : []),
 		...(extras.socketDirs ?? []),
+		// Start-up environments of yena and the CLI hold credentials; the policy hook relies on this deny.
+		'/proc',
 	].map(p => path.resolve(p));
 	// Git signs through the account ssh-agents (account module), and the Linux sandbox can only open all
 	// unix sockets or none; yena's own sockets are hidden above instead.

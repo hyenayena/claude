@@ -45,6 +45,8 @@ export type PolicyHookOptions = {
 	approved?: (key: string) => boolean;
 	/** Brings the Bash sandbox up to date with project isolation before a command runs; throws when it cannot. */
 	beforeBash?: () => Promise<void>;
+	/** Bash runs in a sandbox that denies reading /proc, so the text check for process environments is not needed. */
+	procHidden?: boolean;
 };
 
 /**
@@ -114,7 +116,8 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 				if (scope.shellDenied?.some(s => command.includes(s))) return denyWith(POLICY_DENY.accountSecrets);
 				// The host's state: the module overlay is code that runs at the next start, mode.json picks the root.
 				if (scope.hostStateDenied?.some(s => command.includes(s))) return denyWith(POLICY_DENY.hostState);
-				if (PROC_ENV.test(command)) return denyWith(POLICY_DENY.procEnv);
+				// The word check also refuses commands that only mention it (heredocs, greps); the sandbox does not.
+				if (!hookOpts.procHidden && PROC_ENV.test(command)) return denyWith(POLICY_DENY.procEnv);
 				if (usesAgent(command, scope.agentSocket)) return denyWith(POLICY_DENY.sshAgent);
 				// And for the project module's data dir, whose state decides which projects are writable.
 				if (projectData && command.includes(projectData)) return denyWith(POLICY_DENY.projectState);

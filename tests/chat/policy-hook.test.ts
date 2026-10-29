@@ -141,6 +141,18 @@ test('the hook denies Bash commands that read process environments', async () =>
 	}
 });
 
+test('with /proc hidden by the sandbox the hook lets commands that name process environments through', async () => {
+	const sandboxed = createPolicyHook(buildScope(paths, path.join(tmp, 'home')), paths.configDir, {procHidden: true});
+	for (const command of ['cat /proc/1/environ', "grep -n environ src/x.ts", "cat >> notes.md <<'EOF'\nprocess environ\nEOF"]) {
+		const out = (await sandboxed(
+			{hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {command}, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: projectDir} as never,
+			't',
+			opts,
+		)) as {hookSpecificOutput?: unknown};
+		assert.equal(out.hookSpecificOutput, undefined, command);
+	}
+});
+
 test('the hook denies Bash commands that use the host ssh-agent', async () => {
 	const sock = '/run/host-services/ssh-auth.sock';
 	const guarded = createPolicyHook(buildScope({...paths, agentSocket: sock}), paths.configDir);
