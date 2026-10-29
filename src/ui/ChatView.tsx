@@ -172,6 +172,8 @@ export function ChatView(props: ChatViewProps) {
 	// When the running turn started, for the seconds on the working line.
 	const sinceRef = useRef(Date.now());
 	const lastEventRef = useRef(Date.now());
+	// Answers and tool calls printed so far; the working line picks a new verb on each.
+	const beatRef = useRef(0);
 	const reveal = props.reveal ?? scrub;
 	const armMs = props.armMs ?? ARM_MS;
 	const terminal = useWindowSize();
@@ -287,6 +289,7 @@ export function ChatView(props: ChatViewProps) {
 			for (const out of step.out) {
 				if (out.kind === 'blank') continue;
 				if (out.kind === 'assistant') {
+					beatRef.current++;
 					// The transcript keeps a row's last column empty, so the first layout leaves it too.
 					const width = lastWidthRef.current > 1 ? lastWidthRef.current - 1 : undefined;
 					const block = assistantPrint(out.text, scrub, {interrupted: out.interrupted, width, copyLabel: true});
@@ -294,6 +297,7 @@ export function ChatView(props: ChatViewProps) {
 					continue;
 				}
 				if (out.kind === 'tool' || out.kind === 'audit') {
+					if (out.kind === 'tool') beatRef.current++;
 					// A call stays on one row and its output within a few rows; laid out again at every width.
 					const width = lastWidthRef.current > 1 ? lastWidthRef.current - 1 : undefined;
 					const text = formatOut(out, scrub, reveal, width);
@@ -1078,7 +1082,7 @@ export function ChatView(props: ChatViewProps) {
 				</Text>
 			))}
 			<LiveTools tools={tools} scrub={scrub} maxRows={toolRows} />
-			{workingRows > 0 && <WorkingLine phase={t.phase} status={t.status} since={sinceRef.current} lastEventAt={t.pending > 0 ? undefined : lastEventRef.current} />}
+			{workingRows > 0 && <WorkingLine phase={t.phase} status={t.status} since={sinceRef.current} beat={beatRef.current} lastEventAt={t.pending > 0 ? undefined : lastEventRef.current} />}
 			{todos.map((line, i) => (
 				<Text key={`todo-${i}`} wrap="truncate">
 					{line}

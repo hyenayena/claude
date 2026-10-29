@@ -1124,6 +1124,25 @@ test('thinking status shows the animated spinner, one hyena verb for the turn, s
 	assert.equal(later[2], first[2]);
 });
 
+test('each answer or tool call Claude prints brings a new working verb', async () => {
+	const t = setup();
+	t.controller.setState('running');
+	t.controller.ui({kind: 'thinking'});
+	await t.settle();
+	const line = /[·✢✳✶✻✽] ([\w -]+)… \(/;
+	const verbs = [t.lastFrame().match(line)?.[1]];
+	t.controller.ui({kind: 'text', messageId: 'm1', text: 'first answer'});
+	await t.settle();
+	verbs.push(t.lastFrame().match(line)?.[1]);
+	t.controller.ui({kind: 'tool-use', toolUseId: 'a', name: 'Bash', input: {command: 'x'}});
+	t.controller.ui({kind: 'tool-result', toolUseId: 'a', isError: false, text: 'ok'});
+	await t.settle();
+	verbs.push(t.lastFrame().match(line)?.[1]);
+	for (const v of verbs) assert.ok(v && (WORKING_VERBS as readonly string[]).includes(v), String(v));
+	assert.notEqual(verbs[1], verbs[0]);
+	assert.notEqual(verbs[2], verbs[1]);
+});
+
 function limitSetup(clock: {now: () => number; timeZone?: string}) {
 	const f = fakeHost();
 	const bars: Array<[string | undefined, string | undefined]> = [];

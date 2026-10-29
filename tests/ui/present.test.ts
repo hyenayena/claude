@@ -161,6 +161,7 @@ test('the working line and the mode hint', () => {
 	assert.equal(workingText('interrupting', null, 3, 0, 'Prowling'), 'Interrupting…');
 	assert.equal(pickWorkingVerb(() => 0), WORKING_VERBS[0]);
 	assert.equal(pickWorkingVerb(() => 0.9999), WORKING_VERBS[WORKING_VERBS.length - 1]);
+	assert.equal(pickWorkingVerb(() => 0, WORKING_VERBS[0]), WORKING_VERBS[1]);
 	assert.equal(modeHint('default'), '');
 	assert.equal(modeHint('acceptEdits'), '⏵⏵ accept edits on (shift+tab to cycle)');
 	assert.equal(modeHint('plan'), '⏸ plan mode on (shift+tab to cycle)');

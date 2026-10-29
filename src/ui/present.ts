@@ -563,7 +563,11 @@ export const WORKING_VERBS = [
 	'Yipping',
 ] as const;
 
-export const pickWorkingVerb = (random = Math.random): string => WORKING_VERBS[Math.floor(random() * WORKING_VERBS.length)] ?? 'Working';
+/** A random verb, never `previous` again, so a change is always visible. */
+export function pickWorkingVerb(random = Math.random, previous?: string): string {
+	const pool = WORKING_VERBS.filter(v => v !== previous);
+	return pool[Math.floor(random() * pool.length)] ?? 'Working';
+}
 
 /**
  * The line under the live output while a turn runs: what is happening, for how long, how to stop it.
