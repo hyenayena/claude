@@ -217,3 +217,28 @@ test('webKey keys a fetch by its lower-case host', () => {
 	assert.equal(webKey('file:///etc/passwd'), undefined);
 	assert.equal(webKey('not a url'), undefined);
 });
+
+test('the hook brings the Bash sandbox up to date before a command and denies when it cannot', async () => {
+	let calls = 0;
+	let fail = false;
+	const synced = createPolicyHook(buildScope(paths, path.join(tmp, 'home')), paths.configDir, {
+		beforeBash: async () => {
+			calls++;
+			if (fail) throw new Error('no query');
+		},
+	});
+	const ask = async (command: string) => {
+		const out = (await synced(
+			{hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {command}, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: projectDir} as never,
+			't',
+			opts,
+		)) as {hookSpecificOutput?: {permissionDecisionReason?: string}};
+		return out.hookSpecificOutput?.permissionDecisionReason ?? 'pass';
+	};
+	assert.equal(await ask('ls'), 'pass');
+	assert.equal(calls, 1);
+	fail = true;
+	assert.equal(await ask('ls'), POLICY_DENY.sandbox);
+	assert.equal(await ask('cat /proc/1/environ'), POLICY_DENY.procEnv);
+	assert.equal(calls, 2, 'a command refused by name never reaches the sandbox');
+});

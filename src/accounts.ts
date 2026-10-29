@@ -313,7 +313,7 @@ export function prepareAccount(ctx: AccountsCtx, name: string): Prepared {
 	}
 	const f = load(ctx);
 	const acct = f.accounts.find(a => a.name === name);
-	if (!acct) throw new Error(`No account "${name}"; "claude auth accounts" lists them`);
+	if (!acct) throw new Error(`No account "${name}"; "claude auth status" lists them`);
 	if (acct.type !== 'login') return {account: publicOf(acct), kind: acct.kind, value: acct.value!, login: false};
 	if (f.installed !== name || !snapshotLogin(ctx.configDir)) {
 		const slot = readSlot(ctx.dataDir, name);
@@ -335,11 +335,37 @@ export function markLimited(ctx: AccountsCtx, name: string, until: number, reaso
 	writeFile(ctx.dataDir, f);
 }
 
+const secretType = (value: string): 'key' | 'token' => {
+	const type = OAUTH_TOKEN_RE.test(value) ? 'token' : API_KEY_RE.test(value) ? 'key' : undefined;
+	if (!type) throw new Error('That is neither an Anthropic API key (sk-ant-…) nor a subscription token (sk-ant-oat…)');
+	return type;
+};
+
+/** The default name for a new key or token (`key`/`token`, then `-2`…); throws when the value is not one or is already stored. */
+export function suggestSecretName(ctx: AccountsCtx, raw: string): string {
+	const value = raw.trim();
+	const type = secretType(value);
+	const f = load(ctx);
+	const dup = f.accounts.find(a => a.value === value);
+	if (dup) throw new Error(`That ${type === 'key' ? 'key' : 'token'} is already account "${dup.name}"`);
+	return uniqueName(f, type);
+}
+
+/** Why a name typed for a new key or token cannot be used, or undefined when it is free and valid. */
+export function newAccountNameProblem(ctx: AccountsCtx, name: string): string | undefined {
+	try {
+		checkAccountName(name);
+	} catch (e) {
+		return (e as Error).message;
+	}
+	if (load(ctx).accounts.some(a => a.name === name)) return `"${name}" is already an account; choose another name`;
+	return undefined;
+}
+
 /** Adds an API key or a subscription token (told apart by its prefix); replaces the secret of an account with that name. */
 export function addSecretAccount(ctx: AccountsCtx, rawName: string | undefined, raw: string): Account {
 	const value = raw.trim();
-	const type = OAUTH_TOKEN_RE.test(value) ? 'token' : API_KEY_RE.test(value) ? 'key' : undefined;
-	if (!type) throw new Error('That is neither an Anthropic API key (sk-ant-…) nor a subscription token (sk-ant-oat…)');
+	const type = secretType(value);
 	if (rawName !== undefined) checkAccountName(rawName);
 	const f = load(ctx);
 	const dup = f.accounts.find(a => a.value === value);
@@ -392,7 +418,7 @@ export function adoptLogin(ctx: AccountsCtx, rawName: string | undefined): Accou
 /** Puts the named accounts first, in the given order; the others keep theirs after them. */
 export function setOrder(ctx: AccountsCtx, names: string[]): AccountView[] {
 	const known = listAccounts(ctx).map(a => a.name);
-	for (const n of names) if (!known.includes(n)) throw new Error(`No account "${n}"; "claude auth accounts" lists them`);
+	for (const n of names) if (!known.includes(n)) throw new Error(`No account "${n}"; "claude auth status" lists them`);
 	if (new Set(names).size !== names.length) throw new Error('Each account once');
 	const f = load(ctx);
 	f.order = [...names, ...known.filter(n => !names.includes(n))];
@@ -414,7 +440,7 @@ export function removeAccount(ctx: AccountsCtx, name: string): {wasInstalled: bo
 	if (RESERVED.has(name)) throw new Error(`"${name}" comes from an environment variable; unset the variable instead`);
 	const f = load(ctx);
 	const acct = f.accounts.find(a => a.name === name);
-	if (!acct) throw new Error(`No account "${name}"; "claude auth accounts" lists them`);
+	if (!acct) throw new Error(`No account "${name}"; "claude auth status" lists them`);
 	f.accounts = f.accounts.filter(a => a !== acct);
 	f.order = f.order.filter(n => n !== name);
 	delete f.limits[name];

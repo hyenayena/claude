@@ -9,10 +9,8 @@ import {
 	type AccountsCtx,
 	accountSecrets,
 	addSecretAccount,
-	API_KEY_RE,
 	chooseAccount,
 	listAccounts,
-	OAUTH_TOKEN_RE,
 	prepareAccount,
 	removeAllAccounts,
 } from './accounts.js';
@@ -79,7 +77,7 @@ export const resolveCredential = async (opts: CredentialOpts): Promise<Credentia
 };
 
 export const NO_CREDENTIALS =
-	'No credentials found. Set ANTHROPIC_API_KEY, run "claude auth login", or run "claude auth key --from-file <path>" to store an API key. See "claude auth status".';
+	'No credentials found. Run "claude auth login" to sign in through the browser, or "claude auth add" to paste an API key or a subscription token. See "claude auth status".';
 
 export const requireCredential = async (opts: CredentialOpts): Promise<Credential> => {
 	const cred = await resolveCredential(opts);
@@ -99,24 +97,12 @@ export const prepareCredential = (opts: CredentialOpts): Credential => {
 	return makeCredential(p.kind, sourceOf(p.account), p.value, p.account.name);
 };
 
-/** Stores an API key as an account (named "key" unless given). */
-export const storeApiKey = async (dataDir: string, value: string, name?: string, env: NodeJS.ProcessEnv = {}): Promise<Account> => {
-	const key = value.trim();
-	if (key.startsWith('sk-ant-oat')) {
-		throw new Error(
-			'This looks like a subscription (OAuth) token, not an API key. Run "claude auth login --token" or set CLAUDE_CODE_OAUTH_TOKEN instead.',
-		);
-	}
-	if (!API_KEY_RE.test(key)) throw new Error('Invalid API key format. Expected a key starting with "sk-ant-".');
-	return addSecretAccount(accountsCtx({dataDir, env}), name, key);
-};
-
-/** Stores a subscription (setup-token) token as an account (named "token" unless given). */
-export const storeOauthToken = async (dataDir: string, value: string, name?: string, env: NodeJS.ProcessEnv = {}): Promise<Account> => {
-	const token = value.trim();
-	if (!OAUTH_TOKEN_RE.test(token)) throw new Error('That is not a subscription token (it should start with "sk-ant-oat").');
-	return addSecretAccount(accountsCtx({dataDir, env}), name, token);
-};
+/**
+ * Stores an API key (sk-ant-…) or a subscription token (sk-ant-oat…) as an account; the prefix decides
+ * which. Named "key" or "token" (then "-2"…) unless given.
+ */
+export const storeSecret = async (dataDir: string, value: string, name?: string, env: NodeJS.ProcessEnv = {}): Promise<Account> =>
+	addSecretAccount(accountsCtx({dataDir, env}), name, value);
 
 /** Forgets every stored account and the Claude Code login; true when there was anything. */
 export const removeStored = async (dataDir: string): Promise<boolean> => {

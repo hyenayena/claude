@@ -25,10 +25,12 @@ export function ensureShellTmp(opts: {uid?: number; base?: string} = {}): string
 	return ensurePrivateDir(shellTmpRoot(uid, opts.base), uid, 'Shell tmp');
 }
 
+export const sessionDirOf = (shellRoot: string): string => path.join(shellRoot, 'session');
+
 /** Lock file and control socket of the running session live here, below the shell tmp root. */
 export function ensureSessionDir(opts: {uid?: number; base?: string} = {}): string {
 	const uid = opts.uid ?? process.getuid?.();
 	if (uid === undefined) throw new Error('No user id available');
 	const root = ensureShellTmp({uid, ...(opts.base !== undefined && {base: opts.base})});
-	return ensurePrivateDir(path.join(root, 'session'), uid, 'Session directory');
+	return ensurePrivateDir(sessionDirOf(root), uid, 'Session directory');
 }

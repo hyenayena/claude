@@ -403,7 +403,7 @@ describe('classifyEditTarget', () => {
 
 	it('prompts only for sensitive project files', async () => {
 		for (const rel of [
-			'.git/config', '.github/w.yml', '.vscode/s.json', 'Makefile', 'yena', 'Dockerfile', 'compose.yaml',
+			'.git/config', '.github/w.yml', '.vscode/s.json', 'Makefile', 'yena', 'Dockerfile', 'compose.yaml', 'seccomp.json',
 			'.dockerignore', 'package.json', 'package-lock.json', 'scripts/x.sh', 'modules/claude/bin/claude',
 			'modules/claude/yena.json', 'yena-modules.json', 'modules/claude/src/a.ts',
 		]) {

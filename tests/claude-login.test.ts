@@ -53,16 +53,13 @@ test('parseLoginStatus: garbage, oversize and non-boolean loggedIn give undefine
 });
 
 test('parseLoginArgs: valid combinations', () => {
-	assert.deepEqual(parseLoginArgs([]), {kind: 'browser', cliArgs: [], meta: {console: false, sso: false, email: false}});
-	assert.deepEqual(parseLoginArgs(['--token']), {kind: 'token'});
-	assert.deepEqual(parseLoginArgs(['--console']).kind, 'browser');
+	assert.deepEqual(parseLoginArgs([]), {cliArgs: [], meta: {console: false, sso: false, email: false}});
+	assert.deepEqual(parseLoginArgs(['--console']).cliArgs, ['--console']);
 	assert.deepEqual(parseLoginArgs(['--claudeai', '--sso', '--email', 'a@b.co']), {
-		kind: 'browser',
 		cliArgs: ['--claudeai', '--sso', '--email', 'a@b.co'],
 		meta: {console: false, sso: true, email: true},
 	});
 	assert.deepEqual(parseLoginArgs(['--email', 'a@b.co', '--console']), {
-		kind: 'browser',
 		cliArgs: ['--email', 'a@b.co', '--console'],
 		meta: {console: true, sso: false, email: true},
 	});
@@ -74,11 +71,10 @@ test('parseLoginArgs: rejects duplicates, exclusive and mixed flags', () => {
 		['--console', '--console'],
 		['--console', '--claudeai'],
 		['--email', 'a@b.co', '--email', 'c@d.co'],
-		['--token', '--sso'],
+		['--token'],
 		['--sso', '--token'],
-		['--token', '--token'],
 	]) {
-		assert.throws(() => parseLoginArgs(args), /Usage|Use only|twice|cannot/, args.join(' '));
+		assert.throws(() => parseLoginArgs(args), /Usage|Use only|twice|Unknown option/, args.join(' '));
 	}
 });
 

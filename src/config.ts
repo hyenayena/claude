@@ -15,6 +15,7 @@ import {
 	MAX_TURNS,
 } from './policy.js';
 import {CONSOLE_SERVER_NAME} from './chat/console-tools.js';
+import type {SandboxSettings} from './chat/sandbox.js';
 import {ensureHub, HUB_DIRS, hubDirFor} from './deps/md.js';
 import {loadAccountSecretPaths, type AccountSecretPaths} from './deps/account.js';
 import {loadProjectAccess, type ProjectAccessReader} from './deps/project.js';
@@ -411,8 +412,9 @@ export function buildChatOptions(p: {
 	tuning?: ChatTuning;
 	env?: Record<string, string | undefined>;
 	runtimeBin?: string;
+	sandbox?: SandboxSettings;
 }): Options {
-	const {canUseTool, tuning, consoleServer, ...rest} = p;
+	const {canUseTool, tuning, consoleServer, sandbox, ...rest} = p;
 	// The turn limit is for one-shot asks; a chat turn runs as long as Claude Code needs, as in Claude Code.
 	const {maxTurns: _askLimit, ...base} = buildOptions(rest);
 	const full = base.env ?? {};
@@ -424,6 +426,7 @@ export function buildChatOptions(p: {
 			env: scrubChatEnv(full, keep),
 			systemPrompt: {type: 'preset', preset: 'claude_code', append: buildChatHint(p.paths) + soulSection(p.paths)},
 			settings: buildChatSettings(p.paths),
+			...(sandbox && {sandbox}),
 			tools: [...CHAT_TOOLS],
 			disallowedTools: [...CHAT_DISALLOWED_TOOLS],
 			permissionMode: 'default',

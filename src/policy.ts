@@ -143,7 +143,7 @@ export const isSecretName = (name: string): boolean =>
 	SECRET_BASENAMES.some(re => re.test(name)) && !NOT_SECRET.some(re => re.test(name));
 
 // The accounts (keys, tokens, saved logins; see accounts.ts) sit next to credentials.json.
-const accountPaths = (paths: PolicyPaths): [string, string] => {
+export const accountPaths = (paths: PolicyPaths): [string, string] => {
 	const dir = path.dirname(paths.credentialsFile);
 	return [path.join(dir, 'accounts.json'), path.join(dir, 'accounts')];
 };
@@ -457,6 +457,7 @@ const NO_AUTO_EXACT = new Set([
 	'yena',
 	'Dockerfile',
 	'compose.yaml',
+	'seccomp.json',
 	'.dockerignore',
 	'package.json',
 	'package-lock.json',

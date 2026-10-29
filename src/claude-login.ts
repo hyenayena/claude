@@ -86,12 +86,9 @@ export const runLogout = async (p: CliOpts): Promise<boolean> => {
 	return res?.code === 0;
 };
 
-export const LOGIN_USAGE =
-	'Usage: claude auth login [--console] [--sso] [--email <address>] | claude auth login --token';
+export const LOGIN_USAGE = 'Usage: claude auth login [--name <account>] [--console|--claudeai] [--sso] [--email <address>]';
 
-export type LoginRequest =
-	| {kind: 'token'}
-	| {kind: 'browser'; cliArgs: string[]; meta: {console: boolean; sso: boolean; email: boolean}};
+export type LoginRequest = {cliArgs: string[]; meta: {console: boolean; sso: boolean; email: boolean}};
 
 const shown = (arg: string): string => {
 	const clean = arg.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '');
@@ -100,10 +97,6 @@ const shown = (arg: string): string => {
 };
 
 export const parseLoginArgs = (args: string[]): LoginRequest => {
-	if (args.includes('--token')) {
-		if (args.length !== 1) throw new Error(`"--token" cannot be combined with other options. ${LOGIN_USAGE}`);
-		return {kind: 'token'};
-	}
 	const cliArgs: string[] = [];
 	let console_ = false;
 	let claudeai = false;
@@ -131,5 +124,5 @@ export const parseLoginArgs = (args: string[]): LoginRequest => {
 			throw new Error(`Unknown option "${shown(arg)}". ${LOGIN_USAGE}`);
 		}
 	}
-	return {kind: 'browser', cliArgs, meta: {console: console_, sso, email}};
+	return {cliArgs, meta: {console: console_, sso, email}};
 };

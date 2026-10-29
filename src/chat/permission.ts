@@ -128,6 +128,7 @@ export const POLICY_DENY = {
 	privileged:
 		'Adding or changing allowed-tools, hooks, permissionMode or mcpServers in a skill, agent or command is not allowed in the chat: it would let tool calls skip the approval prompts. Tell the user the exact change so they can make it by hand.',
 	background: 'Background execution is not available in the chat.',
+	sandbox: 'The Bash sandbox could not be updated to the current project isolation, so the command was not run. Try again.',
 	isolation: 'Running an agent in a worktree or remotely is not available in the chat.',
 	invalidInput: 'The tool input is invalid.',
 	unknownTool: 'That tool is not available in the chat.',

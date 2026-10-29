@@ -43,6 +43,8 @@ export function webKey(url: unknown): string | undefined {
 export type PolicyHookOptions = {
 	/** Whether the user approved fetches from this "always" key (`webKey`) for good. */
 	approved?: (key: string) => boolean;
+	/** Brings the Bash sandbox up to date with project isolation before a command runs; throws when it cannot. */
+	beforeBash?: () => Promise<void>;
 };
 
 /**
@@ -115,7 +117,16 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 				if (PROC_ENV.test(command)) return denyWith(POLICY_DENY.procEnv);
 				if (usesAgent(command, scope.agentSocket)) return denyWith(POLICY_DENY.sshAgent);
 				// And for the project module's data dir, whose state decides which projects are writable.
-				return projectData && command.includes(projectData) ? denyWith(POLICY_DENY.projectState) : allow;
+				if (projectData && command.includes(projectData)) return denyWith(POLICY_DENY.projectState);
+				// An older sandbox could still let the command write to a project that is no longer isolated.
+				if (hookOpts.beforeBash) {
+					try {
+						await hookOpts.beforeBash();
+					} catch {
+						return denyWith(POLICY_DENY.sandbox);
+					}
+				}
+				return allow;
 			}
 			default: {
 				const denial = agentDenial(tool, args);

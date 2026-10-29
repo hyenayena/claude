@@ -216,6 +216,14 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.log.info('live settings applied', {keys: Object.keys(patch)});
 	}
 
+	/** Replaces the Bash sandbox of the running query; without one, the next query gets it from its options. */
+	async applySandbox(sandbox: Record<string, unknown>): Promise<void> {
+		const q = this.handle?.q;
+		if (!q || this._state === 'closed') return;
+		if (!q.applyFlagSettings) throw new Error('This run of Claude Code cannot change its sandbox');
+		await q.applyFlagSettings({sandbox});
+	}
+
 	/** Tokens of this chat since it opened: the main chat and its subagents apart. */
 	get usage(): ChatUsage {
 		return {main: {...this.meter.total.main}, agents: {...this.meter.total.agents}};

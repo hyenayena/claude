@@ -1,8 +1,8 @@
 import {randomUUID} from 'node:crypto';
 import type {z as Zod} from 'zod';
 import type {createSdkMcpServer, tool} from '@anthropic-ai/claude-agent-sdk';
-import type {CommandBridge, Logger} from '../../../../src/api.js';
-import {COMMAND_TOOLS, formatCommandList, formatRunResult} from '../kit.js';
+import type {CommandBridge, CommandConfirmRequest, Logger} from '../../../../src/api.js';
+import {COMMAND_TOOLS, formatCommandList, formatRunResult, sanitizeText} from '../kit.js';
 import {errClass} from '../log.js';
 import type {PermissionPrompter} from './permission.js';
 import {makeScrub} from './scrub.js';
@@ -64,6 +64,15 @@ type ToolResult = {content: {type: 'text'; text: string}[]; isError?: boolean};
 
 let seq = 0;
 
+// "Always" covers a command with its subcommand (canonical names from the bridge), whatever the arguments.
+// The prefix keeps these rules apart from saved Bash commands.
+export const COMMAND_KEY_PREFIX = 'cmd:';
+export const commandKey = (req: Pick<CommandConfirmRequest, 'command' | 'subcommand'>): string =>
+	`${COMMAND_KEY_PREFIX}${req.subcommand === undefined ? req.command : `${req.command} ${req.subcommand}`}`;
+
+// Credentials stay behind a prompt every time: one "always" here would cover login, key, use, remove and logout.
+const NEVER_ALWAYS: ReadonlySet<string> = new Set(['cmd:claude auth']);
+
 const signalOf = (extra: unknown): AbortSignal | undefined => {
 	const s = typeof extra === 'object' && extra !== null ? (extra as {signal?: unknown}).signal : undefined;
 	return s instanceof AbortSignal ? s : undefined;
@@ -81,9 +90,15 @@ export function createConsoleServer(deps: ConsoleServerDeps): ReturnType<typeof 
 
 	const confirmWith =
 		(signal: AbortSignal | undefined, flagged: boolean) =>
-		async (req: {line: string}): Promise<boolean> => {
+		async (req: CommandConfirmRequest): Promise<boolean> => {
 			if (prompter.mode === 'auto' && !flagged) {
 				prompter.audit({outcome: 'auto-accepted', toolName: 'Command', summary: req.line});
+				return true;
+			}
+			const key = commandKey(req);
+			const alwaysOk = prompter.mode !== 'plan' && !NEVER_ALWAYS.has(key);
+			if (alwaysOk && prompter.hasApproved(key)) {
+				prompter.audit({outcome: 'always-allowed', toolName: 'Command', summary: req.line});
 				return true;
 			}
 			try {
@@ -97,12 +112,16 @@ export function createConsoleServer(deps: ConsoleServerDeps): ReturnType<typeof 
 						cwd,
 						highlights: [],
 						defaultToNo: false,
-						always: false,
+						always: alwaysOk
+							? {label: `Yes, always for "${sanitizeText(key.slice(COMMAND_KEY_PREFIX.length), 120)}"`}
+							: false,
 						oversize: false,
 					},
 					signal ?? new AbortController().signal,
 				);
-				return d.kind === 'allow';
+				if (d.kind !== 'allow') return false;
+				if (d.always === true && alwaysOk) prompter.remember(key);
+				return true;
 			} catch {
 				return false;
 			}

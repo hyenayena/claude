@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {z} from 'zod';
-import type {CommandBridge, CommandInfo, CommandRunRequest, CommandRunResult} from '../../../../src/api.js';
+import type {CommandBridge, CommandConfirmRequest, CommandInfo, CommandRunRequest, CommandRunResult} from '../../../../src/api.js';
 import {
 	CONSOLE_MCP_TIMEOUT_MS,
 	CONSOLE_SERVER_NAME,
 	CONSOLE_TIMEOUT_MS,
+	commandKey,
 	createConsoleFlags,
 	createConsoleServer,
 	type ConsoleFlags,
@@ -48,8 +49,9 @@ class FakePrompter implements PermissionPrompter {
 		this.requests.push(req);
 		return this.throws ? Promise.reject(new Error('x')) : Promise.resolve(this.decision);
 	}
-	hasApproved = () => false;
-	remember = () => {};
+	approved = new Set<string>();
+	hasApproved = (key: string) => this.approved.has(key);
+	remember = (key: string) => void this.approved.add(key);
 	audit = (e: AuditEntry) => void this.audits.push(e);
 }
 
@@ -113,7 +115,7 @@ test('confirm maps allow to true and deny, cancel and a throwing request to fals
 	const sent = prompter.requests[0] as unknown as {toolName: string; input: {command: string}; always: unknown};
 	assert.equal(sent.toolName, 'Command');
 	assert.equal(sent.input.command, 'mod remove x');
-	assert.equal(sent.always, false);
+	assert.deepEqual(sent.always, {label: 'Yes, always for "mod"'});
 	prompter.decision = {kind: 'deny'};
 	assert.equal(await confirm!(creq), false);
 	prompter.decision = {kind: 'cancel', cause: 'aborted'};
@@ -163,6 +165,77 @@ test('confirm still prompts outside auto mode', async () => {
 		await runTool.handler({command: 'mod remove x'}, {});
 		assert.equal(await confirm!({line: 'mod remove x', command: 'mod', caller: 'claude'}), true);
 		assert.equal(prompter.requests.length, 1, mode);
+	}
+});
+
+test('commandKey joins the command and its subcommand', () => {
+	assert.equal(commandKey({command: 'dev', subcommand: 'check'}), 'cmd:dev check');
+	assert.equal(commandKey({command: 'clear'}), 'cmd:clear');
+});
+
+test('"always" saves the command with its subcommand and later lines with other arguments run without a prompt', async () => {
+	const confirms: CommandRunRequest['confirm'][] = [];
+	const {runTool, prompter} = setup(async req => {
+		confirms.push(req.confirm);
+		return ok('');
+	});
+	await runTool.handler({command: 'dev check claude'}, {});
+	prompter.decision = {kind: 'allow', always: true};
+	assert.equal(await confirms[0]!({line: 'dev check claude', command: 'dev', subcommand: 'check', caller: 'claude'}), true);
+	const sent = prompter.requests[0] as unknown as {always: unknown};
+	assert.deepEqual(sent.always, {label: 'Yes, always for "dev check"'});
+	assert.deepEqual([...prompter.approved], ['cmd:dev check']);
+
+	prompter.decision = {kind: 'deny'};
+	await runTool.handler({command: 'dev check host'}, {});
+	assert.equal(await confirms[1]!({line: 'dev check host', command: 'dev', subcommand: 'check', caller: 'claude'}), true);
+	assert.equal(prompter.requests.length, 1);
+	assert.deepEqual(prompter.audits.at(-1), {outcome: 'always-allowed', toolName: 'Command', summary: 'dev check host'});
+
+	await runTool.handler({command: 'dev test host'}, {});
+	assert.equal(await confirms[2]!({line: 'dev test host', command: 'dev', subcommand: 'test', caller: 'claude'}), false);
+	assert.equal(prompter.requests.length, 2);
+});
+
+test('a saved command also covers a line the auto classifier flagged', async () => {
+	const flags = createConsoleFlags();
+	let confirm: CommandRunRequest['confirm'];
+	const {runTool, prompter} = setup(
+		async req => {
+			confirm = req.confirm;
+			return ok('');
+		},
+		s => s,
+		flags,
+	);
+	prompter.mode = 'auto';
+	prompter.approved.add('cmd:mod install');
+	prompter.decision = {kind: 'deny'};
+	flags.flag('mod install x');
+	await runTool.handler({command: 'mod install x'}, {});
+	assert.equal(await confirm!({line: 'mod install x', command: 'mod', subcommand: 'install', caller: 'claude'}), true);
+	assert.equal(prompter.requests.length, 0);
+});
+
+test('claude auth and plan mode never offer or use "always"', async () => {
+	const cases: [ChatMode, CommandConfirmRequest][] = [
+		['default', {line: 'claude auth logout', command: 'claude', subcommand: 'auth', caller: 'claude'}],
+		['plan', {line: 'mod install x', command: 'mod', subcommand: 'install', caller: 'claude'}],
+	];
+	for (const [mode, creq] of cases) {
+		let confirm: CommandRunRequest['confirm'];
+		const {runTool, prompter} = setup(async req => {
+			confirm = req.confirm;
+			return ok('');
+		});
+		prompter.mode = mode;
+		prompter.approved.add(commandKey(creq));
+		prompter.decision = {kind: 'allow', always: true};
+		await runTool.handler({command: creq.line}, {});
+		assert.equal(await confirm!(creq), true);
+		assert.equal(prompter.requests.length, 1, mode);
+		assert.equal((prompter.requests[0] as unknown as {always: unknown}).always, false, mode);
+		assert.deepEqual([...prompter.approved], [commandKey(creq)], mode);
 	}
 });
 

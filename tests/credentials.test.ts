@@ -29,8 +29,7 @@ import {
 	removeStored,
 	requireCredential,
 	resolveCredential,
-	storeApiKey,
-	storeOauthToken,
+	storeSecret,
 } from '../src/credentials.js';
 
 const KEY = 'sk-ant-api03-TESTVALUE0123456789abcdef';
@@ -60,8 +59,8 @@ const BOB = {email: 'bob@example.com', uuid: 'uuid-bob', token: 'BOB-TOKEN'};
 test('default priority: env key, env token, logins, then stored accounts in the order they were added', async () => {
 	const dir = await tmp();
 	assert.equal(await resolveCredential({env: {}, dataDir: dir}), undefined);
-	await storeOauthToken(dir, OAUTH);
-	await storeApiKey(dir, KEY2);
+	await storeSecret(dir, OAUTH);
+	await storeSecret(dir, KEY2);
 	assert.deepEqual(shape(await resolveCredential({env: {}, dataDir: dir})), {kind: 'oauth', source: 'stored', account: 'token'});
 	await writeLogin(dir, ALICE);
 	assert.deepEqual(shape(await resolveCredential({env: {}, dataDir: dir})), {kind: 'oauth', source: 'claude-login', account: 'alice@example.com'});
@@ -77,7 +76,7 @@ test('empty environment values are skipped; requireCredential explains what to d
 	assert.equal(await resolveCredential({env: {ANTHROPIC_API_KEY: '  ', CLAUDE_CODE_OAUTH_TOKEN: ''}, dataDir: dir}), undefined);
 	await assert.rejects(requireCredential({env: {}, dataDir: dir}), {
 		message:
-			'No credentials found. Set ANTHROPIC_API_KEY, run "claude auth login", or run "claude auth key --from-file <path>" to store an API key. See "claude auth status".',
+			'No credentials found. Run "claude auth login" to sign in through the browser, or "claude auth add" to paste an API key or a subscription token. See "claude auth status".',
 	});
 });
 
@@ -113,7 +112,7 @@ test('makeRedactor masks the credential, every other secret and the key pattern'
 	assert.equal(r(`k ${KEY} z`), 'k [redacted] z');
 	assert.equal(makeRedactor()(`k ${KEY}`), 'k [redacted]');
 	const dir = await tmp();
-	await storeApiKey(dir, KEY2);
+	await storeSecret(dir, KEY2);
 	assert.deepEqual(allSecrets({env: {ANTHROPIC_API_KEY: KEY}, dataDir: dir}).sort(), [KEY, KEY2].sort());
 });
 
@@ -137,25 +136,24 @@ test('refreshAccountSecretValues leaves nothing when the account dir has no acco
 	assert.deepEqual(accountSecretValues(), []);
 });
 
-test('storing refuses the wrong kind and garbage without echoing it', async () => {
+test('storeSecret tells a key from a token by its prefix and refuses garbage without echoing it', async () => {
 	const dir = await tmp();
-	for (const bad of [OAUTH, 'garbage-TESTVALUE', 'sk-ant-x']) {
-		await assert.rejects(storeApiKey(dir, bad), (e: Error) => !e.message.includes('TESTVALUE') && !e.message.includes(bad));
+	for (const bad of ['garbage-TESTVALUE', 'sk-ant-x', 'sk-ant-api03-no pe-TESTVALUE0123456789']) {
+		await assert.rejects(storeSecret(dir, bad), (e: Error) => !e.message.includes('TESTVALUE') && !e.message.includes(bad));
 	}
-	await assert.rejects(storeApiKey(dir, OAUTH), {
-		message:
-			'This looks like a subscription (OAuth) token, not an API key. Run "claude auth login --token" or set CLAUDE_CODE_OAUTH_TOKEN instead.',
-	});
-	await assert.rejects(storeOauthToken(dir, 'sk-ant-api03-nope'), (e: Error) => !e.message.includes('nope'));
 	assert.equal(await removeStored(dir), false);
+	assert.deepEqual(
+		[await storeSecret(dir, OAUTH), await storeSecret(dir, ` ${KEY}\n`)].map(a => `${a.name}:${a.type}:${a.kind}`),
+		['token:token:oauth', 'key:key:api-key'],
+	);
 });
 
 test('several keys and tokens: named, deduplicated, and replaced by name', async () => {
 	const dir = await tmp();
 	const ctx = ctxOf(dir);
-	assert.equal((await storeApiKey(dir, ` ${KEY}\n`)).name, 'key');
-	assert.equal((await storeApiKey(dir, KEY2)).name, 'key-2');
-	assert.equal((await storeOauthToken(dir, OAUTH, 'work')).name, 'work');
+	assert.equal((await storeSecret(dir, ` ${KEY}\n`)).name, 'key');
+	assert.equal((await storeSecret(dir, KEY2)).name, 'key-2');
+	assert.equal((await storeSecret(dir, OAUTH, 'work')).name, 'work');
 	assert.throws(() => addSecretAccount(ctx, 'again', KEY), /already account "key"/);
 	addSecretAccount(ctx, 'work', OAUTH2);
 	assert.deepEqual(listAccounts(ctx).map(a => `${a.name}:${a.type}`), ['key:key', 'key-2:key', 'work:token']);
@@ -170,8 +168,8 @@ test('order, use and remove change the priority; environment accounts take part 
 	const dir = await tmp();
 	const env = {ANTHROPIC_API_KEY: KEY};
 	const ctx = ctxOf(dir, env);
-	await storeOauthToken(dir, OAUTH, 'a');
-	await storeOauthToken(dir, OAUTH2, 'b');
+	await storeSecret(dir, OAUTH, 'a');
+	await storeSecret(dir, OAUTH2, 'b');
 	assert.deepEqual(listAccounts(ctx).map(a => a.name), ['env-key', 'a', 'b']);
 	assert.deepEqual(setOrder(ctx, ['b', 'a']).map(a => a.name), ['b', 'a', 'env-key']);
 	assert.equal(chooseAccount(ctx)?.name, 'b');
@@ -188,8 +186,8 @@ test('a limited account is skipped until its reset; when all are limited, the fi
 	const dir = await tmp();
 	let now = 1_000_000_000_000;
 	const ctx = ctxOf(dir, {}, () => now);
-	await storeOauthToken(dir, OAUTH, 'a');
-	await storeOauthToken(dir, OAUTH2, 'b');
+	await storeSecret(dir, OAUTH, 'a');
+	await storeSecret(dir, OAUTH2, 'b');
 	markLimited(ctx, 'a', now / 1000 + 3600, 'usage-limit');
 	assert.equal(chooseAccount(ctx)?.name, 'b');
 	const view = listAccounts(ctx).find(a => a.name === 'a')!;
@@ -265,7 +263,7 @@ test('removing the installed login signs Claude Code out of it; removeStored for
 	const ctx = ctxOf(dir);
 	await writeFile(join(dir, 'other.txt'), 'keep');
 	await writeLogin(dir, ALICE, {keep: 1});
-	await storeApiKey(dir, KEY);
+	await storeSecret(dir, KEY);
 	assert.deepEqual(removeAccount(ctx, 'alice@example.com'), {wasInstalled: true});
 	assert.ok(!(await readdir(join(dir, 'config'))).includes('.credentials.json'));
 	const claude = JSON.parse(await readFile(join(dir, 'config', '.claude.json'), 'utf8'));
@@ -278,7 +276,7 @@ test('removing the installed login signs Claude Code out of it; removeStored for
 
 test('inspectFileMode warns about readable accounts and login files', async () => {
 	const dir = await tmp();
-	await storeApiKey(dir, KEY);
+	await storeSecret(dir, KEY);
 	await chmod(join(dir, 'accounts.json'), 0o644);
 	let w = await inspectFileMode(dir);
 	assert.equal(w.length, 1);
@@ -316,11 +314,11 @@ test('registerLogRedaction registers once per value and logger', async () => {
 
 test('a stored token or key reaches Claude Code as the matching variable only', async () => {
 	const dir = await tmp();
-	await storeOauthToken(dir, OAUTH);
+	await storeSecret(dir, OAUTH);
 	let env = buildEnv({}, resolvePaths(dir), await requireCredential({env: {}, dataDir: dir}));
 	assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, OAUTH);
 	assert.ok(!('ANTHROPIC_API_KEY' in env));
-	useAccount(ctxOf(dir), (await storeApiKey(dir, KEY)).name);
+	useAccount(ctxOf(dir), (await storeSecret(dir, KEY)).name);
 	env = buildEnv({CLAUDE_CODE_OAUTH_TOKEN: 'stale'}, resolvePaths(dir), await requireCredential({env: {}, dataDir: dir}));
 	assert.equal(env.ANTHROPIC_API_KEY, KEY);
 	assert.ok(!('CLAUDE_CODE_OAUTH_TOKEN' in env));

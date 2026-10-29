@@ -17,8 +17,9 @@ import {buildPreview} from './preview.js';
 import {makeReveal} from './reveal.js';
 import {bashHighlights} from './risk.js';
 import {makeScrub} from './scrub.js';
-import {ensureShellTmp} from './shell-tmp.js';
+import {ensureShellTmp, sessionDirOf, shellTmpRoot} from './shell-tmp.js';
 import {createProcessStatus, statusLine} from './process-status.js';
+import {buildSandbox, createSandboxSync, sandboxProblem} from './sandbox.js';
 import {readSessionTitle, titleFromPrompt, transcriptFile} from './title.js';
 
 const TITLE_RETRY_MS = [3_000, 10_000];
@@ -45,6 +46,8 @@ export type EngineDeps = {
 	onRulesChanged?: () => void;
 	// Private directory for Claude Code's shell output (CLAUDE_CODE_TMPDIR); throws when unusable.
 	shellTmp?: () => string;
+	// Why Bash cannot be sandboxed (bubblewrap missing or blocked); undefined when it can.
+	sandboxProblem?: (pathVar: string | undefined) => string | undefined;
 	// Runs once the credential is resolved, before any dependency loads (e.g. the one-time notice).
 	onCredential?: (cred: Credential) => Promise<void>;
 	// Loaded together with the SDK so one failure mapping covers them (e.g. the chat UI).
@@ -146,6 +149,19 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		resuming: resume !== undefined,
 		model: model ?? 'default',
 	});
+	const problem = (deps.sandboxProblem ?? sandboxProblem)(env.PATH);
+	if (problem !== undefined) {
+		log.warn('bash sandbox unavailable');
+		io.warn(`Warning: Bash in the chat runs without its sandbox, so it can write to projects that are not isolated: ${problem}.`);
+	}
+	let created: ChatSession | undefined;
+	const sandboxExtras = {socketDirs: [sessionDirOf(shellTmpRoot(process.getuid?.() ?? 0))]};
+	const sandbox = createSandboxSync(
+		async () => buildSandbox(paths, await paths.projects?.read(), undefined, undefined, sandboxExtras),
+		async s => {
+			await created?.applySandbox(s);
+		},
+	);
 	let shellRoot: string | undefined;
 	try {
 		shellRoot = (deps.shellTmp ?? ensureShellTmp)();
@@ -168,7 +184,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		session.applyLive(patch);
 	};
 
-	let created: ChatSession | undefined;
 	const turnLock = deps.turnLock?.(() => created);
 	const session = new ChatSession({
 		query,
@@ -194,6 +209,12 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			cred = prepareCredential(credOpts);
 			registerLogRedaction(log, cred);
 			const consoleFlags = createConsoleFlags();
+			// Claude Code narrows a running sandbox at once but never widens it past the one it started with,
+			// so a later `project isolate` would not reach Bash. It starts with no project denies, and the
+			// policy hook narrows it to the real access before every Bash command (beforeBash).
+			const access = paths.projects?.readSync();
+			const box = problem === undefined ? buildSandbox(paths, access && {...access, managed: []}, undefined, undefined, sandboxExtras) : undefined;
+			if (box) sandbox.spawned(box);
 			return {
 			...buildChatOptions({
 				paths,
@@ -203,6 +224,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 				...(live.model !== undefined && {model: live.model}),
 				tuning: live.tuning,
 				env: buildEnv(env, paths, cred, shellRoot),
+				...(box && {sandbox: box}),
 				...(consoleSdk && io.commandBridge && {
 					consoleServer: createConsoleServer({
 						bridge: io.commandBridge,
@@ -228,7 +250,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			includePartialMessages: true,
 			...(firstSpawn() && {...(fork && {forkSession: true}), ...(resumeAt && {resumeSessionAt: resumeAt})}),
 			permissionMode: sdkPermissionMode(prompter.mode),
-			hooks: policyHooks(scope, paths.configDir, {approved: key => prompter.hasApproved(key)}),
+			hooks: policyHooks(scope, paths.configDir, {approved: key => prompter.hasApproved(key), ...(box && {beforeBash: () => sandbox.refresh()})}),
 			};
 		},
 		onUsageLimit: ({reason, rateLimit}) => {

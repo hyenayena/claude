@@ -5,7 +5,7 @@ import {errClass, noopLog} from './log.js';
 import type {QueryFn, TurnResult} from './types.js';
 
 export const AUTH_MESSAGE =
-	'Not authenticated. Run "claude auth status", "claude auth login", set ANTHROPIC_API_KEY, or run "claude auth key --from-file <path>".';
+	'Not authenticated. Run "claude auth status", then "claude auth login" (browser) or "claude auth add" (paste a key or token).';
 export const RESUME_MESSAGE = 'The stored session no longer exists. Run "claude new" or "claude ask --new <text>".';
 export const CANCELLED_MESSAGE = 'Request cancelled';
 

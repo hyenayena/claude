@@ -47,6 +47,13 @@ export function readHidden(prompt: string): string {
 	return typeof r.stdout === 'string' ? r.stdout : '';
 }
 
+/** Asks for one line on the terminal (echoed); the typed line without its newline. */
+export function readLine(prompt: string): string {
+	const script = 'printf "%s" "$1" >&2; IFS= read -r t; printf "%s" "$t"';
+	const r = spawnSync('sh', ['-c', script, 'sh', prompt], {stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8'});
+	return typeof r.stdout === 'string' ? r.stdout : '';
+}
+
 /** Waits for Enter, so output stays readable before the app comes back. */
 export function waitForEnter(message: string): void {
 	spawnSync('sh', ['-c', 'printf "%s" "$1" >&2; IFS= read -r _', 'sh', message], {stdio: 'inherit'});

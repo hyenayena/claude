@@ -1,11 +1,11 @@
 import {accessSync, constants} from 'node:fs';
-import {appendFile, lstat, mkdir, open, realpath, stat, writeFile} from 'node:fs/promises';
-import path, {join, resolve} from 'node:path';
+import {appendFile, mkdir, writeFile} from 'node:fs/promises';
+import path, {join} from 'node:path';
 import type {BuildInfo, Command, CommandContext, DevFailure, Logger, SettingsTab, Subcommand} from '../../../src/api.js';
 import {createFixCommand} from './fix.js';
 import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
 import {CONTINUE_TEXT, isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
-import {type AccountView, checkAccountName, chooseAccount, listAccounts, markLimited, removeAccount, setOrder, stashLogin, adoptLogin, useAccount} from './accounts.js';
+import {type AccountView, checkAccountName, chooseAccount, listAccounts, markLimited, removeAccount, setOrder, stashLogin, adoptLogin, useAccount, suggestSecretName, newAccountNameProblem} from './accounts.js';
 import {formatReset, systemClock} from './chat/limits.js';
 import type {ChatHandle} from './chat/handle.js';
 import {usageLines} from './chat/usage.js';
@@ -16,7 +16,7 @@ import {listPrompts, listSessions, readHistory} from './chat/history.js';
 import {readSessionTitle, transcriptFile} from './chat/title.js';
 import {ago, type PickerItem} from './ui/picker-model.js';
 import {buildEnv, buildOptions, cliEnv, ensureMdLinks, resolvePaths, restrictDataDirs, runtimeInfo, withProjects} from './config.js';
-import {LOGIN_USAGE, parseLoginArgs, probeLogin, runLogout, type LoginProbe, type LoginRequest, type LoginStatus} from './claude-login.js';
+import {parseLoginArgs, probeLogin, runLogout, type LoginProbe, type LoginRequest, type LoginStatus} from './claude-login.js';
 import {
 	accountsCtx,
 	allSecrets,
@@ -31,11 +31,10 @@ import {
 	removeStored,
 	requireCredential,
 	resolveCredential,
-	storeApiKey,
-	storeOauthToken,
+	storeSecret,
 } from './credentials.js';
 import {refreshAccountSecretValues} from './deps/account.js';
-import {editFile, readHidden, runInteractive, runInteractiveStatus, waitForEnter} from './terminal.js';
+import {editFile, readHidden, readLine, runInteractive, runInteractiveStatus, waitForEnter} from './terminal.js';
 import {clip, errClass, noopLog} from './log.js';
 import {openChat, runChat, type ChatOpen, type ChatRoute, type ChatRouteRequest, type ChatRunDeps, type ChatUi} from './chat/command.js';
 import {makeScrub} from './chat/scrub.js';
@@ -47,9 +46,15 @@ import {stopHolder} from './sessions/stop.js';
 import {createStore, isModelId} from './store.js';
 import type {ChatQueryFn, Credential, CredentialInfo, QueryFn} from './types.js';
 
-// Saved "always" rules: a Bash command, or a prefixed key for an MCP tool or a fetched host.
+// Saved "always" rules: a Bash command, or a prefixed key for an MCP tool, a console command or a fetched host.
 const ruleKind = (rule: string): string =>
-	rule.startsWith('mcp:') ? 'MCP tool allowed with "always"' : rule.startsWith('web:') ? 'Host WebFetch may reach without asking' : 'Bash command allowed with "always"';
+	rule.startsWith('mcp:')
+		? 'MCP tool allowed with "always"'
+		: rule.startsWith('cmd:')
+			? 'Console command allowed with "always"'
+			: rule.startsWith('web:')
+				? 'Host WebFetch may reach without asking'
+				: 'Bash command allowed with "always"';
 
 const LIMIT_KINDS = new Set(['usage-limit', 'rate-limit', 'billing', 'context']);
 const MAX_ASK_SWITCHES = 8;
@@ -91,6 +96,11 @@ export type ClaudeDeps = {
 		// Terminal prompts, replaceable so tests never read the real terminal.
 		wait?: (message: string) => void;
 		readSecret?: (prompt: string) => string;
+		// Asks for a key or token with hidden input ('' when cancelled); replaceable so tests never mount a view.
+		promptSecret?: (ctx: CommandContext, label: string) => Promise<string>;
+		readName?: (prompt: string) => string;
+		// Asks for the new account's name, prefilled with `initial` (undefined when cancelled).
+		promptName?: (ctx: CommandContext, label: string, initial: string, validate: (value: string) => string | undefined) => Promise<string | undefined>;
 	};
 };
 
@@ -98,14 +108,13 @@ const USAGE = 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|
 const RESUME_USAGE = 'Usage: claude resume [session]';
 const NO_CHAT = 'No chat is open. Claude Code commands run in the open chat; start one with "chat".';
 const ASK_USAGE = 'Usage: claude ask [--new] <text>';
-const AUTH_USAGE = 'Usage: claude auth <status|accounts|login|key|order|use|remove|logout>';
+const AUTH_USAGE = 'Usage: claude auth <status|login|add|order|use|remove|logout>';
 const ORDER_USAGE = 'Usage: claude auth order <account> [<account>…]';
-const KEY_USAGE = 'Usage: claude auth key --from-file <path> [--name <account>]';
+const ADD_USAGE = 'Usage: claude auth add [--name <account>]';
 const CHAT_NEW_USAGE = 'Usage: chat [model]';
 const START_USAGE = 'Usage: claude start <message…>';
 const START_MAX = 20_000;
 const SEND_USAGE = 'Usage: claude send <message…>';
-const MAX_KEY_FILE_BYTES = 4096;
 const STOP_USAGE = 'Usage: claude stop [session]';
 
 export {MODEL_OPTIONS} from './chat-prefs.js';
@@ -149,36 +158,6 @@ const isMissingModule = (err: unknown): boolean => {
 	return code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND' || code === 'ERR_PACKAGE_PATH_NOT_EXPORTED';
 };
 
-const readKeyFile = async (rawPath: string): Promise<string> => {
-	const requested = resolve(process.cwd(), rawPath);
-	let real: string;
-	try {
-		const link = await lstat(requested);
-		real = link.isSymbolicLink() ? await realpath(requested) : requested;
-		if (!(await stat(real)).isFile()) throw new Error('not a regular file');
-	} catch (err) {
-		if (err instanceof Error && err.message === 'not a regular file') {
-			throw new Error(`"${rawPath}" is not a regular file`);
-		}
-		throw new Error(`Cannot read "${rawPath}": file not found or not accessible`);
-	}
-	// O_NONBLOCK so a file swapped for a fifo after the check cannot hang the UI
-	const handle = await open(real, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
-	try {
-		const info = await handle.stat();
-		if (!info.isFile()) throw new Error(`"${rawPath}" is not a regular file`);
-		if (info.size > MAX_KEY_FILE_BYTES) {
-			throw new Error(`"${rawPath}" is larger than ${MAX_KEY_FILE_BYTES} bytes; an API key file must be small`);
-		}
-		const buf = Buffer.alloc(MAX_KEY_FILE_BYTES + 1);
-		const {bytesRead} = await handle.read(buf, 0, buf.length, 0);
-		if (bytesRead > MAX_KEY_FILE_BYTES) throw new Error(`"${rawPath}" is larger than ${MAX_KEY_FILE_BYTES} bytes`);
-		return buf.toString('utf8', 0, bytesRead).replace(/[ \n\r]/g, '');
-	} finally {
-		await handle.close();
-	}
-};
-
 export const createClaudeCommand = (deps: ClaudeDeps): Command => createClaudeCommands(deps).find(c => c.name === 'claude')!;
 
 /** The `claude` command and the top-level `chat` command, sharing one chat slot. */
@@ -201,6 +180,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const runCode = deps.runCode ?? runInteractiveStatus;
 	const wait = deps.login?.wait ?? waitForEnter;
 	const readSecret = deps.login?.readSecret ?? readHidden;
+	const readName = deps.login?.readName ?? readLine;
 	const logoutCli = deps.login?.logout ?? ((bin, e) => runLogout({bin, env: e}));
 	// In this process: a chat view is open, an ask is running (they may overlap while the chat is idle).
 	let chatOpen = false;
@@ -931,19 +911,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		});
 	};
 
-	const authAccounts = async (args: string[], ctx: CommandContext): Promise<void> => {
-		if (args.length > 0) throw new Error('Usage: claude auth accounts');
-		const list = listAccounts(accountsCtx({env, dataDir}));
-		log.info('auth accounts', {count: list.length, limited: list.filter(a => a.limitedUntil !== undefined).length});
-		if (list.length === 0) {
-			ctx.print(NO_CREDENTIALS);
-			return;
-		}
-		ctx.print('Accounts, in priority order (▸ is used next; when it reaches its limit, the next one takes over):');
-		for (const line of accountLines(list)) ctx.print(line);
-	};
-
-	const authStatus = async (ctx: CommandContext): Promise<void> => {
+	const authStatus = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length > 0) throw new Error('Usage: claude auth status');
 		const list = listAccounts(accountsCtx({env, dataDir}));
 		const active = await resolveCredential({env, dataDir});
 		log.info('auth status', {kind: active?.kind, source: active?.source, accounts: list.length, limited: list.filter(a => a.limitedUntil !== undefined).length});
@@ -951,10 +920,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			ctx.print(NO_CREDENTIALS);
 		} else {
 			ctx.print(`Active credential: ${describeCredential(active)}`);
-			if (list.length > 1) {
-				ctx.print('Accounts, in priority order:');
-				for (const line of accountLines(list)) ctx.print(line);
-			}
+			ctx.print('Accounts, in priority order (▸ is used next; when it reaches its limit, the next one takes over):');
+			for (const line of accountLines(list)) ctx.print(line);
 		}
 		for (const warning of await inspectFileMode(dataDir)) ctx.print(`Warning: ${warning}`);
 		if (active) await showNoticeOnce(active, ctx);
@@ -984,33 +951,70 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await printActive(ctx);
 	};
 
-	const authKey = async (rawArgs: string[], ctx: CommandContext): Promise<void> => {
-		const {name, rest: args} = takeName(rawArgs);
-		if (args[0] !== '--from-file') {
-			throw new Error(
-				`API keys are not accepted as command arguments because they would stay in the scrollback and history. ${KEY_USAGE}`,
-			);
-		}
-		const rest = args.slice(1);
-		if (rest.length === 0) throw new Error(KEY_USAGE);
-		if (rest.length > 1) {
-			throw new Error('Paths with spaces are not supported by "claude auth key --from-file"; move the file to a path without spaces.');
-		}
-		const value = await readKeyFile(rest[0]!);
-		let account;
-		try {
-			account = await storeApiKey(dataDir, value, name, env);
-		} catch (err) {
-			if (err instanceof Error && err.message.startsWith('Invalid API key format')) {
-				throw new Error('The file does not contain a valid Anthropic API key');
+	// In the app a hidden input in the console panel; from a terminal (./yena claude auth add) a read without echo.
+	const promptSecret =
+		deps.login?.promptSecret ??
+		(async (ctx: CommandContext, label: string): Promise<string> => {
+			if (ctx.mount && !ctx.headless) {
+				const {secretPrompt} = await import('./ui/secret-prompt.js');
+				let value = '';
+				await ctx.mount(control => secretPrompt(control, label, v => (value = v)), {target: 'panel'});
+				return value;
 			}
-			throw err;
+			if (ctx.suspend) return ctx.suspend(() => readSecret(`${label} (input hidden): `));
+			throw new Error('"claude auth add" needs the app (./yena) or a terminal: the key is typed into a hidden input');
+		});
+
+	// The account name, prefilled with `initial`: a text input in the app, a line on the terminal; undefined when cancelled.
+	const promptName =
+		deps.login?.promptName ??
+		(async (ctx: CommandContext, label: string, initial: string, validate: (v: string) => string | undefined): Promise<string | undefined> => {
+			if (ctx.mount && !ctx.headless) {
+				const {namePrompt} = await import('./ui/name-prompt.js');
+				let value: string | undefined;
+				await ctx.mount(control => namePrompt(control, label, initial, validate, v => (value = v)), {target: 'panel'});
+				return value;
+			}
+			if (!ctx.suspend) return initial;
+			return ctx.suspend(() => {
+				let problem: string | undefined;
+				for (let i = 0; i < 3; i++) {
+					const typed = readName(`${problem ? `${problem}\n` : ''}${label} [${initial}]: `).trim();
+					const name = typed === '' ? initial : typed;
+					problem = validate(name);
+					if (!problem) return name;
+				}
+				throw new Error(problem);
+			});
+		});
+
+	// A key or token is typed into a hidden input only: never an argument, a file, the history or the log.
+	const authAdd = async (rawArgs: string[], ctx: CommandContext): Promise<void> => {
+		const {name: given, rest} = takeName(rawArgs);
+		if (rest.length > 0) {
+			throw new Error(`Keys and tokens are not accepted as arguments: they would stay in the scrollback and history. ${ADD_USAGE}`);
 		}
-		log.info('api key stored');
+		const value = (await promptSecret(ctx, 'API key (sk-ant-…) or subscription token (sk-ant-oat…)')).trim();
+		if (value === '') {
+			ctx.print('Cancelled; nothing was saved.');
+			return;
+		}
+		let name = given;
+		if (name === undefined) {
+			const actx = accountsCtx({env, dataDir});
+			name = await promptName(ctx, 'Account name', suggestSecretName(actx, value), v => newAccountNameProblem(actx, v));
+			if (name === undefined) {
+				ctx.print('Cancelled; nothing was saved.');
+				return;
+			}
+		}
+		const account = await storeSecret(dataDir, value, name, env);
+		log.info('credential stored', {type: account.type});
 		ctx.print(
-			`API key stored as account "${account.name}" in ${join(dataDir, 'accounts.json')} (mode 0600). Source file left untouched; delete it yourself.`,
+			`${account.type === 'token' ? 'Subscription token' : 'API key'} stored as account "${account.name}" in ${join(dataDir, 'accounts.json')} (mode 0600).`,
 		);
 		await noteIfShadowed(account.name, ctx);
+		if (account.type === 'token') await showNoticeOnce({kind: 'oauth', source: 'stored'}, ctx);
 	};
 
 	// Says so when a new account is not the one used next.
@@ -1073,36 +1077,13 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (!ctx.suspend) throw new Error('"claude auth login" needs an interface that can hand over the terminal');
 		const bin = cliBin();
 		if (!bin) throw new Error('Claude Code is not installed for this module. Run modules/claude/bin/install.');
-		if (request.kind === 'token') return authLoginToken(bin, ctx, name);
 		return authLoginBrowser(bin, request, ctx, name);
-	};
-
-	// Runs Claude Code's "setup-token" on the terminal, then asks for the token it printed (hidden input)
-	// and saves it to credentials.json; the token never passes through arguments, history or logs.
-	const authLoginToken = async (bin: string, ctx: CommandContext, name: string | undefined): Promise<void> => {
-		const paths = loginPaths();
-		const token = await ctx.suspend!(() => {
-			const ok = runCli(bin, ['setup-token'], cliEnv(env, paths) as NodeJS.ProcessEnv);
-			if (!ok) {
-				wait('\n"claude setup-token" did not finish. Press Enter to return to yena. ');
-				return '';
-			}
-			return readSecret('\nPaste the token printed above (input hidden) and press Enter: ');
-		});
-		if (token.trim() === '') {
-			ctx.print('Login cancelled; nothing was saved.');
-			return;
-		}
-		const account = await storeOauthToken(dataDir, token, name, env);
-		log.info('subscription token stored');
-		ctx.print(`Subscription token stored as account "${account.name}" in ${join(dataDir, 'accounts.json')} (mode 0600).`);
-		await noteIfShadowed(account.name, ctx);
 	};
 
 	// Claude Code's own browser login; yena never sees the tokens, it only asks the CLI afterwards.
 	const authLoginBrowser = async (
 		bin: string,
-		request: Extract<LoginRequest, {kind: 'browser'}>,
+		request: LoginRequest,
 		ctx: CommandContext,
 		name: string | undefined,
 	): Promise<void> => {
@@ -1205,18 +1186,15 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const [sub, ...rest] = args;
 		switch (sub) {
 			case 'status':
-				return authStatus(ctx);
-			case 'accounts':
-			case 'list':
-				return authAccounts(rest, ctx);
+				return authStatus(rest, ctx);
 			case 'order':
 				return authOrder(rest, ctx);
 			case 'use':
 				return authUse(rest, ctx);
 			case 'remove':
 				return authRemove(rest, ctx);
-			case 'key':
-				return authKey(rest, ctx);
+			case 'add':
+				return authAdd(rest, ctx);
 			case 'logout':
 				return authLogout(rest, ctx);
 			case 'login':
@@ -1294,9 +1272,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		{name: 'stop', usage: 'claude stop [session]', description: 'Stop the running chat or ask', agent: 'confirm'},
 		{
 			name: 'auth',
-			usage: 'claude auth <status|accounts|login|key|order|use|remove|logout>',
+			usage: 'claude auth <status|login|add|order|use|remove|logout>',
 			description:
-				'Accounts in priority order (the next takes over at a limit): accounts, login [--name <n>] [--console|--sso|--email <a>|--token], key --from-file <path>, order, use, remove, status, logout',
+				'Accounts in priority order (the next takes over at a limit): status, login [--name <n>] [--console|--sso|--email <a>] (browser), add [--name <n>] (paste a key or token), order, use, remove, logout',
 			agent: 'confirm',
 		},
 	];
