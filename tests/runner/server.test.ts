@@ -301,7 +301,7 @@ const CMDS: CommandInfo[] = [
 	{name: 'exit', description: 'e', policy: 'confirm', subcommands: []},
 ];
 
-test('the bridge forwards a safe command and a confirmed one with bridgeAsk first', async () => {
+test('the bridge forwards a safe command as is and a confirm command once the chat confirmed it', async () => {
 	const r = await rig();
 	const c = await attach(r);
 	c.send({type: 'commands', list: CMDS});
@@ -309,20 +309,25 @@ test('the bridge forwards a safe command and a confirmed one with bridgeAsk firs
 	const bridge = r.io().commandBridge!;
 	assert.deepEqual(bridge.list().map(x => x.name), ['help', 'exit']);
 
-	const safe = bridge.run({line: 'help', caller: 'claude', confirm: async () => true, timeoutMs: 5000});
+	const asked: unknown[] = [];
+	const confirm = async (req: unknown) => {
+		asked.push(req);
+		return true;
+	};
+	const safe = bridge.run({line: 'help', caller: 'claude', confirm, timeoutMs: 5000});
 	const run1 = (await c.waitFor('bridgeRun')) as Extract<RunnerFrame, {type: 'bridgeRun'}>;
 	assert.equal(run1.timeoutMs, 5000);
-	assert.equal(c.frames.some(f => f.type === 'bridgeAsk'), false);
+	assert.equal(run1.approved, undefined);
+	assert.deepEqual(asked, []);
 	c.send({type: 'bridgeResult', id: run1.id, result: {status: 'ok', output: 'done', truncated: false, ms: 1}});
 	assert.equal((await safe).output, 'done');
 
 	const before = c.frames.length;
-	const risky = bridge.run({line: 'exit', caller: 'claude', confirm: async () => true});
-	const ask = await c.waitFor('bridgeAsk', before);
-	assert.deepEqual(ask.request, {line: 'exit', command: 'exit', caller: 'claude'});
-	c.send({type: 'bridgeConfirm', id: ask.id, ok: true});
-	const run2 = await c.waitFor('bridgeRun', before);
-	assert.equal(run2.id, ask.id);
+	const risky = bridge.run({line: 'exit', caller: 'claude', confirm});
+	const run2 = (await c.waitFor('bridgeRun', before)) as Extract<RunnerFrame, {type: 'bridgeRun'}>;
+	assert.deepEqual(asked, [{line: 'exit', command: 'exit', caller: 'claude'}]);
+	assert.equal(run2.approved, true);
+	assert.equal(c.frames.some(f => f.type === 'bridgeAsk'), false);
 	c.send({type: 'bridgeResult', id: run2.id, result: {status: 'ok', output: 'bye', truncated: false, ms: 1}});
 	assert.equal((await risky).output, 'bye');
 });
@@ -333,10 +338,10 @@ test('a declined confirmation never reaches bridgeRun, a detach settles pending 
 	c.send({type: 'commands', list: CMDS});
 	await tick(30);
 	const bridge = r.io().commandBridge!;
-	const declined = bridge.run({line: 'exit', caller: 'claude', confirm: async () => true});
-	const ask = await c.waitFor('bridgeAsk');
-	c.send({type: 'bridgeConfirm', id: ask.id, ok: false});
+	const declined = bridge.run({line: 'exit', caller: 'claude', confirm: async () => false});
 	assert.equal((await declined).status, 'declined');
+	const failed = bridge.run({line: 'exit', caller: 'claude', confirm: async () => Promise.reject(new Error('x'))});
+	assert.equal((await failed).status, 'declined');
 	assert.equal(c.frames.some(f => f.type === 'bridgeRun'), false);
 
 	r.session.send('busy');
@@ -603,13 +608,12 @@ test('a control connection cannot send, answer, confirm or close', async () => {
 	ctl.send({type: 'close'});
 	ctl.send({type: 'setMode', mode: 'auto'});
 	ctl.send({type: 'queue', lines: ['x']});
-	const pending = r.io().commandBridge!.run({line: 'exit', caller: 'claude', confirm: async () => true, timeoutMs: 100});
-	const ask = await a.waitFor('bridgeAsk');
-	ctl.send({type: 'bridgeConfirm', id: ask.id, ok: true});
-	await tick(80);
-	assert.equal(a.frames.some(f => f.type === 'bridgeRun'), false, 'a control client cannot approve');
-	a.send({type: 'bridgeConfirm', id: ask.id, ok: false});
+	const pending = r.io().commandBridge!.run({line: 'exit', caller: 'claude', confirm: async () => false, timeoutMs: 100});
+	await tick(20);
+	ctl.send({type: 'bridgeConfirm', id: 'any', ok: true});
 	assert.equal((await pending).status, 'declined');
+	await tick(30);
+	assert.equal(a.frames.some(f => f.type === 'bridgeRun'), false, 'only the chat confirms');
 	assert.deepEqual(r.session.sent, []);
 	assert.equal(r.session.mode, 'default');
 	assert.equal(r.session.closed, false);

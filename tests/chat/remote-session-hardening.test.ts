@@ -85,6 +85,22 @@ test('a bridgeRun whose id was never approved shows its own prompt and is not au
 	assert.deepEqual(seen, [false]);
 });
 
+test('a bridgeRun the runner approved runs without a second prompt, once', async () => {
+	const r = await fakeRunner();
+	const seen: Array<boolean | undefined> = [];
+	const s = await connect(r.socketPath, {commandBridge: confirming(seen)});
+	cleanup.push(() => s.close());
+	r.send({type: 'bridgeRun', id: 'ok1', line: 'exit', timeoutMs: 1000, approved: true});
+	await r.until(() => seen.length === 1);
+	assert.deepEqual(seen, [true]);
+	assert.equal(s.pendingPermissions.length, 0);
+	r.send({type: 'bridgeRun', id: 'ok1', line: 'exit', timeoutMs: 1000});
+	await r.until(() => s.pendingPermissions.length === 1);
+	s.answerPermission(s.pendingPermissions[0]!.id, {kind: 'deny'});
+	await r.until(() => seen.length === 2);
+	assert.deepEqual(seen, [true, false]);
+});
+
 test('a declined bridgeAsk gives no approval to a later run with the same id', async () => {
 	const r = await fakeRunner();
 	const seen: Array<boolean | undefined> = [];

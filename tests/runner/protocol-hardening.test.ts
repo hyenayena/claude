@@ -60,6 +60,9 @@ test('unknown fields are stripped from snapshots, bridge frames and status repli
 	assert.deepEqual(snap, {...SNAP, queued: ['a']});
 	const [run] = createDecoder('toClient').push(line({v: 1, type: 'bridgeRun', id: 'a', line: 'help', timeoutMs: 5, sneaky: true}));
 	assert.deepEqual(run, {v: 1, type: 'bridgeRun', id: 'a', line: 'help', timeoutMs: 5});
+	const [approved] = createDecoder('toClient').push(line({v: 1, type: 'bridgeRun', id: 'a', line: 'exit', timeoutMs: 5, approved: true}));
+	assert.deepEqual(approved, {v: 1, type: 'bridgeRun', id: 'a', line: 'exit', timeoutMs: 5, approved: true});
+	assert.throws(() => createDecoder('toClient').push(line({v: 1, type: 'bridgeRun', id: 'a', line: 'exit', timeoutMs: 5, approved: 'yes'})), ProtocolError);
 	const [conf] = createDecoder('toRunner').push(line({v: 1, type: 'bridgeConfirm', id: 'a', ok: true, also: 1}));
 	assert.deepEqual(conf, {v: 1, type: 'bridgeConfirm', id: 'a', ok: true});
 });

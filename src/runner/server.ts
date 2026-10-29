@@ -156,7 +156,6 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 	});
 	const conns = new Set<Conn>();
 	const pendingRuns = new Map<string, (r: CommandRunResult) => void>();
-	const pendingAsks = new Map<string, (ok: boolean) => void>();
 
 	const redactors: Array<(s: string) => string> = [];
 	const redact = (s: string): string => {
@@ -239,8 +238,6 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 	};
 
 	const failPending = (): void => {
-		for (const resolve of [...pendingAsks.values()]) resolve(false);
-		pendingAsks.clear();
 		for (const resolve of [...pendingRuns.values()]) {
 			resolve({status: 'off', output: '', truncated: false, ms: 0, reason: 'yena is closed'});
 		}
@@ -267,7 +264,6 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 					if (timer) clearTimeout(timer);
 					req.signal?.removeEventListener('abort', onAbort);
 					pendingRuns.delete(id);
-					pendingAsks.delete(id);
 					resolve(r);
 				};
 				const onAbort = (): void => {
@@ -280,7 +276,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 				}
 				req.signal?.addEventListener('abort', onAbort, {once: true});
 
-				const run = (): void => {
+				const run = (approved = false): void => {
 					if (settled) return;
 					const target = client;
 					if (!target) {
@@ -294,18 +290,25 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 						finish({status: 'timeout', output: '', truncated: false, ms: now() - t0, reason: 'The command did not answer in time'});
 					}, timeoutMs + BRIDGE_SLACK_MS);
 					timer.unref();
-					write(target, {type: 'bridgeRun', id, line: req.line, timeoutMs});
+					write(target, {type: 'bridgeRun', id, line: req.line, timeoutMs, ...(approved && {approved: true})});
 				};
 
-				// The prompt is shown by the attached client; the runner only asks when the list says the command needs it.
+				// The chat's own confirmation decides, as in a chat without the runner: auto mode, a saved "always",
+				// or the prompt through the chat's permission queue (shown by the attached client). The client
+				// still asks itself for a line the runner thought needed nothing, if its bridge says it does.
 				const found = req.confirm ? policyFor(lastCommands, req.line) : undefined;
-				if (found && found.policy === 'confirm') {
-					pendingAsks.set(id, ok => {
-						pendingAsks.delete(id);
-						if (!ok) finish({status: 'declined', output: '', truncated: false, ms: now() - t0, reason: 'The command was not confirmed'});
-						else run();
-					});
-					write(c, {type: 'bridgeAsk', id, request: {...found.request, caller: req.caller}});
+				const confirm = req.confirm;
+				if (found && found.policy === 'confirm' && confirm) {
+					Promise.resolve()
+						.then(() => confirm({...found.request, caller: req.caller}))
+						.then(
+							ok => ok === true,
+							() => false,
+						)
+						.then(ok => {
+							if (!ok) finish({status: 'declined', output: '', truncated: false, ms: now() - t0, reason: 'The command was not confirmed'});
+							else run(true);
+						});
 					return;
 				}
 				run();
@@ -517,10 +520,8 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 			pendingRuns.get(frame.id)?.(frame.result);
 			return;
 		}
-		if (frame.type === 'bridgeConfirm') {
-			pendingAsks.get(frame.id)?.(frame.ok);
-			return;
-		}
+		// Older runners asked the client with bridgeAsk; this one confirms through the chat, so answers are ignored.
+		if (frame.type === 'bridgeConfirm') return;
 		const s = engine?.session;
 		if (!s) return;
 		try {

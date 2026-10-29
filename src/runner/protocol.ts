@@ -99,7 +99,8 @@ export type RunnerFrame = Base &
 		| ({type: 'snapshot'} & Snapshot)
 		| {type: 'event'; event: ChatEvent}
 		| {type: 'rpcResult'; id: string; ok: boolean; value?: unknown; error?: string}
-		| {type: 'bridgeRun'; id: string; line: string; timeoutMs: number}
+		// approved: the chat already confirmed the line (auto mode, a saved "always" or the user's answer).
+		| {type: 'bridgeRun'; id: string; line: string; timeoutMs: number; approved?: boolean}
 		| {type: 'bridgeAbort'; id: string}
 		| {type: 'bridgeAsk'; id: string; request: CommandConfirmRequest}
 		| {type: 'stateUpdate'; patch: StatePatch}
@@ -631,7 +632,10 @@ const RUNNER: Record<string, Reader> = {
 			...(!ok && {error: str(o.error, 'error', 4096)}),
 		};
 	},
-	bridgeRun: o => ({id: ident(o.id, 'id'), line: str(o.line, 'line', 4096), timeoutMs: num(o.timeoutMs, 'timeoutMs')}),
+	bridgeRun: o => {
+		const approved = optBool(o, 'approved');
+		return {id: ident(o.id, 'id'), line: str(o.line, 'line', 4096), timeoutMs: num(o.timeoutMs, 'timeoutMs'), ...(approved !== undefined && {approved})};
+	},
 	bridgeAbort: o => ({id: ident(o.id, 'id')}),
 	bridgeAsk: o => ({id: ident(o.id, 'id'), request: readConfirmRequest(o.request)}),
 	stateUpdate: o => ({patch: readStatePatch(o.patch)}),

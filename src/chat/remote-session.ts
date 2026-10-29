@@ -69,7 +69,7 @@ export class RemoteChatSession implements ChatHandle {
 	private readonly runs = new Map<string, AbortController>();
 	private readonly locals: Local[] = [];
 	private readonly optimistic = new Set<string>();
-	// Bridge ids the user already approved through a bridgeAsk.
+	// Bridge ids already approved: by the runner's chat (bridgeRun approved) or by the user through a bridgeAsk (older runners).
 	private readonly approvedRuns = new Set<string>();
 	private remotePending: PermissionRequest[] = [];
 	private readonly _tasks = new Map<string, TaskInfo>();
@@ -420,6 +420,7 @@ export class RemoteChatSession implements ChatHandle {
 				return;
 			}
 			case 'bridgeRun':
+				if (frame.approved === true) this.approvedRuns.add(frame.id);
 				this.runConsole(frame.id, frame.line, frame.timeoutMs);
 				return;
 			case 'bridgeAbort':
