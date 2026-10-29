@@ -158,7 +158,7 @@ test('the working line and the mode hint', () => {
 	assert.equal(modeHint('plan'), '⏸ plan mode on (shift+tab to cycle)');
 });
 
-test('status bar: truncated session first, then model, limit, phase and running tasks', () => {
+test('status bar: account, truncated session, then model, limit, phase and running tasks', () => {
 	const base = {model: 'm', sessionId: '0123456789abc', phase: 'running' as const};
 	assert.equal(statusBarText(base, scrub), '01234567 · m · running');
 	assert.equal(
@@ -166,6 +166,7 @@ test('status bar: truncated session first, then model, limit, phase and running 
 		'01234567 · m · 5h limit 85%, resets 15:00 · idle · 3 in background',
 	);
 	assert.equal(statusBarText({model: undefined, sessionId: undefined, phase: 'idle', tasks: ''}, scrub), 'idle');
+	assert.equal(statusBarText({...base, account: 'work'}, scrub), 'work · 01234567 · m · running');
 });
 
 test('status line texts', () => {

@@ -556,9 +556,10 @@ export function tasksBarText(tasks: readonly {status: string; background: boolea
 	return parts.join(' · ');
 }
 
-/** Session, model, limit, phase, running tasks; the mode is shown under the input instead. */
+/** Account, session, model, limit, phase, running tasks; the mode is shown under the input instead. */
 export function statusBarText(
 	s: {
+		account?: string;
 		model: string | undefined;
 		sessionId: string | undefined;
 		phase: Phase;
@@ -569,6 +570,7 @@ export function statusBarText(
 	scrub: Scrub,
 ): string {
 	const parts: string[] = [];
+	if (s.account) parts.push(scrub(s.account));
 	if (s.sessionId) parts.push(scrub(s.sessionId).slice(0, 8));
 	if (s.model) parts.push(scrub(s.model));
 	if (s.limit) parts.push(scrub(s.limit));

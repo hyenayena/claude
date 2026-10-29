@@ -154,6 +154,17 @@ test('an api-error is held to turn-end and dropped for limit and context outcome
 	}
 });
 
+test('an account switch drops the held limit error: the notice is all the user sees', () => {
+	const r = run([
+		ui({kind: 'api-error', code: 'rate_limit'}),
+		{type: 'account', account: 'spare', previous: 'work', reason: 'usage-limit'},
+		{type: 'turn-end', outcome: 'ok'},
+	]);
+	assert.deepEqual(r.out.map(o => o.kind), ['account']);
+	assert.equal(r.state.account, 'spare');
+	assert.equal(resetTranscript(r.state).account, 'spare');
+});
+
 test('the rate-limit report is kept and survives resetTranscript', () => {
 	const info = {status: 'allowed_warning' as const, resetsAt: 100, utilization: 0.9};
 	const r = run([ui({kind: 'rate-limit', info})]);

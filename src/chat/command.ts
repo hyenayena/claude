@@ -460,6 +460,7 @@ const runLocked = async (
 				reveal,
 				projectDir: paths.projectDir,
 				...(initialModel !== undefined && {initialModel}),
+				...(cred.account !== undefined && {initialAccount: cred.account}),
 				...(resume && !source.fork && {initialSessionId: resume}),
 				...(draft && {initialDraft: draft}),
 				...(send && {initialSend: send}),

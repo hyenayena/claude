@@ -70,7 +70,7 @@ export interface TranscriptState {
 	limit?: RateLimitInfo;
 	// Held until the turn ends: a limit or context outcome already says it all.
 	pendingApiError?: string;
-	// The account the chat switched to after a limit (shown in the status bar).
+	// The account the chat runs on: the one it started with, then the one it switched to after a limit.
 	account?: string;
 }
 
@@ -94,9 +94,10 @@ export interface Step {
 }
 
 export function initialTranscript(
-	init: {model?: string; sessionId?: string; mode?: ChatMode; pending?: number} = {},
+	init: {model?: string; sessionId?: string; mode?: ChatMode; pending?: number; account?: string} = {},
 ): TranscriptState {
 	return {
+		...(init.account !== undefined && {account: init.account}),
 		todos: [],
 		phase: 'idle',
 		liveRaw: '',
@@ -123,7 +124,7 @@ export function setNotice(state: TranscriptState, notice: string | undefined): T
 
 export function resetTranscript(state: TranscriptState): TranscriptState {
 	return {
-		...initialTranscript({model: state.model, mode: state.mode}),
+		...initialTranscript({model: state.model, mode: state.mode, ...(state.account !== undefined && {account: state.account})}),
 		phase: state.phase,
 		...(state.limit !== undefined && {limit: state.limit}),
 	};
@@ -290,7 +291,8 @@ export function reduceTranscript(state: TranscriptState, event: ChatEvent): Step
 			return {state, out: []};
 		case 'account':
 			return {
-				state: {...state, account: event.account, limit: undefined},
+				// The limit error that caused the switch is answered by this notice; the turn goes on.
+				state: {...state, account: event.account, limit: undefined, pendingApiError: undefined},
 				out: [{kind: 'account', account: event.account, previous: event.previous, reason: event.reason}],
 			};
 		case 'mode':

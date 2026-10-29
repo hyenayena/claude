@@ -63,6 +63,8 @@ export interface ChatViewProps {
 	scrub: Scrub;
 	initialModel?: string;
 	initialSessionId?: string;
+	// The account the chat starts on, shown first in the status bar.
+	initialAccount?: string;
 	// Text the input starts with (e.g. the prompt a rewind went back to).
 	initialDraft?: string;
 	// Sent once when the view mounts, as if typed and sent.
@@ -183,6 +185,7 @@ export function ChatView(props: ChatViewProps) {
 		initialTranscript({
 			model: props.initialModel ?? controller.model,
 			sessionId: props.initialSessionId ?? controller.sessionId,
+			...(props.initialAccount !== undefined && {account: props.initialAccount}),
 			mode: controller.mode,
 			pending: controller.pendingPermissions.length,
 		}),
@@ -953,6 +956,7 @@ export function ChatView(props: ChatViewProps) {
 	}, [resetsAt, clock, render]);
 	const barStatusFull = statusBarText(
 		{
+			...(t.account !== undefined && {account: t.account}),
 			model: t.model,
 			sessionId: t.sessionId,
 			phase: t.phase,
