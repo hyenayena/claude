@@ -99,7 +99,7 @@ test('the hook denies the auth files of the config dir for every tool', async ()
 });
 
 test('the hook denies Bash commands that name an auth file', async () => {
-	const reason = 'Access to authentication files is blocked.';
+	const reason = POLICY_DENY.authFiles;
 	for (const command of [
 		`cat ${path.join(paths.configDir, '.credentials.json')}`,
 		'cat ~/.claude.json',

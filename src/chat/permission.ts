@@ -109,22 +109,26 @@ export const DENY_REASON_PREFIX = "User's reason: ";
 export const CANCEL_MESSAGE =
 	'The request was cancelled before the user answered (the turn was interrupted or the chat closed).';
 export const DISMISS_MESSAGE = 'The user dismissed the question without answering.';
+// The Bash checks below match the command's text, so they also refuse a command that only mentions a
+// protected name (a heredoc, a sed or grep pattern). The file tools check the real path instead, so
+// pointing the model at them ends the search for a workaround without opening anything up.
+export const BASH_TEXT_NOTE =
+	'This Bash check matches the command text, so it also refuses commands that only mention the name. To write or change a file whose content mentions it (source, tests, docs), use Edit or Write; to search for it, use Grep. Do not read the protected files themselves.';
 export const POLICY_DENY = {
 	outside: 'Access to that path is not allowed (outside the project).',
 	guard: 'Access to that path is not allowed (protected Claude configuration file).',
 	secret: 'Access to that path is not allowed (secret or credential file).',
 	readonly:
 		'Writing there is not allowed: that project is read-only in this work session. Ask the user which projects the change touches, then run the console command "project isolate <name>" (it asks the user).',
-	projectState: "The project module's data (its state decides which projects are writable) is not to be touched.",
+	projectState: `The project module's data (its state decides which projects are writable) is not to be touched. ${BASH_TEXT_NOTE}`,
 	image:
 		'Writing there is not allowed: this is the read-only yena image, which changes only with ./yena build. Edit the working copy in /workplace/yena instead (ask the user, then "project isolate yena").',
-	hostState:
-		"yena's host state (the module overlay, the start mode, the logs) is not to be touched from the chat; use the console commands mod and mode.",
+	hostState: `yena's host state (the module overlay, the start mode, the logs) is not to be touched from the chat; use the console commands mod and mode. ${BASH_TEXT_NOTE}`,
 	locked: "Writing there is not allowed (yena's Claude data dir). Instructions, agents and skills are edited in the md hub, at its own path.",
-	authFiles: 'Access to authentication files is blocked.',
-	procEnv: 'Reading process environments is blocked: they hold credentials.',
-	sshAgent: "Using the host's ssh-agent is blocked. Git in yena repositories goes out through the account set with \"account use\".",
-	accountSecrets: "Access to the account module's secrets and keys is blocked. Use the account console commands; they never show secret values.",
+	authFiles: `Access to authentication files is blocked. ${BASH_TEXT_NOTE}`,
+	procEnv: `Reading process environments is blocked: they hold credentials. ${BASH_TEXT_NOTE}`,
+	sshAgent: `Using the host's ssh-agent is blocked. Git in yena repositories goes out through the account set with "account use". ${BASH_TEXT_NOTE}`,
+	accountSecrets: `Access to the account module's secrets and keys is blocked. Use the account console commands; they never show secret values. ${BASH_TEXT_NOTE}`,
 	privileged:
 		'Adding or changing allowed-tools, hooks, permissionMode or mcpServers in a skill, agent or command is not allowed in the chat: it would let tool calls skip the approval prompts. Tell the user the exact change so they can make it by hand.',
 	background: 'Background execution is not available in the chat.',
