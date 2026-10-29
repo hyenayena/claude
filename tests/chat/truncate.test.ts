@@ -1,31 +1,10 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {clampChars, clampLines, summarizeArgs, summarizeResult} from '../../src/chat/truncate.js';
+import {clampChars, summarizeArgs} from '../../src/chat/truncate.js';
 
 test('clampChars adds a footer only when over the cap', () => {
 	assert.equal(clampChars('abc', 5), 'abc');
 	assert.equal(clampChars('abcdefg', 5), 'abcde… [truncated 2 chars]');
-});
-
-test('clampLines limits lines and line length', () => {
-	assert.equal(clampLines('a\nb', 3, 10), 'a\nb');
-	assert.equal(clampLines('a\nb\nc\nd\ne', 3, 10), 'a\nb\nc\n… +2 lines (ctrl+o to expand)');
-	assert.equal(clampLines('x'.repeat(30), 3, 10), `${'x'.repeat(10)}…`);
-});
-
-test('summarizeResult shows 3 whole lines', () => {
-	const out = summarizeResult(`${'y'.repeat(500)}\n2\n3\n4\n5`);
-	const lines = out.split('\n');
-	assert.equal(lines.length, 4);
-	assert.equal(lines[0], 'y'.repeat(500));
-	assert.equal(lines[3], '… +2 lines (ctrl+o to expand)');
-});
-
-test('summarizeResult only processes the first 64 KiB', () => {
-	const out = summarizeResult('z\n'.repeat(100_000));
-	assert.match(out, /\+\d+ lines \(ctrl\+o to expand\)/);
-	const n = Number(/\+(\d+) lines/.exec(out)?.[1]);
-	assert.ok(n < 40_000);
 });
 
 test('summarizeArgs per tool', () => {

@@ -90,9 +90,40 @@ test('liveTail keeps framing code whose fence opened before the window', () => {
 	assert.ok(!liveTail(raw, scrub, 200, 80).some(r => r.startsWith('●')));
 });
 
-test('tool block collapses to three result lines with a footer', () => {
-	const block = formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: false, text: '1\n2\n3\n4\n5'}, scrub).replace(/\u001b\[\d+m/g, '');
-	assert.equal(block, ['● Bash(ls)', '  ⎿  1', '     2', '     3', '     … +2 lines (ctrl+o to expand)'].join('\n'));
+test('tool block keeps at most five result rows, the footer included', () => {
+	const plainBlock = (text: string, width?: number) =>
+		formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: false, text}, scrub, width).replace(/\u001b\[\d+m/g, '');
+	assert.equal(plainBlock('1\n2\n3\n4\n5'), ['● Bash(ls)', '  ⎿  1', '     2', '     3', '     4', '     5'].join('\n'));
+	assert.equal(plainBlock('1\n2\n3\n4\n5\n6\n7\n'), ['● Bash(ls)', '  ⎿  1', '     2', '     3', '     4', '     … +3 lines (ctrl+o to expand)'].join('\n'));
+});
+
+test('tool block rows are counted as the chat shows them, not as source lines', () => {
+	const width = 40;
+	const block = formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: false, text: `${'y'.repeat(200)}\nz`}, scrub, width).replace(/\u001b\[\d+m/g, '');
+	const rows = block.split('\n');
+	assert.equal(rows.length, 1 + 5);
+	// 200 cells in 35-cell rows are 6 rows, plus "z": 4 shown, 3 behind the footer.
+	assert.match(rows.at(-1)!, /… \+3 lines \(ctrl\+o to expand\)$/);
+	for (const row of rows) assert.ok(row.length <= width, row);
+});
+
+test('an audit line fits one row by losing its middle, so the resolved target stays', () => {
+	const summary = '/workplace/project/some/deep/link/file.txt -> /workplace/project/real/target/file.txt';
+	const full = formatAudit({outcome: 'allowed', toolName: 'Write', summary}, scrub).replace(/\u001b\[\d+m/g, '');
+	assert.equal(full, `Allowed Write: ${summary}`);
+	const cut = formatAudit({outcome: 'allowed', toolName: 'Write', summary}, scrub, scrub, 50).replace(/\u001b\[\d+m/g, '');
+	assert.equal(cut.length, 50);
+	assert.match(cut, /^Allowed Write: \/workplace.*….*real\/target\/file\.txt$/);
+});
+
+test('tool block puts the call on one row however long or multi-line the command is', () => {
+	const command = `cd /workplace/yena && ${'echo long; '.repeat(30)}\ncat <<'EOF'\nbody\nEOF`;
+	const width = 60;
+	const block = formatToolBlock({name: 'Bash', input: {command}, isError: false, text: 'ok'}, scrub, width).replace(/\u001b\[\d+m/g, '');
+	const [header, ...rest] = block.split('\n');
+	assert.ok(header!.length <= width, header);
+	assert.match(header!, /^● Bash\(cd \/workplace\/yena && echo long;.*…\)$/);
+	assert.deepEqual(rest, ['  ⎿  ok']);
 });
 
 test('tool blocks look like Claude Code: green or red dot, bold name, plain arguments', () => {
@@ -177,7 +208,7 @@ test('tool results: Edit and Write summarise, refusals show denied, Bash keeps t
 	assert.match(block('Glob', {pattern: '*.ts'}, false, 'No files found'), /⎿ {2}Found 0 files$/);
 	assert.match(block('Bash', {command: 'x'}, true, "The user doesn't want to proceed with this tool use."), /⎿ {2}denied/);
 	assert.match(block('Edit', {file_path: '/app/a.ts'}, true, 'The user denied this tool call. Do not retry'), /⎿ {2}denied/);
-	assert.match(block('Bash', {command: 'x'}, false, 'a\nb\nc\nd\ne'), /… \+2 lines \(ctrl\+o to expand\)/);
+	assert.match(block('Bash', {command: 'x'}, false, 'a\nb\nc\nd\ne\nf\ng'), /… \+3 lines \(ctrl\+o to expand\)/);
 	assert.match(block('AskUserQuestion', {questions: [{question: 'Which?'}, {}]}, false, 'User answered: secret-answer'), /AskUserQuestion\(Which\? \(\+1 more\)\)/);
 	assert.ok(!block('AskUserQuestion', {questions: [{question: 'Which?'}]}, false, 'secret-answer').includes('secret-answer'));
 });

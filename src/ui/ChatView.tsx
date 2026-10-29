@@ -160,9 +160,9 @@ export function ChatView(props: ChatViewProps) {
 		[printRaw],
 	);
 	const printNotice = useCallback(
-		(text: string) => {
+		(text: string, options?: PrintOptions) => {
 			if (gapRef.current) printRaw(' ');
-			printRaw(text);
+			printRaw(text, options);
 			gapRef.current = false;
 		},
 		[printRaw],
@@ -290,8 +290,17 @@ export function ChatView(props: ChatViewProps) {
 					print(block.text, block.options);
 					continue;
 				}
+				if (out.kind === 'tool' || out.kind === 'audit') {
+					// A call stays on one row and its output within a few rows; laid out again at every width.
+					const width = lastWidthRef.current > 1 ? lastWidthRef.current - 1 : undefined;
+					const text = formatOut(out, scrub, reveal, width);
+					const options: PrintOptions = {render: w => formatOut(out, scrub, reveal, w)};
+					if (out.kind === 'audit') printNotice(text, options);
+					else print(text, options);
+					continue;
+				}
 				const text = formatOut(out, scrub, reveal, lastWidthRef.current || undefined);
-				if (out.kind === 'audit' || out.kind === 'mode' || out.kind === 'account') printNotice(text);
+				if (out.kind === 'mode' || out.kind === 'account') printNotice(text);
 				else print(text);
 			}
 			if (event.type === 'turn-end' && queueRef.current.length > 0) {

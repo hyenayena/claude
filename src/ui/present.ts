@@ -2,12 +2,11 @@ import {
 	BLOCK_DISPLAY_CAP,
 	clampChars,
 	summarizeArgs,
-	summarizeResult,
 } from '../chat/truncate.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
 import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
 import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
-import {wrapRows} from '../kit.js';
+import {sliceCells, stringCells, truncateCells, wrapRows} from '../kit.js';
 import type {PrintAction, PrintOptions} from '../../../../src/api.js';
 import {openFenceLine, renderMarkdownBlocks} from './markdown.js';
 import {LIVE, parseTodos, type Out, type Phase, type RunningTool, type StatusLine, type Todo} from './transcript.js';
@@ -258,24 +257,42 @@ export function todoLines(todos: Todo[], scrub: Scrub, max: number): string[] {
 	return resultLines([...shown, paint(SGR.dim, `… +${todos.length - shown.length} more`)]);
 }
 
-export function summarizeToolResult(t: ToolResult, scrub: Scrub): string {
-	const custom = refusalSummary(t) ?? RESULT_REGISTRY[t.name]?.(t, scrub);
-	return custom ?? summarizeResult(scrub(t.text.slice(0, RESULT_INPUT_CAP)));
-}
-
 export const RESULT_PREFIX = '  ⎿  ';
 const RESULT_INDENT = '     ';
 
 /** Lines under a block: the first after "⎿", the rest aligned with it. */
 export const resultLines = (lines: string[]): string[] => lines.map((l, i) => `${i === 0 ? RESULT_PREFIX : RESULT_INDENT}${l}`);
 
-export function formatToolBlock(t: ToolResult, scrub: Scrub): string {
+// Screen rows of a finished tool call's output in the chat, the "… +N lines" row included; Ctrl+O has the rest.
+export const TOOL_RESULT_ROWS = 5;
+
+/**
+ * A finished tool call: the call on one row, cut with "…", and its output in at most `TOOL_RESULT_ROWS`
+ * rows as the chat shows them (wrapped to `width`). Without a width, source lines count as rows.
+ */
+export function formatToolBlock(t: ToolResult, scrub: Scrub, width?: number): string {
 	const dot = `${t.isError ? SGR.red : SGR.green}●${SGR.reset}`;
-	const header = `${dot} ${styledToolHeader(t.name, t.input, scrub)}${SGR.reset}`;
-	const body = summarizeToolResult(t, scrub);
+	const name = scrub(displayName(t.name));
+	let args = toolArgs(t.name, t.input, scrub);
+	if (width !== undefined && args !== '') {
+		// "● " before the name, the parentheses around the arguments.
+		args = truncateCells(args, Math.max(1, width - 2 - stringCells(name) - 2));
+	}
+	const header = `${dot} ${SGR.bold}${name}${SGR.boldOff}${args ? `(${args})` : ''}${SGR.reset}`;
+	const custom = refusalSummary(t) ?? RESULT_REGISTRY[t.name]?.(t, scrub);
+	const body = custom ?? scrub(t.text.slice(0, RESULT_INPUT_CAP)).replace(/\n+$/, '');
 	// Only the dot marks a failure: red error text under every failed call was too loud for the user.
 	if (body.trim() === '') return t.isError ? `${header}\n${paint(SGR.dim, `${RESULT_PREFIX}Error`)}` : header;
-	return `${header}\n${paint(SGR.dim, resultLines(body.split('\n')).join('\n'))}`;
+	const inner = width === undefined ? undefined : Math.max(1, width - RESULT_PREFIX.length);
+	const lines = body.split('\n');
+	const rows = inner === undefined ? lines : lines.flatMap(l => wrapRows(l, inner, {mode: 'char'}));
+	let shown = rows;
+	if (rows.length > TOOL_RESULT_ROWS) {
+		const kept = TOOL_RESULT_ROWS - 1;
+		const more = `… +${rows.length - kept} lines (ctrl+o to expand)`;
+		shown = [...rows.slice(0, kept), inner === undefined ? more : truncateCells(more, inner)];
+	}
+	return `${header}\n${paint(SGR.dim, resultLines(shown).join('\n'))}`;
 }
 
 export function formatError(message: string, scrub: Scrub): string {
@@ -299,7 +316,7 @@ const pluralQuestions = (summary: string): string => {
 };
 
 /** One dim line per decision; carries a tool, a path or a command, never file contents or answers. */
-export function formatAudit(entry: AuditEntry, scrub: Scrub, reveal: Scrub = scrub): string {
+export function formatAudit(entry: AuditEntry, scrub: Scrub, reveal: Scrub = scrub, width?: number): string {
 	const tool = scrub(entry.toolName);
 	const summary = auditText(entry.summary, reveal);
 	const line = ((): string => {
@@ -322,7 +339,17 @@ export function formatAudit(entry: AuditEntry, scrub: Scrub, reveal: Scrub = scr
 				return `Dismissed ${pluralQuestions(summary)}`;
 		}
 	})();
-	return paint(SGR.dim, line);
+	return paint(SGR.dim, width === undefined ? line : cutMiddle(line, Math.max(1, width)));
+}
+
+/** One row of `max` cells with "…" in the middle: the tail holds what a call resolved to (a symlink target). */
+function cutMiddle(text: string, max: number): string {
+	const cells = stringCells(text);
+	if (cells <= max) return text;
+	if (max < 3) return truncateCells(text, max);
+	const head = Math.ceil((max - 1) / 2);
+	const tail = max - 1 - head;
+	return `${sliceCells(text, 0, head)}…${sliceCells(text, cells - tail, tail)}`;
 }
 
 const MODE_LINE: Record<ChatMode, string> = {
@@ -340,7 +367,7 @@ export function formatModeLine(mode: ChatMode, error?: string, scrub: Scrub = s 
 export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?: number): string {
 	switch (out.kind) {
 		case 'audit':
-			return formatAudit(out.entry, scrub, reveal);
+			return formatAudit(out.entry, scrub, reveal, width);
 		case 'mode':
 			return formatModeLine(out.mode, out.error, scrub);
 		case 'account':
@@ -355,7 +382,7 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 		case 'assistant':
 			return formatAssistantBlock(out.text, scrub, out.interrupted, width);
 		case 'tool':
-			return formatToolBlock(out, scrub);
+			return formatToolBlock(out, scrub, width);
 		case 'error':
 			return formatError(out.message, scrub);
 		case 'api-error':
