@@ -99,6 +99,10 @@ test('result variants', () => {
 		n({type: 'result', subtype: 'success', is_error: false, result: 'done', session_id: 's', total_cost_usd: 0.5, num_turns: 2, terminal_reason: 'completed'}),
 		[{kind: 'result', ok: true, subtype: 'success', text: 'done', sessionId: 's', costUsd: 0.5, numTurns: 2, terminalReason: 'completed'}],
 	);
+	assert.deepEqual(n({type: 'result', subtype: 'success', is_error: false, session_id: 's', queued_turn_count: 2}), [
+		{kind: 'result', ok: true, subtype: 'success', sessionId: 's', queuedTurns: 2},
+	]);
+	assert.deepEqual(n({type: 'result', subtype: 'success', is_error: false, session_id: 's', queued_turn_count: 0}), [{kind: 'result', ok: true, subtype: 'success', sessionId: 's'}]);
 	const authFail = n({type: 'result', subtype: 'success', is_error: true, result: 'Not logged in', session_id: 's'})[0];
 	assert.equal(authFail?.kind === 'result' && authFail.ok, false);
 	assert.deepEqual(n({type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['No conversation found with session ID: x'], session_id: 's'}), [

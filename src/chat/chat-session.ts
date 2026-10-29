@@ -323,8 +323,22 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.emit({type: 'sent', text});
 	}
 
-	private pushUser(handle: Handle, text: string, command: boolean): void {
+	/**
+	 * A message typed while a turn runs: Claude Code folds it in at the next step (priority "next"), as
+	 * its own REPL does. When the turn ends before that, Claude Code answers it in a turn of its own.
+	 */
+	steer(text: string): void {
+		const handle = this.handle;
+		if (this._state !== 'running' || !handle || this.turnHandle !== handle) throw new Error('No request is running');
+		if (this.pending) throw new Error('The request is being stopped');
+		this.log.info('message steered', {chars: text.length});
+		this.pushUser(handle, text, false, 'next');
+		this.emit({type: 'sent', text});
+	}
+
+	private pushUser(handle: Handle, text: string, command: boolean, priority?: 'next'): void {
 		handle.input.push({
+			...(priority && {priority}),
 			type: 'user',
 			message: {role: 'user', content: text},
 			parent_tool_use_id: null,
@@ -661,6 +675,11 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			return;
 		}
 		if (ev.ok && !this.authFailed) {
+			// A message steered in too late for this turn: Claude Code goes straight on with it.
+			if (ev.queuedTurns !== undefined && ev.queuedTurns > 0) {
+				this.log.info('turn continues', {queued: ev.queuedTurns});
+				return;
+			}
 			this.endTurn('ok');
 			return;
 		}

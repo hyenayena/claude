@@ -51,6 +51,7 @@ export type RunnerSession = Pick<
 	| 'costUsd'
 	| 'subscribe'
 	| 'send'
+	| 'steer'
 	| 'interrupt'
 	| 'setMode'
 	| 'answerPermission'
@@ -534,6 +535,14 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 						const error = clip(redact(err instanceof Error ? err.message : 'The message was not sent'), 1000);
 						write(c, {type: 'event', event: {type: 'turn-end', outcome: 'error', error}});
 						write(c, {type: 'event', event: {type: 'state', state: 'idle'}});
+					}
+					break;
+				case 'steer':
+					try {
+						if (s.state === 'idle') s.send(frame.text);
+						else s.steer(frame.text);
+					} catch {
+						write(c, {type: 'event', event: {type: 'steer-failed', text: frame.text}});
 					}
 					break;
 				case 'interrupt':

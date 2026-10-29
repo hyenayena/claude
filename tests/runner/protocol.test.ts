@@ -18,6 +18,15 @@ test('several frames in one chunk, empty lines ignored, unknown types dropped', 
 	assert.deepEqual(out.map(f => f.type), ['interrupt', 'status']);
 });
 
+test('a steer frame and a steer-failed event round-trip', () => {
+	const steer: ClientFrame = {v: 1, type: 'steer', text: 'also this'};
+	assert.deepEqual(createDecoder('toRunner').push(Buffer.from(encodeFrame(steer))), [steer]);
+	const failed: RunnerFrame = {v: 1, type: 'event', event: {type: 'steer-failed', text: 'too late'}};
+	assert.deepEqual(createDecoder('toClient').push(Buffer.from(encodeFrame(failed))), [failed]);
+	const result: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'result', ok: true, subtype: 'success', queuedTurns: 1}}};
+	assert.deepEqual(createDecoder('toClient').push(Buffer.from(encodeFrame(result))), [result]);
+});
+
 test('unknown fields are dropped from known frames', () => {
 	const [f] = createDecoder('toRunner').push(line({v: 1, type: 'setMode', mode: 'plan', extra: 1}));
 	assert.deepEqual(f, {v: 1, type: 'setMode', mode: 'plan'});

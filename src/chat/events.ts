@@ -37,6 +37,8 @@ export type UiEvent =
 			costUsd?: number;
 			numTurns?: number;
 			terminalReason?: string;
+			// Messages sent during the turn that Claude Code still answers in turns of its own.
+			queuedTurns?: number;
 	  };
 
 export type TurnOutcome = 'ok' | 'error' | 'interrupted' | 'timeout' | 'max-turns' | 'limit' | 'context';
@@ -51,6 +53,8 @@ export type ChatEvent =
 	| {type: 'audit'; entry: AuditEntry}
 	| {type: 'mode'; mode: ChatMode; error?: string}
 	| {type: 'sent'; text: string}
+	// A steered message the chat's process could not hand to the turn; the view queues it again.
+	| {type: 'steer-failed'; text: string}
 	| {type: 'title'; title: string}
 	// The account ran out mid-turn; the chat goes on with `account` (see accounts.ts).
 	| {type: 'account'; account: string; previous: string; reason: 'usage-limit' | 'billing'};
@@ -76,6 +80,8 @@ export interface ChatController {
 	answerPermission(id: string, decision: PermissionDecision): boolean;
 	// `command: true` lets Claude Code run a leading /command; otherwise the text is delivered as written.
 	send(text: string, opts?: {command?: boolean}): void;
+	// Hands a message to the running turn: Claude Code reads it between steps instead of after the turn.
+	steer?(text: string): void;
 	interrupt(): Promise<void>;
 	reset(): void;
 	close(): void;

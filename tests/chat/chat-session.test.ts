@@ -152,6 +152,48 @@ test('send while running and after close throws', async () => {
 	assert.throws(() => session.send('z'), /closed/);
 });
 
+test('steer hands a message to the running turn with priority next', async () => {
+	const {session, queries, events, ends} = setup();
+	assert.throws(() => session.steer('early'), /No request is running/);
+	session.send('first');
+	session.steer('also this');
+	await tick();
+	const [a, b] = queries[0]?.sent ?? [];
+	assert.equal(a?.priority, undefined);
+	assert.deepEqual(b?.message, {role: 'user', content: 'also this'});
+	assert.equal(b?.priority, 'next');
+	assert.deepEqual(
+		events.filter(e => e.type === 'sent').map(e => e.type === 'sent' && e.text),
+		['first', 'also this'],
+	);
+	queries[0]?.emit(ok());
+	await tick();
+	assert.equal(ends().length, 1);
+	assert.equal(session.state, 'idle');
+});
+
+test('a result with messages still queued keeps the turn running until the last result', async () => {
+	const {session, queries, ends} = setup();
+	session.send('first');
+	session.steer('late');
+	queries[0]?.emit({...ok(), queued_turn_count: 1});
+	await tick();
+	assert.equal(session.state, 'running');
+	assert.equal(ends().length, 0);
+	queries[0]?.emit({...ok(), queued_turn_count: 0});
+	await tick();
+	assert.equal(session.state, 'idle');
+	assert.deepEqual(ends().map(e => e.type === 'turn-end' && e.outcome), ['ok']);
+});
+
+test('steer is refused while the turn is being interrupted', async () => {
+	const {session} = setup({graceMs: 50});
+	session.send('x');
+	await tick();
+	void session.interrupt();
+	assert.throws(() => session.steer('y'), /being stopped/);
+});
+
 test('close is idempotent, ends the input queue and the query', async () => {
 	const {session, queries} = setup();
 	session.send('x');

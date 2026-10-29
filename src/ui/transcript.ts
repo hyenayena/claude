@@ -284,6 +284,7 @@ export function reduceTranscript(state: TranscriptState, event: ChatEvent): Step
 		case 'audit':
 			return {state, out: [{kind: 'audit', entry: event.entry}]};
 		case 'sent':
+		case 'steer-failed':
 		case 'title':
 			return {state, out: []};
 		case 'account':

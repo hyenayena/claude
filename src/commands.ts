@@ -681,7 +681,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		ctx.print('Started a new chat with the message.');
 	};
 
-	// Into the chat view that is open (queued while it answers); with none open, a new chat as "claude start".
+	// Into the chat view that is open (into the running turn while it answers); with none open, a new chat as "claude start".
 	const sendToChat = async (args: string[], ctx: CommandContext): Promise<void> => {
 		const text = args.join(' ').trim();
 		if (text === '') throw new Error(SEND_USAGE);
@@ -1256,7 +1256,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		{name: 'chat', usage: 'claude chat [--new]', description: 'Open an interactive chat (continues the last session)', agent: 'deny'},
 		{name: 'new', usage: 'claude new [model]', description: 'Start a new chat', agent: 'deny'},
 		{name: 'start', usage: 'claude start <message…>', description: 'Start a new chat and send it the message (the open chat is saved)', agent: 'confirm'},
-		{name: 'send', usage: 'claude send <message…>', description: 'Send the message to the open chat (queued while it answers); with no chat open, start one', agent: 'confirm'},
+		{name: 'send', usage: 'claude send <message…>', description: 'Send the message to the open chat (into the running answer while it works); with no chat open, start one', agent: 'confirm'},
 		{name: 'resume', usage: 'claude resume [session]', description: 'Continue an earlier chat (pick from a list, or give an id prefix)', agent: 'deny'},
 		{name: 'rewind', usage: 'claude rewind', description: 'Go back to before one of your messages (files and conversation)', agent: 'deny'},
 		{name: 'fork', usage: 'claude fork', description: 'Continue the current chat on a new branch', agent: 'deny'},

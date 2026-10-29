@@ -233,6 +233,12 @@ export class RemoteChatSession implements ChatHandle {
 		this.write({v: 1, type: 'send', text, ...(opts.command && {command: true})});
 	}
 
+	steer(text: string): void {
+		if (this._state !== 'running') throw new Error('No request is running');
+		// The runner answers with "sent", or with "steer-failed" when the turn was already gone.
+		this.write({v: 1, type: 'steer', text});
+	}
+
 	async interrupt(): Promise<void> {
 		if (this._state !== 'running') return;
 		this.write({v: 1, type: 'interrupt'});

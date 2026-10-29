@@ -265,6 +265,16 @@ export function ChatView(props: ChatViewProps) {
 				print(formatUserLine(event.text, scrub));
 				return;
 			}
+			if (event.type === 'steer-failed') {
+				// The chat's process got it after the turn: queue it, or back to the draft when nothing runs.
+				if (tRef.current.phase !== 'idle' && queueRef.current.length < MAX_QUEUED) setQueue([...queueRef.current, event.text]);
+				else {
+					const draft = edRef.current.text;
+					edRef.current = editorReduce(emptyEditor, {type: 'insert', text: draft ? `${event.text}\n${draft}` : event.text});
+				}
+				render();
+				return;
+			}
 			if (event.type === 'permission-resolved') {
 				batchRef.current = event.pending === 0 ? 0 : batchRef.current + 1;
 			}
@@ -393,6 +403,25 @@ export function ChatView(props: ChatViewProps) {
 		requestMode(MODE_CYCLE[(at + 1) % MODE_CYCLE.length] as ChatMode);
 	}, [controller, requestMode]);
 
+	// A message typed while a turn runs goes into that turn (read between steps); false when the queue is full.
+	const steerOrQueue = useCallback(
+		(text: string): boolean => {
+			// Messages already queued go first, so a later one cannot overtake them.
+			if (tRef.current.phase === 'running' && controller.steer && queueRef.current.length === 0) {
+				try {
+					controller.steer(text);
+					return true;
+				} catch {
+					// The turn is just ending: the message waits for the next one.
+				}
+			}
+			if (queueRef.current.length >= MAX_QUEUED) return false;
+			setQueue([...queueRef.current, text]);
+			return true;
+		},
+		[controller, setQueue],
+	);
+
 	const submit = useCallback(() => {
 		const text = edRef.current.text.trim();
 		if (text === '') return;
@@ -419,13 +448,12 @@ export function ChatView(props: ChatViewProps) {
 		historyRef.current = {index: -1, draft: emptyEditor};
 		rememberSent(text);
 		if (t.phase !== 'idle') {
-			if (queueRef.current.length >= MAX_QUEUED) {
+			if (!steerOrQueue(message)) {
 				setT(setNotice(t, BUSY_HINT));
 				return;
 			}
-			setQueue([...queueRef.current, message]);
 			edRef.current = emptyEditor;
-			setT(setNotice(t, undefined));
+			setT(setNotice(tRef.current, undefined));
 			return;
 		}
 		edRef.current = emptyEditor;
@@ -440,7 +468,7 @@ export function ChatView(props: ChatViewProps) {
 			return;
 		}
 		if (controller.state === 'running') feed({type: 'state', state: 'running'});
-	}, [controller, feed, host, leave, print, printNotice, render, requestMode, scrub, setT]);
+	}, [controller, feed, host, leave, print, printNotice, render, requestMode, scrub, setT, steerOrQueue]);
 
 	// "claude start <message>": the message goes out once, right after the view is up.
 	const sentInitial = useRef(false);
@@ -458,8 +486,7 @@ export function ChatView(props: ChatViewProps) {
 		onInbox(text => {
 			if (closedRef.current) throw new Error('The chat is closed');
 			if (tRef.current.phase !== 'idle') {
-				if (queueRef.current.length >= MAX_QUEUED) throw new Error(BUSY_HINT);
-				setQueue([...queueRef.current, text]);
+				if (!steerOrQueue(text)) throw new Error(BUSY_HINT);
 				render();
 				return;
 			}
@@ -467,7 +494,7 @@ export function ChatView(props: ChatViewProps) {
 			if (controller.state === 'running') feed({type: 'state', state: 'running'});
 		});
 		return () => onInbox(undefined);
-	}, [onInbox, controller, feed, render, setQueue]);
+	}, [onInbox, controller, feed, render, steerOrQueue]);
 
 	const browseHistory = useCallback(
 		(step: -1 | 1) => {

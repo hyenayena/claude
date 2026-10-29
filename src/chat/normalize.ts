@@ -189,6 +189,7 @@ const fromResult = (msg: Loose): UiEvent[] => {
 	const costUsd = num(msg['total_cost_usd']);
 	const numTurns = num(msg['num_turns']);
 	const terminalReason = str(msg['terminal_reason']);
+	const queuedTurns = num(msg['queued_turn_count']);
 	return [
 		{
 			kind: 'result',
@@ -200,6 +201,7 @@ const fromResult = (msg: Loose): UiEvent[] => {
 			...(costUsd !== undefined && {costUsd}),
 			...(numTurns !== undefined && {numTurns}),
 			...(terminalReason !== undefined && {terminalReason}),
+			...(queuedTurns !== undefined && queuedTurns > 0 && {queuedTurns}),
 		},
 	];
 };

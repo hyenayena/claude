@@ -76,6 +76,7 @@ export type ClientFrame = Base &
 		| {type: 'hello'; role: 'attach' | 'control'}
 		| {type: 'open'; open: OpenSpec; tuning: ChatTuning; mode?: ChatMode; keep: boolean}
 		| {type: 'send'; text: string; command?: boolean}
+		| {type: 'steer'; text: string}
 		| {type: 'interrupt'}
 		| {type: 'setMode'; mode: ChatMode}
 		| {type: 'answer'; id: string; decision: PermissionDecision}
@@ -461,6 +462,7 @@ const readUiEvent = (v: unknown): UiEvent => {
 				...(has(o, 'costUsd') && {costUsd: num(o.costUsd, 'costUsd')}),
 				...(has(o, 'numTurns') && {numTurns: num(o.numTurns, 'numTurns')}),
 				...(has(o, 'terminalReason') && {terminalReason: str(o.terminalReason, 'terminalReason', 256)}),
+				...(has(o, 'queuedTurns') && {queuedTurns: int(o.queuedTurns, 'queuedTurns')}),
 			};
 		default:
 			return fail('ui event kind');
@@ -494,6 +496,8 @@ export const readChatEvent = (v: unknown): ChatEvent => {
 			};
 		case 'sent':
 			return {type: 'sent', text: str(o.text, 'text')};
+		case 'steer-failed':
+			return {type: 'steer-failed', text: str(o.text, 'text')};
 		case 'title':
 			return {type: 'title', title: str(o.title, 'title', 4096)};
 		case 'account':
@@ -602,6 +606,7 @@ const CLIENT: Record<string, Reader> = {
 		keep: bool(o.keep, 'keep'),
 	}),
 	send: o => ({text: str(o.text, 'text'), ...(o.command === true && {command: true})}),
+	steer: o => ({text: str(o.text, 'text')}),
 	interrupt: () => ({}),
 	setMode: o => ({mode: oneOf(o.mode, MODES, 'mode')}),
 	answer: o => ({id: ident(o.id, 'id'), decision: readDecision(o.decision)}),

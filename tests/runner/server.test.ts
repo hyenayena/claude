@@ -51,6 +51,13 @@ class FakeSession {
 		this.emit({type: 'state', state: 'running'});
 		this.emit({type: 'sent', text});
 	};
+	steered: string[] = [];
+	steerFails = false;
+	steer = (text: string): void => {
+		if (this.steerFails) throw new Error('No request is running');
+		this.steered.push(text);
+		this.emit({type: 'sent', text});
+	};
 	endTurn = (outcome: 'ok' | 'interrupted' | 'error' | 'limit'): void => {
 		this.state = 'idle';
 		this.emit({type: 'state', state: 'idle'});
@@ -183,6 +190,21 @@ test('attach and open build the engine, answer with a snapshot and stream events
 	c.send({type: 'send', text: 'hi'});
 	await until(() => c.frames.some(f => f.type === 'event' && f.event.type === 'sent'), 'sent event');
 	assert.deepEqual(r.session.sent, ['hi']);
+});
+
+test('steer goes into the running turn, becomes a send when idle, and comes back when it fails', async () => {
+	const r = await rig();
+	const c = await attach(r);
+	c.send({type: 'steer', text: 'idle now'});
+	await until(() => r.session.sent.includes('idle now'), 'sent while idle');
+	c.send({type: 'steer', text: 'mid turn'});
+	await until(() => r.session.steered.includes('mid turn'), 'steered');
+	r.session.steerFails = true;
+	c.send({type: 'steer', text: 'too late'});
+	await until(
+		() => c.frames.some(f => f.type === 'event' && f.event.type === 'steer-failed' && f.event.text === 'too late'),
+		'steer-failed event',
+	);
 });
 
 test('a second client gets bye and the first stays attached', async () => {
