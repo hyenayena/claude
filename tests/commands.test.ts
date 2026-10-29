@@ -560,7 +560,7 @@ test('commands carry agent policies', async () => {
 	const {command} = await setup();
 	assert.equal(command.agent, 'deny');
 	const by = Object.fromEntries(command.subcommands!.map(s => [s.name, s.agent]));
-	for (const n of ['session', 'tasks', 'mcp']) assert.equal(by[n], 'safe', n);
+	for (const n of ['session', 'tasks', 'mcp', 'help']) assert.equal(by[n], 'safe', n);
 	for (const n of ['ping', 'rename', 'export', 'auth']) assert.equal(by[n], 'confirm', n);
 	for (const n of ['ask', 'chat', 'new', 'resume', 'rewind', 'fork', 'copy', 'memory', 'code']) assert.equal(by[n], 'deny', n);
 });

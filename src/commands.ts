@@ -104,7 +104,7 @@ export type ClaudeDeps = {
 	};
 };
 
-const USAGE = 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|auth|<Claude Code command>>';
+const USAGE = 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|auth|help|<Claude Code command>>';
 const RESUME_USAGE = 'Usage: claude resume [session]';
 const NO_CHAT = 'No chat is open. Claude Code commands run in the open chat; start one with "chat".';
 const ASK_USAGE = 'Usage: claude ask [--new] <text>';
@@ -1277,6 +1277,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				'Accounts in priority order (the next takes over at a limit): status, login [--name <n>] [--console|--sso|--email <a>] (browser), add [--name <n>] (paste a key or token), order, use, remove, logout',
 			agent: 'confirm',
 		},
+		{name: 'help', usage: 'claude help', description: 'Show the usage', agent: 'safe'},
 	];
 	const ownNames = new Set(OWN_SUBCOMMANDS.map(s => s.name));
 
@@ -1327,6 +1328,12 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				case 'ping':
 					ctx.print('pong');
 					return;
+				// Its own case: an unknown name is sent to the open chat as a Claude Code command (/help).
+				case 'help': {
+					const width = Math.max(...OWN_SUBCOMMANDS.map(s => s.usage.length));
+					for (const s of OWN_SUBCOMMANDS) ctx.print(`  ${s.usage.padEnd(width)}   ${s.description}`);
+					return;
+				}
 				case 'ask':
 					return ask(args, ctx);
 				case 'chat':

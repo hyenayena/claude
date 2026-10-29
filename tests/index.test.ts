@@ -30,8 +30,15 @@ test('ping prints pong', async () => {
 test('no subcommand throws the usage error', async () => {
 	const {command, ctx} = await setup();
 	await assert.rejects(async () => command.run([], ctx), {
-		message: 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|auth|<Claude Code command>>',
+		message: 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|auth|help|<Claude Code command>>',
 	});
+});
+
+test('help lists the own subcommands without sending /help to the chat', async () => {
+	const {command, printed, ctx} = await setup();
+	await command.run(['help'], ctx);
+	assert.ok(printed.some(l => l.includes('claude ping')));
+	assert.ok(printed.some(l => l.includes('claude help')));
 });
 
 test('an unknown subcommand is a Claude Code command and needs an open chat', async () => {
