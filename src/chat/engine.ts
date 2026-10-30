@@ -3,7 +3,7 @@ import {withPatch, type ChatTuning, type LivePatch} from '../chat-prefs.js';
 import {buildChatOptions, buildEnv, ensureMdLinks, resolvePaths, restrictDataDirs, withProjects, type ClaudePaths} from '../config.js';
 import type {LoginProbe} from '../claude-login.js';
 import {accountsCtx, liveSecrets, loginSyncOf, makeRedactor, prepareCredential, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
-import {chooseAccount, LoginUnsavedError, markLimited, prepareAccount} from '../accounts.js';
+import {chooseAccount, LoginUnsavedError, markLimited, prepareAccount, ranksAbove} from '../accounts.js';
 import {degradedReason, type ClaudeVault} from '../vault.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {buildScope} from '../policy.js';
@@ -96,6 +96,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		log.warn('no credential');
 		throw err;
 	}
+	let shown = cred.account;
 	registerLogRedaction(log, cred);
 	const loginSync = loginSyncOf(credOpts);
 	let lastSync: Promise<unknown> = Promise.resolve();
@@ -272,7 +273,34 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 				saveLoginSoon();
 				return undefined;
 			}
+			shown = next.name;
 			return {from: current, to: next.name};
+		},
+		preferAccount: () => {
+			const current = cred.account;
+			if (current === undefined) return false;
+			const ctx = accountsCtx(credOpts);
+			const next = chooseAccount(ctx);
+			if (!next || next.limitedUntil !== undefined || next.name === current) return false;
+			try {
+				prepareAccount(ctx, next.name);
+			} catch (err) {
+				if (!(err instanceof LoginUnsavedError)) throw err;
+				log.info('account return skipped', {reason: 'login-unsaved'});
+				saveLoginSoon();
+				return false;
+			}
+			return true;
+		},
+		spawnedAccount: () => {
+			const now = cred.account;
+			if (now === undefined || now === shown || shown === undefined) {
+				shown = now ?? shown;
+				return undefined;
+			}
+			const previous = shown;
+			shown = now;
+			return {account: now, previous, reason: ranksAbove(accountsCtx(credOpts), now, previous) ? 'restored' : 'changed'};
 		},
 	});
 	created = session;

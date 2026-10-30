@@ -1,7 +1,7 @@
 import type {AgentPolicy, CommandConfirmRequest, CommandInfo, CommandInfoSub, CommandRunResult, CommandRunStatus} from '../../../../src/api.js';
 import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import type {SlashCommandInfo, TaskInfo} from '../chat/chat-session.js';
-import type {ChatEvent, ChatState, ToolPatch, TurnOutcome, UiEvent} from '../chat/events.js';
+import {ACCOUNT_REASONS, type ChatEvent, type ChatState, type ToolPatch, type TurnOutcome, type UiEvent} from '../chat/events.js';
 import type {LimitType, RateLimitInfo} from '../chat/limits.js';
 import {ACCOUNT_NAME_RE} from '../accounts.js';
 import {parseSlot} from '../login-slot.js';
@@ -537,7 +537,7 @@ export const readChatEvent = (v: unknown): ChatEvent => {
 				type: 'account',
 				account: str(o.account, 'account', 64),
 				previous: str(o.previous, 'previous', 64),
-				reason: oneOf(o.reason, ['usage-limit', 'billing'] as const, 'reason'),
+				reason: oneOf(o.reason, ACCOUNT_REASONS, 'reason'),
 			};
 		default:
 			return fail('chat event type');

@@ -7,7 +7,7 @@ import {inspect} from 'node:util';
 import {makeFakeLog, serialized} from './helpers/fake-log.js';
 import {fakeCredentials, seed, type FakeCredentials} from './helpers/fake-credentials.js';
 import {buildEnv, resolvePaths} from '../src/config.js';
-import {chooseAccount, listAccounts, LoginUnsavedError, markLimited, removeAccount, setOrder, useAccount} from '../src/accounts.js';
+import {chooseAccount, listAccounts, LoginUnsavedError, markLimited, ranksAbove, removeAccount, setOrder, useAccount} from '../src/accounts.js';
 import {
 	accountsCtx,
 	allSecrets,
@@ -249,6 +249,21 @@ test('a limited account is skipped until its reset; when all are limited, the fi
 	assert.equal(listAccounts(ctx()).find(a => a.name === 'b')!.limitedUntil, undefined, '"use" forgets the limit');
 	const c = prepareCredential(opts);
 	assert.deepEqual({...shape(c), v: c.value}, {kind: 'oauth', source: 'stored', account: 'b', v: OAUTH2});
+});
+
+test('ranksAbove follows the account order and is false for unknown names', async () => {
+	const {opts} = await setup({}, fakeCredentials());
+	await storeSecret(opts, OAUTH, 'a');
+	await storeSecret(opts, OAUTH2, 'b');
+	const ctx = () => accountsCtx(opts);
+	assert.equal(ranksAbove(ctx(), 'a', 'b'), true);
+	assert.equal(ranksAbove(ctx(), 'b', 'a'), false);
+	assert.equal(ranksAbove(ctx(), 'a', 'a'), false);
+	assert.equal(ranksAbove(ctx(), 'nope', 'b'), false);
+	assert.equal(ranksAbove(ctx(), 'a', 'nope'), false);
+	setOrder(ctx(), ['b', 'a']);
+	assert.equal(ranksAbove(ctx(), 'b', 'a'), true);
+	assert.equal(ranksAbove(ctx(), 'a', 'b'), false);
 });
 
 test('a login made in Claude Code directly is adopted at the first use; its credential has no value', async () => {

@@ -252,6 +252,16 @@ test('limit and context outcomes print a yellow notice, not an error', () => {
 	assert.ok(!formatOut({kind: 'outcome', outcome: 'limit', error: `a${SECRET}`}, scrub).includes(SECRET));
 });
 
+test('account notices name the reason: back on a higher account, or another account', () => {
+	const plain = (t: string) => t.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
+	const restored = formatOut({kind: 'account', account: 'work', previous: 'spare', reason: 'restored'}, scrub);
+	assert.equal(plain(restored), 'Back on account "work" (higher priority, available again).');
+	assert.equal(restored, formatNotice('Back on account "work" (higher priority, available again).', scrub));
+	const changed = formatOut({kind: 'account', account: 'spare', previous: 'work', reason: 'changed'}, scrub);
+	assert.equal(plain(changed), 'Now on account "spare" instead of "work".');
+	assert.match(plain(formatOut({kind: 'account', account: 'spare', previous: 'work', reason: 'billing'}, scrub)), /cannot be billed/);
+});
+
 const TABLE = '| name | description | notes |\n| --- | --- | --- |\n| alpha | a rather long description of alpha | first |\n| beta | another long description for beta | second |';
 const plainCells = (s: string) => [...s.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '')].length;
 

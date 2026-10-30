@@ -70,8 +70,19 @@ class FakeQuery {
 	}
 }
 
+type SessionOpts = ConstructorParameters<typeof ChatSession>[0];
+
 const setup = (
-	o: {timeoutMs?: number; graceMs?: number; initialResume?: string; clock?: Clock; onUsageLimit?: ConstructorParameters<typeof ChatSession>[0]['onUsageLimit']} = {},
+	o: {
+		timeoutMs?: number;
+		graceMs?: number;
+		initialResume?: string;
+		clock?: Clock;
+		idleCloseMs?: number;
+		onUsageLimit?: SessionOpts['onUsageLimit'];
+		preferAccount?: SessionOpts['preferAccount'];
+		spawnedAccount?: SessionOpts['spawnedAccount'];
+	} = {},
 ) => {
 	const log = makeFakeLog();
 	const queries: FakeQuery[] = [];
@@ -931,7 +942,7 @@ test('a usage limit with another account restarts Claude Code in the same sessio
 	assert.deepEqual(ends(), [], 'the turn goes on');
 	assert.equal(session.state, 'running');
 	assert.deepEqual(asked, [{reason: 'usage-limit', rateLimit: {status: 'rejected', resetsAt: NOW_S + 3600, type: 'five_hour', utilization: 1}}]);
-	assert.deepEqual(events.find(e => e.type === 'account'), {type: 'account', account: 'spare', previous: 'work', reason: 'usage-limit'});
+	assert.deepEqual(events.filter(e => e.type === 'account'), [{type: 'account', account: 'spare', previous: 'work', reason: 'usage-limit'}]);
 	assert.equal(queries.length, 2);
 	assert.equal(queries[0]?.closed, 1, 'the limited process is closed');
 	assert.deepEqual(resumes, [undefined, 'sess-1'], 'the new process resumes the session');
@@ -1268,4 +1279,177 @@ test('a turn logs its token counts, subagents apart', async () => {
 	assert.equal(ended.fields.agentCalls, 2);
 	assert.equal(ended.fields.agentCacheRead, 200);
 	assert.equal(session.usage.agents.output, 10);
+});
+
+const finishTurn = async (q: FakeQuery | undefined): Promise<void> => {
+	q?.emit(init());
+	q?.emit(ok());
+	await tick();
+};
+
+test('an idle warm process is replaced when a higher account is available again', async () => {
+	let calls = 0;
+	const {session, queries, resumes, ends, log} = setup({
+		preferAccount: () => {
+			calls++;
+			return calls === 1;
+		},
+	});
+	session.send('one');
+	assert.equal(calls, 0, 'a cold send does not ask');
+	await finishTurn(queries[0]);
+	session.send('two');
+	assert.equal(calls, 1);
+	assert.equal(queries[0]?.closed, 1);
+	assert.equal(queries.length, 2);
+	assert.deepEqual(resumes, [undefined, 'sess-1']);
+	await tick();
+	assert.equal(queries[1]?.sent.length, 1);
+	await finishTurn(queries[1]);
+	assert.deepEqual(ends().map(e => e.type === 'turn-end' && e.outcome), ['ok', 'ok']);
+	assert.ok(log.records.some(r => r.msg === 'account returning'));
+	session.close();
+});
+
+test('the warm process is kept when no higher account is available', async () => {
+	let calls = 0;
+	const {session, queries} = setup({
+		preferAccount: () => {
+			calls++;
+			return false;
+		},
+	});
+	session.send('one');
+	await finishTurn(queries[0]);
+	session.send('two');
+	assert.equal(calls, 1);
+	assert.equal(queries.length, 1);
+	assert.equal(queries[0]?.closed, 0);
+	session.close();
+});
+
+test('a failing account return keeps the process and logs a warning', async () => {
+	const {session, queries, log} = setup({
+		preferAccount: () => {
+			throw new TypeError('boom');
+		},
+	});
+	session.send('one');
+	await finishTurn(queries[0]);
+	session.send('two');
+	assert.equal(session.state, 'running');
+	assert.equal(queries.length, 1);
+	assert.equal(queries[0]?.closed, 0);
+	const rec = log.records.find(r => r.msg === 'account return failed');
+	assert.deepEqual([rec?.level, rec?.fields], ['warn', {errClass: 'TypeError'}]);
+	session.close();
+});
+
+test('a running background task blocks the account return', async () => {
+	let calls = 0;
+	const {session, queries} = setup({
+		preferAccount: () => {
+			calls++;
+			return true;
+		},
+	});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit(task('b1', 'task_started'));
+	queries[0]?.emit(ok());
+	await tick();
+	assert.equal(session.state, 'idle');
+	session.send('two');
+	assert.equal(calls, 0);
+	assert.equal(queries.length, 1);
+	assert.equal(queries[0]?.closed, 0);
+	session.close();
+});
+
+test('the account return is never asked for mid-turn', async () => {
+	let calls = 0;
+	const {session, queries} = setup({
+		idleCloseMs: 10_000,
+		preferAccount: () => {
+			calls++;
+			return true;
+		},
+	});
+	session.send('one');
+	const q = queries[0]!;
+	q.emit(init());
+	await tick();
+	session.steer('more');
+	assert.equal(calls, 0);
+	q.emit(ok());
+	await tick();
+	q.emit(cliState('running'));
+	await tick();
+	assert.equal(session.state, 'running');
+	q.emit(ok());
+	q.emit(cliState('idle'));
+	await tick();
+	assert.equal(calls, 0);
+	assert.equal(queries.length, 1);
+	assert.equal(q.closed, 0);
+	session.close();
+});
+
+test('an account change found on spawn is emitted, nothing when unchanged', async () => {
+	const answers: Array<ReturnType<NonNullable<SessionOpts['spawnedAccount']>>> = [
+		{account: 'b', previous: 'a', reason: 'changed'},
+		{account: 'a', previous: 'b', reason: 'restored'},
+		undefined,
+	];
+	let returning = false;
+	const {session, queries, events, log} = setup({
+		preferAccount: () => returning,
+		spawnedAccount: () => answers.shift(),
+	});
+	session.send('one');
+	assert.deepEqual(events.filter(e => e.type === 'account'), [{type: 'account', account: 'b', previous: 'a', reason: 'changed'}]);
+	await finishTurn(queries[0]);
+	returning = true;
+	session.send('two');
+	assert.equal(queries.length, 2);
+	assert.deepEqual(events.filter(e => e.type === 'account').at(-1), {type: 'account', account: 'a', previous: 'b', reason: 'restored'});
+	await finishTurn(queries[1]);
+	session.send('three');
+	assert.equal(queries.length, 3);
+	assert.equal(events.filter(e => e.type === 'account').length, 2);
+	assert.ok(log.records.some(r => r.msg === 'account changed' && r.fields['reason'] === 'restored'));
+	assert.ok(!JSON.stringify(log.records).includes('"b"'));
+	session.close();
+});
+
+test('a failing account check on spawn is logged and the spawn goes on', async () => {
+	const {session, queries, events, log} = setup({
+		spawnedAccount: () => {
+			throw new RangeError('bad');
+		},
+	});
+	session.send('one');
+	assert.equal(queries.length, 1);
+	assert.equal(session.state, 'running');
+	assert.equal(events.filter(e => e.type === 'account').length, 0);
+	assert.equal(log.records.find(r => r.msg === 'account check failed')?.level, 'warn');
+	session.close();
+});
+
+test('a usage-limit switch with a spawn check emits one account event', async () => {
+	let left = 1;
+	const {session, queries, events} = setup({
+		clock,
+		onUsageLimit: () => (left-- > 0 ? {from: 'work', to: 'spare'} : undefined),
+		spawnedAccount: () => undefined,
+	});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit(rejected());
+	queries[0]?.emit(limitError());
+	queries[0]?.emit(errResult({result: CLI_TEXT}));
+	await tick();
+	assert.equal(queries.length, 2);
+	assert.deepEqual(events.filter(e => e.type === 'account'), [{type: 'account', account: 'spare', previous: 'work', reason: 'usage-limit'}]);
+	session.close();
 });

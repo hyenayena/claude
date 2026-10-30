@@ -393,7 +393,11 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 			return formatModeLine(out.mode, out.error, scrub);
 		case 'account':
 			return formatNotice(
-				`Account "${out.previous}" ${out.reason === 'billing' ? 'cannot be billed' : 'reached its usage limit'}; continuing with "${out.account}".`,
+				out.reason === 'restored'
+					? `Back on account "${out.account}" (higher priority, available again).`
+					: out.reason === 'changed'
+						? `Now on account "${out.account}" instead of "${out.previous}".`
+						: `Account "${out.previous}" ${out.reason === 'billing' ? 'cannot be billed' : 'reached its usage limit'}; continuing with "${out.account}".`,
 				scrub,
 			);
 		case 'thinking':

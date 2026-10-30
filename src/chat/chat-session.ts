@@ -42,6 +42,8 @@ export type ChatSessionOptions = {
 	turnLock?: {acquire(): void; release(): void};
 	idleCloseMs?: number;
 	onUsageLimit?: (p: {reason: 'usage-limit' | 'billing'; rateLimit?: RateLimitInfo}) => {from: string; to: string} | undefined;
+	preferAccount?: () => boolean;
+	spawnedAccount?: () => {account: string; previous: string; reason: 'restored' | 'changed'} | undefined;
 };
 
 export const CONTINUE_TEXT = 'Continue from where you stopped; the previous attempt was cut off by a usage limit.';
@@ -275,6 +277,18 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			this.lockHeld = true;
 		}
 		this.clearIdleTimer();
+		if (this.handle && this.opts.preferAccount && !this.hasRunningTasks()) {
+			let back = false;
+			try {
+				back = this.opts.preferAccount();
+			} catch (err) {
+				this.log.warn('account return failed', {errClass: errClass(err)});
+			}
+			if (back) {
+				this.log.info('account returning');
+				this.dropHandle();
+			}
+		}
 		const warm = this.handle !== undefined;
 		let handle: Handle;
 		try {
@@ -522,6 +536,16 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		const input = new InputQueue<SDKUserMessage>();
 		this.log.info('sdk session spawned', {resuming: this._sessionId !== undefined});
 		const options = this.opts.buildOptions(ac, this._sessionId, this);
+		let change: ReturnType<NonNullable<ChatSessionOptions['spawnedAccount']>>;
+		try {
+			change = this.opts.spawnedAccount?.();
+		} catch (err) {
+			this.log.warn('account check failed', {errClass: errClass(err)});
+		}
+		if (change) {
+			this.log.info('account changed', {reason: change.reason});
+			this.emit({type: 'account', ...change});
+		}
 		const q = this.opts.query({prompt: input, options});
 		const handle: Handle = {q, input, ac};
 		this.handle = handle;

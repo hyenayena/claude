@@ -148,6 +148,13 @@ export function chooseAccount(ctx: AccountsCtx): AccountView | undefined {
 	return list.find(a => a.limitedUntil === undefined) ?? [...list].sort((a, b) => (a.limitedUntil ?? 0) - (b.limitedUntil ?? 0))[0];
 }
 
+export function ranksAbove(ctx: AccountsCtx, a: string, b: string): boolean {
+	const names = listAccounts(ctx).map(x => x.name);
+	const i = names.indexOf(a);
+	const j = names.indexOf(b);
+	return i >= 0 && j >= 0 && i < j;
+}
+
 export type Prepared = {account: Account; kind: AccountKind; value: string; login: boolean};
 
 export function workingCopyDirty(ctx: AccountsCtx): boolean {

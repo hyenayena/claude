@@ -165,6 +165,12 @@ test('an account switch drops the held limit error: the notice is all the user s
 	assert.equal(resetTranscript(r.state).account, 'spare');
 });
 
+test('an account return sets the shown account', () => {
+	const r = run([{type: 'account', account: 'work', previous: 'spare', reason: 'restored'}]);
+	assert.deepEqual(r.out.map(o => o.kind), ['account']);
+	assert.equal(r.state.account, 'work');
+});
+
 test('the rate-limit report is kept and survives resetTranscript', () => {
 	const info = {status: 'allowed_warning' as const, resetsAt: 100, utilization: 0.9};
 	const r = run([ui({kind: 'rate-limit', info})]);

@@ -1495,3 +1495,14 @@ test('a long message being typed wraps over rows: every word stays visible, noth
 	assert.doesNotMatch(input, /…/);
 	assert.ok(rows.every(r => [...r].length <= 39), 'no row reaches the last column');
 });
+
+test('an account return and a change are printed as notices', async () => {
+	const t = setup(undefined, armed);
+	await t.settle();
+	t.controller.emit({type: 'account', account: 'work', previous: 'spare', reason: 'restored'});
+	t.controller.emit({type: 'account', account: 'spare', previous: 'work', reason: 'changed'});
+	await t.settle();
+	assert.equal(t.printed.length, 2);
+	assert.match(t.printed[0] as string, /Back on account "work"/);
+	assert.match(t.printed[1] as string, /Now on account "spare" instead of "work"/);
+});

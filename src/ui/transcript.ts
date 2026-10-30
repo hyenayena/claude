@@ -1,4 +1,4 @@
-import type {ChatEvent, ToolPatch, TurnOutcome, UiEvent} from '../chat/events.js';
+import type {AccountReason, ChatEvent, ToolPatch, TurnOutcome, UiEvent} from '../chat/events.js';
 import type {RateLimitInfo} from '../chat/limits.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
 
@@ -74,7 +74,7 @@ export type Out =
 	| {kind: 'outcome'; outcome: Exclude<TurnOutcome, 'ok'>; error?: string}
 	| {kind: 'audit'; entry: AuditEntry}
 	| {kind: 'mode'; mode: ChatMode; error?: string}
-	| {kind: 'account'; account: string; previous: string; reason: 'usage-limit' | 'billing'}
+	| {kind: 'account'; account: string; previous: string; reason: AccountReason}
 	| {kind: 'thinking'; text: string}
 	| {kind: 'task'; status: string; description: string; summary?: string}
 	| {kind: 'blank'};
