@@ -16,6 +16,7 @@ import {
 } from './policy.js';
 import {CONSOLE_SERVER_NAME} from './chat/console-tools.js';
 import type {SandboxSettings} from './chat/sandbox.js';
+import {cliTmpOf} from './chat/shell-tmp.js';
 import {ensureHub, HUB_DIRS, hubDirFor} from './deps/md.js';
 import {loadAccountSecretPaths, type AccountSecretPaths} from './deps/account.js';
 import {loadProjectAccess, type ProjectAccessReader} from './deps/project.js';
@@ -194,7 +195,11 @@ export function buildEnv(
 		env.USE_BUILTIN_RIPGREP = '0';
 	}
 	delete env.ANTHROPIC_AUTH_TOKEN;
-	if (shellTmp !== undefined) env.CLAUDE_CODE_TMPDIR = shellTmp;
+	env.NODE_USE_ENV_PROXY = '1';
+	if (shellTmp !== undefined) {
+		env.CLAUDE_CODE_TMPDIR = shellTmp;
+		env.npm_config_cache = path.join(cliTmpOf(shellTmp, process.getuid?.() ?? 0), 'npm-cache');
+	}
 	if (cred.source === 'claude-login') {
 		delete env.ANTHROPIC_API_KEY;
 		delete env.CLAUDE_CODE_OAUTH_TOKEN;

@@ -1210,7 +1210,10 @@ test('the chat child gets the private shell tmp root, and a failure only logs', 
 		await done;
 	}});
 	await ok.command.run(['chat'], ok.ctx);
-	assert.equal((ok.q.calls[0]!.options.env as Record<string, string>).CLAUDE_CODE_TMPDIR, '/tmp/yena-claude-test');
+	const okEnv = ok.q.calls[0]!.options.env as Record<string, string>;
+	assert.equal(okEnv.CLAUDE_CODE_TMPDIR, '/tmp/yena-claude-test');
+	assert.equal(okEnv.npm_config_cache, `/tmp/yena-claude-test/claude-${process.getuid?.() ?? 0}/npm-cache`);
+	assert.equal(okEnv.NODE_USE_ENV_PROXY, '1');
 
 	const bad = await setup({deps: {shellTmp: () => { throw new Error('nope /private/path'); }, log}, run: async p => {
 		const done = turnDone(p);
