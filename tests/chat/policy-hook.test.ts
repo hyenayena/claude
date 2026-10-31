@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import {mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {after, test} from 'node:test';
 import {createPolicyHook, policyHooks, webKey} from '../../src/chat/policy-hook.js';
+import {createLeftoverSweeper} from '../../src/chat/sandbox-leftovers.js';
+import {noopLog} from '../../src/log.js';
 import {POLICY_ASK, POLICY_DENY} from '../../src/chat/permission.js';
 import {buildScope} from '../../src/policy.js';
 
@@ -66,7 +68,7 @@ test('the hook denies paths outside the policy in any mode', async () => {
 test('policyHooks registers the hook for PreToolUse only', () => {
 	const hooks = policyHooks(buildScope(paths));
 	assert.deepEqual(Object.keys(hooks), ['PreToolUse']);
-	assert.equal(hooks.PreToolUse[0]!.hooks.length, 1);
+	assert.equal(hooks.PreToolUse![0]!.hooks.length, 1);
 });
 
 test('the hook keeps the Claude config read-only except the plan files of plan mode', async () => {
@@ -311,4 +313,81 @@ test('the hook brings the Bash sandbox up to date before a command and denies wh
 	assert.equal(await ask('ls'), POLICY_DENY.sandbox);
 	assert.equal(await ask('cat /proc/1/environ'), POLICY_DENY.procEnv);
 	assert.equal(calls, 2, 'a command refused by name never reaches the sandbox');
+});
+
+const fakeTracker = () => {
+	const begun: string[] = [];
+	const ended: Array<[string, string | undefined]> = [];
+	return {
+		begun,
+		ended,
+		begin: (id: string) => void begun.push(id),
+		end: async (id: string, cwd?: string) => void ended.push([id, cwd]),
+	};
+};
+
+const preCall = (h: ReturnType<typeof createPolicyHook>, tool_name: string, tool_input: Record<string, unknown>) =>
+	h({hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: projectDir} as never, 't', opts);
+
+test('an allowed Bash call begins tracking, a denied one or another tool does not', async () => {
+	const tracker = fakeTracker();
+	const h = createPolicyHook(buildScope(paths, path.join(tmp, 'home')), paths.configDir, {bashTracker: tracker});
+	await preCall(h, 'Bash', {command: 'ls'});
+	await preCall(h, 'Bash', {});
+	assert.deepEqual(tracker.begun, ['t', 't']);
+	await preCall(h, 'Bash', {command: 'ls', dangerouslyDisableSandbox: true});
+	await preCall(h, 'Bash', {command: `cat ${path.join(paths.configDir, '.credentials.json')}`});
+	await preCall(h, 'Read', {file_path: path.join(projectDir, 'a.txt')});
+	await preCall(h, 'Edit', {file_path: path.join(projectDir, 'a.txt'), old_string: 'a', new_string: 'b'});
+	assert.deepEqual(tracker.begun, ['t', 't']);
+	const failing = createPolicyHook(buildScope(paths, path.join(tmp, 'home')), paths.configDir, {
+		bashTracker: tracker,
+		beforeBash: async () => {
+			throw new Error('sandbox');
+		},
+	});
+	const out = (await preCall(failing, 'Bash', {command: 'ls'})) as {hookSpecificOutput?: {permissionDecision?: string}};
+	assert.equal(out.hookSpecificOutput?.permissionDecision, 'deny');
+	assert.deepEqual(tracker.begun, ['t', 't']);
+});
+
+test('policyHooks with a tracker ends Bash calls after use, failure and denial', async () => {
+	const tracker = fakeTracker();
+	const hooks = policyHooks(buildScope(paths), paths.configDir, {bashTracker: tracker});
+	assert.deepEqual(Object.keys(hooks), ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied']);
+	for (const event of ['PostToolUse', 'PostToolUseFailure', 'PermissionDenied'] as const) {
+		const matchers = hooks[event]!;
+		assert.equal(matchers.length, 1);
+		assert.equal(matchers[0]!.matcher, 'Bash');
+		const out = await matchers[0]!.hooks[0]!(
+			{hook_event_name: event, tool_name: 'Bash', tool_input: {}, tool_use_id: event, session_id: 's', transcript_path: '', cwd: `/w/${event}`} as never,
+			event,
+			opts,
+		);
+		assert.deepEqual(out, {continue: true});
+	}
+	assert.deepEqual(tracker.ended, [
+		['PostToolUse', '/w/PostToolUse'],
+		['PostToolUseFailure', '/w/PostToolUseFailure'],
+		['PermissionDenied', '/w/PermissionDenied'],
+	]);
+});
+
+test('the hooks and a real sweeper remove a placeholder only once no Bash call is in flight', async () => {
+	const dir = path.join(tmp, 'sweep-wiring');
+	const placeholder = path.join(dir, '.claude', '.cc-writes');
+	mkdirSync(placeholder, {recursive: true});
+	const sweeper = createLeftoverSweeper({dirs: () => [], log: noopLog});
+	const hooks = policyHooks(buildScope(paths, path.join(tmp, 'home')), paths.configDir, {bashTracker: sweeper});
+	const pre = hooks.PreToolUse![0]!.hooks[0]!;
+	const post = hooks.PostToolUse![0]!.hooks[0]!;
+	const input = (event: string, id: string) =>
+		({hook_event_name: event, tool_name: 'Bash', tool_input: {command: 'ls'}, tool_use_id: id, session_id: 's', transcript_path: '', cwd: dir}) as never;
+	await pre(input('PreToolUse', 'a'), 'a', opts);
+	await pre(input('PreToolUse', 'b'), 'b', opts);
+	await post(input('PostToolUse', 'a'), 'a', opts);
+	assert.equal(existsSync(placeholder), true);
+	await post(input('PostToolUse', 'b'), 'b', opts);
+	assert.equal(existsSync(placeholder), false);
+	assert.equal(existsSync(path.join(dir, '.claude')), false);
 });

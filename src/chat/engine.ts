@@ -1,6 +1,6 @@
 import type {CommandBridge, Logger} from '../../../../src/api.js';
 import {withPatch, type ChatTuning, type LivePatch} from '../chat-prefs.js';
-import {buildChatOptions, buildEnv, ensureMdLinks, resolvePaths, restrictDataDirs, withProjects, type ClaudePaths} from '../config.js';
+import {additionalDirsOf, buildChatOptions, buildEnv, ensureMdLinks, resolvePaths, restrictDataDirs, withProjects, type ClaudePaths} from '../config.js';
 import type {LoginProbe} from '../claude-login.js';
 import {accountsCtx, liveSecrets, loginSyncOf, makeRedactor, prepareCredential, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
 import {chooseAccount, LoginUnsavedError, markLimited, prepareAccount, ranksAbove} from '../accounts.js';
@@ -20,6 +20,7 @@ import {makeScrub} from './scrub.js';
 import {cliTmpOf, ensureShellTmp, sessionDirOf, shellTmpRoot} from './shell-tmp.js';
 import {createProcessStatus, statusLine} from './process-status.js';
 import {buildSandbox, createSandboxSync, sandboxProblem} from './sandbox.js';
+import {createLeftoverSweeper} from './sandbox-leftovers.js';
 import {readSessionTitle, titleFromPrompt, transcriptFile} from './title.js';
 
 const TITLE_RETRY_MS = [3_000, 10_000];
@@ -141,6 +142,8 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	const paths = await withProjects(resolvePaths(dataDir, deps.moduleDir));
 	ensureMdLinks(paths);
 	restrictDataDirs(paths);
+	const leftovers = createLeftoverSweeper({dirs: () => [paths.projectDir, ...additionalDirsOf(paths)], log});
+	await leftovers.sweep();
 	let shellRoot: string | undefined;
 	try {
 		shellRoot = (deps.shellTmp ?? ensureShellTmp)();
@@ -255,7 +258,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			includePartialMessages: true,
 			...(firstSpawn() && {...(fork && {forkSession: true}), ...(resumeAt && {resumeSessionAt: resumeAt})}),
 			permissionMode: sdkPermissionMode(prompter.mode),
-			hooks: policyHooks(scope, paths.configDir, {approved: key => prompter.hasApproved(key), ...(box && {beforeBash: () => sandbox.refresh(), procHidden: true})}),
+			hooks: policyHooks(scope, paths.configDir, {approved: key => prompter.hasApproved(key), bashTracker: leftovers, ...(box && {beforeBash: () => sandbox.refresh(), procHidden: true})}),
 			};
 		},
 		onUsageLimit: ({reason, rateLimit}) => {

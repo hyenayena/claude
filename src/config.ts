@@ -236,7 +236,7 @@ export function buildOptions(p: {
 	const options: Options = {
 		cwd: paths.projectDir,
 		env: p.env ?? buildEnv(process.env, paths, p.cred),
-		additionalDirectories: [paths.hubDir, paths.configDir, ...projectRoots(paths)],
+		additionalDirectories: additionalDirsOf(paths),
 		settingSources: ['user', 'project', 'local'],
 		abortController: p.abortController,
 		systemPrompt: {type: 'preset', preset: 'claude_code', append: buildHint(paths)},
@@ -317,6 +317,10 @@ export function cliEnv(
 	paths: Pick<ClaudePaths, 'configDir'>,
 ): Record<string, string | undefined> {
 	return {...scrubChatEnv(base), CLAUDE_CONFIG_DIR: paths.configDir, DISABLE_AUTOUPDATER: '1'};
+}
+
+export function additionalDirsOf(paths: ClaudePaths): string[] {
+	return [paths.hubDir, paths.configDir, ...projectRoots(paths)];
 }
 
 function projectRoots(paths: Pick<ClaudePaths, 'projects'>): string[] {

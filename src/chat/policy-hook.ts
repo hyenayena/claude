@@ -1,4 +1,4 @@
-import type {HookCallback, HookCallbackMatcher, HookJSONOutput} from '@anthropic-ai/claude-agent-sdk';
+import type {HookCallback, HookCallbackMatcher, HookEvent, HookJSONOutput} from '@anthropic-ai/claude-agent-sdk';
 import path from 'node:path';
 import {classifyEditTarget, createCanUseTool, isAskFile, PLANS_DIR, resolveReal, type Scope} from '../policy.js';
 import {agentDenial} from './agent-policy.js';
@@ -39,6 +39,7 @@ export type PolicyHookOptions = {
 	approved?: (key: string) => boolean;
 	beforeBash?: () => Promise<void>;
 	procHidden?: boolean;
+	bashTracker?: {begin(id: string): void; end(id: string, cwd?: string): Promise<void>};
 };
 
 export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: PolicyHookOptions = {}): HookCallback {
@@ -94,7 +95,10 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 			case 'Bash': {
 				if (args.dangerouslyDisableSandbox) return denyWith(POLICY_DENY.background);
 				const command = args.command;
-				if (typeof command !== 'string') return allow;
+				if (typeof command !== 'string') {
+					hookOpts.bashTracker?.begin(input.tool_use_id);
+					return allow;
+				}
 				if (AUTH_FILE.test(command)) return denyWith(POLICY_DENY.authFiles);
 				if (scope.shellDenied?.some(s => command.includes(s))) return denyWith(POLICY_DENY.accountSecrets);
 				if (scope.hostStateDenied?.some(s => command.includes(s))) return denyWith(POLICY_DENY.hostState);
@@ -108,6 +112,7 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 						return denyWith(POLICY_DENY.sandbox);
 					}
 				}
+				hookOpts.bashTracker?.begin(input.tool_use_id);
 				return allow;
 			}
 			default: {
@@ -118,10 +123,22 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 	};
 }
 
-export const policyHooks = (
+export function policyHooks(
 	scope: Scope,
 	configDir?: string,
 	hookOpts: PolicyHookOptions = {},
-): {PreToolUse: HookCallbackMatcher[]} => ({
-	PreToolUse: [{hooks: [createPolicyHook(scope, configDir, hookOpts)]}],
-});
+): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
+	const hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = {
+		PreToolUse: [{hooks: [createPolicyHook(scope, configDir, hookOpts)]}],
+	};
+	const tracker = hookOpts.bashTracker;
+	if (!tracker) return hooks;
+	const after: HookCallback = async input => {
+		if ('tool_name' in input && input.tool_name === 'Bash' && 'tool_use_id' in input) await tracker.end(input.tool_use_id, input.cwd);
+		return allow;
+	};
+	for (const event of ['PostToolUse', 'PostToolUseFailure', 'PermissionDenied'] as const) {
+		hooks[event] = [{matcher: 'Bash', hooks: [after]}];
+	}
+	return hooks;
+}
