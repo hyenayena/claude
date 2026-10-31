@@ -61,6 +61,17 @@ describe('isPathAllowed', () => {
 		assert.ok(await isPathAllowed(paths.configDir, scope));
 	});
 
+	it('lets Read into the session tmp dir but not Edit, and keeps bash-edit-diff closed', async () => {
+		const sessionTmp = path.join(tmp, 'shell', 'claude-0');
+		mkdirSync(path.join(sessionTmp, 'bash-edit-diff'), {recursive: true});
+		writeFileSync(path.join(sessionTmp, 'icon.png'), 'png');
+		const withTmp = buildScope({...paths, sessionTmp}, home);
+		assert.ok(await isPathAllowed(path.join(sessionTmp, 'icon.png'), withTmp));
+		assert.ok(!(await isPathAllowed(path.join(sessionTmp, 'bash-edit-diff', 'x'), withTmp)));
+		assert.ok(!(await isPathAllowed(path.join(sessionTmp, 'icon.png'), scope)));
+		assert.equal(await classifyEditTarget(path.join(sessionTmp, 'icon.png'), withTmp), 'deny-outside');
+	});
+
 	it('denies outside paths, traversal and symlink escapes', async () => {
 		assert.ok(!(await isPathAllowed('/etc/passwd', scope)));
 		assert.ok(!(await isPathAllowed('../outside/x.txt', scope)));

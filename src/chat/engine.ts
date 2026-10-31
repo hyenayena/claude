@@ -17,7 +17,7 @@ import {buildPreview} from './preview.js';
 import {makeReveal} from './reveal.js';
 import {bashHighlights} from './risk.js';
 import {makeScrub} from './scrub.js';
-import {ensureShellTmp, sessionDirOf, shellTmpRoot} from './shell-tmp.js';
+import {cliTmpOf, ensureShellTmp, sessionDirOf, shellTmpRoot} from './shell-tmp.js';
 import {createProcessStatus, statusLine} from './process-status.js';
 import {buildSandbox, createSandboxSync, sandboxProblem} from './sandbox.js';
 import {readSessionTitle, titleFromPrompt, transcriptFile} from './title.js';
@@ -141,7 +141,17 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	const paths = await withProjects(resolvePaths(dataDir, deps.moduleDir));
 	ensureMdLinks(paths);
 	restrictDataDirs(paths);
-	const scope = buildScope({...paths, ...(env.SSH_AUTH_SOCK && {agentSocket: env.SSH_AUTH_SOCK})});
+	let shellRoot: string | undefined;
+	try {
+		shellRoot = (deps.shellTmp ?? ensureShellTmp)();
+	} catch (err) {
+		log.warn('shell tmp unavailable', {error: errClass(err)});
+	}
+	const scope = buildScope({
+		...paths,
+		...(env.SSH_AUTH_SOCK && {agentSocket: env.SSH_AUTH_SOCK}),
+		...(shellRoot !== undefined && {sessionTmp: cliTmpOf(shellRoot, process.getuid?.() ?? 0)}),
+	});
 	const resume = chosen ?? (fresh ? undefined : state.lastSessionId);
 	log.info('chat starting', {
 		fresh,
@@ -165,12 +175,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			await created?.applySandbox(s);
 		},
 	);
-	let shellRoot: string | undefined;
-	try {
-		shellRoot = (deps.shellTmp ?? ensureShellTmp)();
-	} catch (err) {
-		log.warn('shell tmp unavailable', {error: errClass(err)});
-	}
 	let saving: Promise<void> = Promise.resolve();
 	let spawned = false;
 	const firstSpawn = (): boolean => {

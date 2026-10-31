@@ -3,6 +3,8 @@ import path from 'node:path';
 
 export const shellTmpRoot = (uid: number, base = '/tmp'): string => path.join(base, `yena-claude-${uid}`);
 
+export const cliTmpOf = (shellRoot: string, uid: number): string => path.join(shellRoot, `claude-${uid}`);
+
 export function ensurePrivateDir(dir: string, uid: number, label = 'Directory'): string {
 	try {
 		mkdirSync(dir, {mode: 0o700});

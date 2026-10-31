@@ -68,6 +68,7 @@ export const PLANS_DIR = 'plans';
 
 export type Scope = {
 	roots: string[];
+	readRoots?: string[];
 	denied: string[];
 	image?: string;
 	hostStateDenied?: string[];
@@ -95,7 +96,10 @@ export type PolicyPaths = {
 	agentSocket?: string;
 	imageReadOnly?: boolean;
 	hostState?: string;
+	sessionTmp?: string;
 };
+
+export const SESSION_TMP_DENIED = ['bash-edit-diff'];
 
 export const HUB_ASK_FILES = ['CLAUDE.md', 'SOUL.md'];
 
@@ -155,7 +159,9 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 			...CONFIG_SECRET.map(x => path.join(paths.configDir, x)),
 			path.join(paths.configDir, CONFIG_HISTORY),
 			...(paths.accountSecrets?.secretDirs ?? []),
+			...(paths.sessionTmp ? SESSION_TMP_DENIED.map(x => path.join(paths.sessionTmp!, x)) : []),
 		],
+		...(paths.sessionTmp && {readRoots: [paths.sessionTmp]}),
 		...(paths.accountSecrets && {shellDenied: accountShellDenied(paths.accountSecrets)}),
 		...(paths.agentSocket && {agentSocket: paths.agentSocket}),
 		...(paths.imageReadOnly && {image: paths.projectDir}),
@@ -296,7 +302,7 @@ export async function isPathAllowed(p: string, scope: Scope): Promise<boolean> {
 		return false;
 	}
 	const extra = (await scope.projects?.())?.roots ?? [];
-	const roots = await realList([...scope.roots, ...extra]);
+	const roots = await realList([...scope.roots, ...extra, ...(scope.readRoots ?? [])]);
 	const denied = await realList(scope.denied);
 	for (const r of await realList(extra)) {
 		if (!within(real, r)) continue;
