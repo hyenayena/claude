@@ -1,11 +1,17 @@
-import React, {useCallback, useEffect, useLayoutEffect, useRef, useState} from 'react';
+import React, {createElement, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore} from 'react';
 import {Box, Text, useInput, usePaste, useWindowSize, type Key} from 'ink';
 import type {PrintOptions, ViewHost} from '../../../../src/api.js';
 import type {ChatController, ChatEvent} from '../chat/events.js';
 import {limitIndicator, systemClock, type Clock} from '../chat/limits.js';
 import {MODE_CYCLE, QUESTION_LIMITS, REASON_MAX} from '../chat/permission.js';
 import type {ChatMode, PermissionDecision, PermissionRequest} from '../chat/permission.js';
-import {sanitizeMultilineInput, wrapLines} from '../kit.js';
+import {sanitizeMultilineInput, truncateCells, wrapLines} from '../kit.js';
+import {layoutPanel, navigate, revealAgent, type PanelMove} from './agent-panel.js';
+import {createAgentStore} from './agent-store.js';
+import {agentViewLines} from './agent-view.js';
+import {focusAgent, initialAgents, reduceAgents, seedFromTasks} from './agents.js';
+import {AgentPanel} from './AgentPanel.js';
+import {headerHost} from './view-header.js';
 import {editorReduce, emptyEditor, MAX_INPUT, type EditorAction, type EditorState} from './editor.js';
 import {cursorFromClick, InputLine, inputRowsNeeded} from './InputLine.js';
 import {LiveTools, toolLayout} from './LiveTools.js';
@@ -44,7 +50,7 @@ import {parseSlash, slashHints, type SlashHints} from './slash.js';
 import {commandHost, type ViewCommandInfo} from './view-commands.js';
 import {WorkingLine} from './WorkingLine.js';
 import {StatusBar, useViewHost} from './kit.js';
-import {mouseHost, validEvent} from './view-mouse.js';
+import {mouseHost, validEvent, type ViewMouseEvent} from './view-mouse.js';
 import {vimKey, vimStart, type VimEffect, type VimState} from './vim.js';
 import {matchFiles, mentionAt} from '../chat/files.js';
 import {
@@ -194,7 +200,16 @@ export function ChatView(props: ChatViewProps) {
 	const commandListRef = useRef<{at: number; list: ViewCommandInfo[]} | undefined>(undefined);
 	const vimRef = useRef<VimState>(vimStart);
 	const viewerRef = useRef<Viewer | undefined>(undefined);
-	const shownRef = useRef({columns: 0, rows: 0, inputRows: 0, vimNormal: false, statusBar: false, waiting: false, belowInput: 0});
+	const shownRef = useRef({columns: 0, rows: 0, inputRows: 0, vimNormal: false, statusBar: false, waiting: false, belowInput: 0, panelHeight: 0});
+	const agentsRef = useRef<ReturnType<typeof createAgentStore> | undefined>(undefined);
+	if (!agentsRef.current) agentsRef.current = createAgentStore(seedFromTasks(initialAgents(), controller.tasks ?? []));
+	const agents = agentsRef.current;
+	const agentsState = useSyncExternalStore(agents.subscribe, agents.get);
+	const agentTopRef = useRef(-1);
+	const panelOf = (cols: number, height: number) => layoutPanel(agents.get(), {columns: cols, rows: height, scrub});
+	const focusBox = (focus: Parameters<typeof focusAgent>[1]) => agents.set(revealAgent(focusAgent(agents.get(), focus), {columns, rows, scrub}));
+	const panelHeight = layoutPanel(agentsState, {columns, rows, scrub}).height;
+	const viewRows = rows - panelHeight;
 	const [, setTick] = useState(0);
 	const render = useCallback(() => setTick(n => n + 1), []);
 	const lastWidthRef = useRef(0);
@@ -236,6 +251,7 @@ export function ChatView(props: ChatViewProps) {
 		(event: ChatEvent) => {
 			if (closedRef.current) return;
 			lastEventRef.current = Date.now();
+			agents.set(reduceAgents(agents.get(), event));
 			if (event.type === 'sent') {
 				print(formatUserLine(event.text, scrub));
 				return;
@@ -289,7 +305,7 @@ export function ChatView(props: ChatViewProps) {
 				}
 			}
 		},
-		[print, printNotice, scrub, reveal, setT, render, setQueue],
+		[print, printNotice, scrub, reveal, setT, render, setQueue, agents],
 	);
 
 	const flushQueue = useCallback(() => {
@@ -532,7 +548,7 @@ export function ChatView(props: ChatViewProps) {
 	const promptKey = (p: PromptEntry, input: string, key: Key) => {
 		const pk = normalizeKey(input, key);
 		const now = Date.now();
-		const layout = layoutPrompt(rows, columns);
+		const layout = layoutPrompt(viewRows, columns);
 		let notice: string | undefined;
 		let decision: PermissionDecision | undefined;
 		let stopTurn: boolean | undefined;
@@ -658,7 +674,7 @@ export function ChatView(props: ChatViewProps) {
 		else render();
 	};
 
-	const viewerRows = () => Math.max(3, (rows >= 12 ? rows - 3 : rows - 1) - 2);
+	const viewerRows = () => Math.max(3, (rows >= 12 ? rows - 3 : rows - 1) - panelHeight - 2);
 
 	const openViewer = () => {
 		viewerRef.current = {lines: ['Loading the transcript…'], top: -1};
@@ -703,17 +719,104 @@ export function ChatView(props: ChatViewProps) {
 		});
 	};
 
+	const openAgent = (id: string | undefined) => {
+		agentTopRef.current = -1;
+		focusBox({selected: id, open: id});
+		render();
+	};
+
+	const scrollAgent = (cols: number, height: number, step: (top: number, max: number) => number) => {
+		const box = agents.get().boxes.get(agents.get().open ?? '');
+		if (!box) return;
+		const total = agentViewLines(box, scrub, reveal, Math.max(1, cols - 1)).length;
+		const max = Math.max(0, total - height);
+		const top = agentTopRef.current < 0 ? max : Math.min(agentTopRef.current, max);
+		const next = Math.min(max, Math.max(0, step(top, max)));
+		agentTopRef.current = next >= max ? -1 : next;
+		render();
+	};
+
+	const openAgentKey = (input: string, key: Key) => {
+		const s = agents.get();
+		if (key.escape) {
+			focusBox({selected: s.open});
+			return render();
+		}
+		if (key.leftArrow || key.rightArrow) {
+			const ids = panelOf(columns, rows).ids;
+			const at = ids.indexOf(s.open!);
+			const next = ids[at < 0 ? 0 : Math.min(ids.length - 1, Math.max(0, at + (key.leftArrow ? -1 : 1)))];
+			if (next !== undefined && next !== s.open) openAgent(next);
+			return;
+		}
+		const height = viewerRows();
+		scrollAgent(columns, height, (top, max) => {
+			if (key.upArrow || input === 'k') return top - 1;
+			if (key.downArrow || input === 'j') return top + 1;
+			if (key.pageUp || input === 'b') return top - height;
+			if (key.pageDown || input === ' ' || input === 'f') return top + height;
+			if (input === 'g' || key.home) return 0;
+			if (input === 'G' || key.end) return max;
+			return top;
+		});
+	};
+
+	const selectAgentKey = (input: string, key: Key): boolean => {
+		const s = agents.get();
+		const move: PanelMove | undefined = key.leftArrow ? 'left' : key.rightArrow ? 'right' : key.upArrow ? 'up' : key.downArrow ? 'down' : undefined;
+		if (move && !key.shift && !key.ctrl && !key.meta) {
+			focusBox({selected: navigate(panelOf(columns, rows), s.selected!, move)});
+			render();
+			return true;
+		}
+		if (key.return && !key.meta && !key.shift) {
+			openAgent(s.selected);
+			return true;
+		}
+		agents.set(focusAgent(s, {}));
+		render();
+		return key.escape;
+	};
+
+	const onHeaderMouse = (raw: ViewMouseEvent): boolean => {
+		const shown = shownRef.current;
+		const layout = panelOf(shown.columns, shown.rows);
+		if (raw.kind === 'wheel') {
+			const scroll = Math.min(layout.maxScroll, Math.max(0, layout.scroll + (raw.wheel === 'up' ? -1 : 1)));
+			agents.set({...agents.get(), scroll});
+			render();
+			return true;
+		}
+		if (raw.kind !== 'press' || raw.button !== 'left') return true;
+		if (controller.pendingPermissions.length > 0 || searchRef.current || pendingModeRef.current) return true;
+		const id = layout.hit(raw.x, raw.y);
+		if (id === undefined) return true;
+		if (agents.get().open === id) focusBox({selected: id});
+		else {
+			viewerRef.current = undefined;
+			agentTopRef.current = -1;
+			focusBox({selected: id, open: id});
+		}
+		render();
+		return true;
+	};
+
 	const onMouse = (raw: unknown): boolean => {
 		if (!validEvent(raw) || closedRef.current) return false;
+		if (raw.region === 'header') return onHeaderMouse(raw);
 		const shown = shownRef.current;
 		if (raw.kind === 'wheel') {
+			const height = Math.max(3, (shown.rows >= 12 ? shown.rows - 3 : shown.rows - 1) - shown.panelHeight - 2);
+			if (agents.get().open !== undefined && controller.pendingPermissions.length === 0) {
+				scrollAgent(shown.columns, height, top => top + (raw.wheel === 'up' ? -1 : 1));
+				return true;
+			}
 			if (!viewerRef.current) return false;
-			const height = Math.max(3, (shown.rows >= 12 ? shown.rows - 3 : shown.rows - 1) - 2);
 			scrollViewer(shown.columns, height, top => top + (raw.wheel === 'up' ? -1 : 1));
 			return true;
 		}
 		if (raw.kind !== 'press' || raw.button !== 'left') return false;
-		if (controller.pendingPermissions.length > 0 || viewerRef.current || searchRef.current || pendingModeRef.current) return false;
+		if (controller.pendingPermissions.length > 0 || viewerRef.current || searchRef.current || pendingModeRef.current || agents.get().open !== undefined) return false;
 		if (shown.waiting || shown.inputRows < 1) return false;
 		const below = shown.belowInput + (shown.vimNormal ? 1 : 0) + (shown.statusBar ? 1 : 0);
 		const row = shown.inputRows - 1 - (raw.height - 1 - below - raw.y);
@@ -728,6 +831,12 @@ export function ChatView(props: ChatViewProps) {
 	const mouseRef = useRef(onMouse);
 	mouseRef.current = onMouse;
 	useEffect(() => mouseHost(host)?.(event => mouseRef.current(event)), [host]);
+	useEffect(() => {
+		const setHeader = headerHost(host);
+		if (!setHeader) return;
+		setHeader(createElement(AgentPanel, {store: agents, ...(host !== undefined && {host}), scrub}));
+		return () => setHeader(null);
+	}, [host, agents, scrub]);
 
 	const runVimEffect = (effect: VimEffect) => {
 		switch (effect.kind) {
@@ -767,9 +876,20 @@ export function ChatView(props: ChatViewProps) {
 		if (prompt) return promptKey(prompt, input, key);
 		if (pendingModeRef.current) return modeKey(key);
 		if (key.ctrl && input === 'c') return ctrlC();
+		if (agents.get().open !== undefined) return openAgentKey(input, key);
+		if (agents.get().selected !== undefined && selectAgentKey(input, key)) return;
 		if (viewerRef.current) return viewerKey(input, key);
 		if (key.ctrl && input === 'o' && props.loadTranscript) return openViewer();
 		if (searchRef.current) return searchKey(input, key);
+		const vimNormalNow = props.inputMode?.() === 'vim' && vimRef.current.mode === 'normal';
+		const downward = (key.downArrow && !key.shift && !key.ctrl && !key.meta) || (vimNormalNow && input === 'j' && !key.ctrl && !key.meta);
+		if (downward && edRef.current.text === '' && historyRef.current.index === -1) {
+			const first = panelOf(columns, rows).visibleIds[0];
+			if (first !== undefined) {
+				focusBox({selected: first});
+				return render();
+			}
+		}
 		const mention = activeMention();
 		if (props.inputMode?.() === 'vim' && !key.ctrl && !key.meta && !key.tab && !mention) {
 			const busyEscape = key.escape && tRef.current.phase !== 'idle';
@@ -876,7 +996,7 @@ export function ChatView(props: ChatViewProps) {
 		if (host?.isHostKey(text)) return;
 		const prompt = currentPrompt();
 		if (prompt) return promptPaste(prompt, text);
-		if (pendingModeRef.current) return;
+		if (pendingModeRef.current || agents.get().open !== undefined) return;
 		insertPasted(text);
 	}, {isActive: focused});
 
@@ -887,7 +1007,7 @@ export function ChatView(props: ChatViewProps) {
 	useEffect(() => {
 		const p = promptRef.current;
 		if (!p) return;
-		const sig = promptSig(p, layoutPrompt(rows, columns).tier);
+		const sig = promptSig(p, layoutPrompt(viewRows, columns).tier);
 		if (p.armedSig === sig) return;
 		p.armedSig = sig;
 		p.state = rearm(p.state, Date.now(), armMs) as typeof p.state;
@@ -918,14 +1038,17 @@ export function ChatView(props: ChatViewProps) {
 	);
 	const barTitle = scrub(controller.title ?? NEW_CHAT_TITLE);
 	const statusBar = host?.setTitle ? null : <StatusBar text={barStatusFull} />;
-	shownRef.current = {columns, rows, inputRows: 0, vimNormal: false, statusBar: statusBar !== null, waiting: false, belowInput: 0};
+	shownRef.current = {columns, rows, inputRows: 0, vimNormal: false, statusBar: statusBar !== null, waiting: false, belowInput: 0, panelHeight};
+	const headerSlot = headerHost(host) !== undefined;
+	const fallbackPanel = headerSlot ? null : <AgentPanel store={agents} {...(host !== undefined && {host})} scrub={scrub} rows={rows} />;
 
 	if (prompt) {
-		const layout = layoutPrompt(rows, columns);
+		const layout = layoutPrompt(viewRows, columns);
 		const total = batchRef.current + controller.pendingPermissions.length;
 		const position = batchRef.current + 1;
 		return (
 			<Box flexDirection="column">
+				{fallbackPanel}
 				{prompt.request.kind === 'tool' ? (
 					<PermissionPrompt
 						request={prompt.request}
@@ -953,6 +1076,32 @@ export function ChatView(props: ChatViewProps) {
 		);
 	}
 
+	const openBox = agentsState.open !== undefined ? agentsState.boxes.get(agentsState.open) : undefined;
+	if (openBox) {
+		const width = Math.max(1, columns - 1);
+		const lines = agentViewLines(openBox, scrub, reveal, width);
+		const height = viewerRows();
+		const max = Math.max(0, lines.length - height);
+		const top = agentTopRef.current < 0 ? max : Math.min(agentTopRef.current, max);
+		const shown = lines.slice(top, top + height);
+		const footer = `Subagent ${scrub(openBox.name).replace(/\s+/g, ' ')} · read-only · ↑↓ j k scroll · ←→ other agent · Esc back`;
+		return (
+			<Box flexDirection="column">
+				{fallbackPanel}
+				{shown.map((line, i) => (
+					<Text key={i} wrap="truncate">
+						{line === '' ? ' ' : line}
+					</Text>
+				))}
+				<Text dimColor>{'─'.repeat(width)}</Text>
+				<Text dimColor wrap="truncate">
+					{truncateCells(footer, width)}
+				</Text>
+				{statusBar}
+			</Box>
+		);
+	}
+
 	if (viewerRef.current) {
 		const v = viewerRef.current;
 		const wrapped = viewerRowsOf(v, columns);
@@ -962,6 +1111,7 @@ export function ChatView(props: ChatViewProps) {
 		const shown = wrapped.slice(top, top + height);
 		return (
 			<Box flexDirection="column">
+				{fallbackPanel}
 				{shown.map((line, i) => (
 					<Text key={i} wrap="truncate">
 						{line === '' ? ' ' : line}
@@ -984,7 +1134,7 @@ export function ChatView(props: ChatViewProps) {
 				: t.notice;
 	const hint = modeHint(t.mode);
 	const rule = '─'.repeat(Math.max(1, columns - 1));
-	const cap = rows >= 12 ? rows - 3 : rows - 1;
+	const cap = (rows >= 12 ? rows - 3 : rows - 1) - panelHeight;
 	let rem = Math.max(0, cap - 1);
 	const ruleRows = rem >= 6 ? 2 : 0;
 	rem -= ruleRows;
@@ -1018,6 +1168,7 @@ export function ChatView(props: ChatViewProps) {
 
 	return (
 		<Box flexDirection="column">
+			{fallbackPanel}
 			{tail.map((line, i) => (
 				<Text key={i} wrap="truncate">
 					{line === '' ? ' ' : line}

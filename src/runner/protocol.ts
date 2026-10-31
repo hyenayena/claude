@@ -1,7 +1,7 @@
 import type {AgentPolicy, CommandConfirmRequest, CommandInfo, CommandInfoSub, CommandRunResult, CommandRunStatus} from '../../../../src/api.js';
 import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import type {SlashCommandInfo, TaskInfo} from '../chat/chat-session.js';
-import {ACCOUNT_REASONS, type ChatEvent, type ChatState, type ToolPatch, type TurnOutcome, type UiEvent} from '../chat/events.js';
+import {ACCOUNT_REASONS, type AgentItem, type ChatEvent, type ChatState, type ToolPatch, type TurnOutcome, type UiEvent} from '../chat/events.js';
 import type {LimitType, RateLimitInfo} from '../chat/limits.js';
 import {ACCOUNT_NAME_RE} from '../accounts.js';
 import {parseSlot} from '../login-slot.js';
@@ -403,6 +403,28 @@ const readAudit = (v: unknown): AuditEntry => {
 	};
 };
 
+const readAgentItem = (v: unknown): AgentItem => {
+	const o = rec(v, 'agent item');
+	switch (o.type) {
+		case 'text':
+			return {type: 'text', text: str(o.text, 'text')};
+		case 'thinking':
+			return {type: 'thinking', text: str(o.text, 'text')};
+		case 'tool-use':
+			return {type: 'tool-use', toolUseId: str(o.toolUseId, 'toolUseId', 256), name: str(o.name, 'name', 256), input: o.input};
+		case 'tool-result':
+			return {
+				type: 'tool-result',
+				toolUseId: str(o.toolUseId, 'toolUseId', 256),
+				isError: bool(o.isError, 'isError'),
+				text: str(o.text, 'text'),
+				...(has(o, 'patch') && {patch: readToolPatch(o.patch)}),
+			};
+		default:
+			return fail('agent item type');
+	}
+};
+
 const readUiEvent = (v: unknown): UiEvent => {
 	const o = rec(v, 'ui event');
 	switch (o.kind) {
@@ -437,6 +459,10 @@ const readUiEvent = (v: unknown): UiEvent => {
 				...(has(o, 'summary') && {summary: str(o.summary, 'summary', 20_000)}),
 				...(has(o, 'toolUseId') && {toolUseId: str(o.toolUseId, 'toolUseId', 256)}),
 				...(has(o, 'taskType') && {taskType: str(o.taskType, 'taskType', 256)}),
+				...(has(o, 'subagentType') && {subagentType: str(o.subagentType, 'subagentType', 256)}),
+				...(has(o, 'prompt') && {prompt: str(o.prompt, 'prompt', 16 * 1024)}),
+				...(has(o, 'parentTaskId') && {parentTaskId: ident(o.parentTaskId, 'parentTaskId')}),
+				...(has(o, 'depth') && {depth: int(o.depth, 'depth')}),
 			};
 		case 'tool-use':
 			return {kind: 'tool-use', toolUseId: str(o.toolUseId, 'toolUseId', 256), name: str(o.name, 'name', 256), input: o.input};
@@ -457,6 +483,13 @@ const readUiEvent = (v: unknown): UiEvent => {
 			};
 		case 'agent-activity':
 			return {kind: 'agent-activity', toolUseId: str(o.toolUseId, 'toolUseId', 256), name: str(o.name, 'name', 256), input: o.input};
+		case 'agent-message':
+			return {
+				kind: 'agent-message',
+				agentId: str(o.agentId, 'agentId', 256),
+				...(has(o, 'model') && {model: str(o.model, 'model', 256)}),
+				items: arr(o.items, 'items', 64).map(readAgentItem),
+			};
 		case 'tool-input':
 			return {kind: 'tool-input', name: str(o.name, 'name', 256)};
 		case 'tool-input-delta':
@@ -554,6 +587,8 @@ const readTask = (v: unknown): TaskInfo => {
 		startedAt: num(o.startedAt, 'startedAt'),
 		...(has(o, 'summary') && {summary: str(o.summary, 'summary', 20_000)}),
 		...(has(o, 'taskType') && {taskType: str(o.taskType, 'taskType', 256)}),
+		...(has(o, 'toolUseId') && {toolUseId: str(o.toolUseId, 'toolUseId', 256)}),
+		...(has(o, 'subagentType') && {subagentType: str(o.subagentType, 'subagentType', 256)}),
 	};
 };
 

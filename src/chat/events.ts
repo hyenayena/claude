@@ -3,12 +3,33 @@ import type {AuditEntry, ChatMode, PermissionDecision, PermissionRequest} from '
 
 export type ToolPatch = {hunks: {oldStart: number; newStart: number; lines: string[]}[]; created?: true};
 
+export type AgentItem =
+	| {type: 'text'; text: string}
+	| {type: 'thinking'; text: string}
+	| {type: 'tool-use'; toolUseId: string; name: string; input: unknown}
+	| {type: 'tool-result'; toolUseId: string; isError: boolean; text: string; patch?: ToolPatch};
+
+export type TaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
+
 export type UiEvent =
 	| {kind: 'session'; sessionId: string; model?: string; apiKeySource?: string; slashCommands?: string[]}
 	| {kind: 'text-delta'; text: string}
 	| {kind: 'text'; messageId: string; text: string; aborted?: boolean}
 	| {kind: 'thinking'}
-	| {kind: 'task'; id: string; status: 'running' | 'completed' | 'failed' | 'stopped'; description?: string; background?: boolean; summary?: string; toolUseId?: string; taskType?: string}
+	| {
+			kind: 'task';
+			id: string;
+			status: TaskStatus;
+			description?: string;
+			background?: boolean;
+			summary?: string;
+			toolUseId?: string;
+			taskType?: string;
+			subagentType?: string;
+			prompt?: string;
+			parentTaskId?: string;
+			depth?: number;
+	  }
 	| {kind: 'thinking-text'; text: string}
 	| {kind: 'tool-use'; toolUseId: string; name: string; input: unknown}
 	| {kind: 'tool-input'; name: string}
@@ -16,6 +37,7 @@ export type UiEvent =
 	| {kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; patch?: ToolPatch}
 	| {kind: 'tool-progress'; toolUseId: string; name: string; elapsedSeconds: number}
 	| {kind: 'agent-activity'; toolUseId: string; name: string; input: unknown}
+	| {kind: 'agent-message'; agentId: string; model?: string; items: AgentItem[]}
 	| {kind: 'status'; status: 'compacting' | 'requesting' | null}
 	| {kind: 'cli-state'; state: 'running' | 'idle' | 'requires_action'}
 	| {kind: 'thinking-tokens'; tokens: number}
@@ -61,7 +83,7 @@ export interface ChatController {
 	readonly needsNewSession: boolean;
 	readonly mode: ChatMode;
 	readonly title: string | undefined;
-	readonly tasks?: readonly {status: string; background: boolean; taskType?: string}[];
+	readonly tasks?: readonly {id?: string; status: string; background: boolean; taskType?: string; toolUseId?: string; subagentType?: string; description?: string}[];
 	backgroundTasks?(): Promise<boolean>;
 	readonly pendingPermissions: readonly PermissionRequest[];
 	readonly detachesOnClose?: boolean;

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {headerHost} from '../../src/ui/view-header.js';
 import {mouseHost, validEvent, type ViewMouseEvent} from '../../src/ui/view-mouse.js';
 
 const ev = (patch: Partial<ViewMouseEvent> = {}): ViewMouseEvent => ({
@@ -62,4 +63,25 @@ test('validEvent rejects malformed events', () => {
 	]) {
 		assert.equal(validEvent(bad), false, JSON.stringify(bad));
 	}
+});
+
+test('validEvent accepts only the header region', () => {
+	assert.equal(validEvent(ev({region: 'header'})), true);
+	assert.equal(validEvent({...ev(), region: 'footer'}), false);
+	assert.equal(validEvent({...ev(), region: 1}), false);
+});
+
+test('headerHost returns the bound setter only when the host has one', () => {
+	const seen: unknown[] = [];
+	const host = {
+		tag: 'h',
+		setHeader(this: {tag: string}, element: unknown) {
+			seen.push([this.tag, element]);
+		},
+	};
+	headerHost(host)!('x');
+	assert.deepEqual(seen, [['h', 'x']]);
+	assert.equal(headerHost({}), undefined);
+	assert.equal(headerHost(undefined), undefined);
+	assert.equal(headerHost({setHeader: 'no'}), undefined);
 });

@@ -166,6 +166,24 @@ export function toolHeader(name: string, input: unknown, scrub: Scrub): string {
 	return `${scrub(displayName(name))}${args ? `(${args})` : ''}`;
 }
 
+export function toolOneLiner(name: string, input: unknown, scrub: Scrub): string {
+	const args = toolArgs(name, input, scrub);
+	return `${scrub(displayName(name))}${args ? ` ${args}` : ''}`;
+}
+
+const MODEL_NAME = /^claude-(opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/;
+const OLD_MODEL_NAME = /^claude-(\d{1,2})(?:-(\d{1,2}))?-(opus|sonnet|haiku)(?:-\d{8})?$/;
+const MODEL_CAP = 20;
+
+export function shortModel(model: string, scrub: Scrub): string {
+	const m = MODEL_NAME.exec(model);
+	if (m) return `${m[1]}-${m[2]}${m[3] !== undefined ? `.${m[3]}` : ''}`;
+	const old = OLD_MODEL_NAME.exec(model);
+	if (old) return `${old[3]}-${old[1]}${old[2] !== undefined ? `.${old[2]}` : ''}`;
+	const shown = scrub(model).replace(/\s+/g, ' ');
+	return shown.length > MODEL_CAP ? `${shown.slice(0, MODEL_CAP - 1)}…` : shown;
+}
+
 export function styledToolHeader(name: string, input: unknown, scrub: Scrub): string {
 	const args = toolArgs(name, input, scrub);
 	return `${SGR.bold}${scrub(displayName(name))}${SGR.boldOff}${args ? `(${args})` : ''}`;

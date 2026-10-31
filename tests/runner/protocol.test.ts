@@ -169,3 +169,75 @@ test('a commands frame keeps nested subcommands up to three levels and rejects d
 	const badPolicy = {v: 1, type: 'commands', list: [{name: 'x', description: 'x', policy: 'safe', subcommands: [{...nested, subcommands: [{...leaf, policy: 'yes'}]}]}]};
 	assert.throws(() => createDecoder('toRunner').push(line(badPolicy)), ProtocolError);
 });
+
+test('an agent-message round-trips with every item type; malformed or oversized items are rejected', () => {
+	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: ['-a', '+b']}]};
+	const frame: RunnerFrame = {
+		v: 1,
+		type: 'event',
+		event: {
+			type: 'ui',
+			event: {
+				kind: 'agent-message',
+				agentId: 'agent-1',
+				model: 'claude-haiku-4-5',
+				items: [
+					{type: 'text', text: 'hi'},
+					{type: 'thinking', text: 'hmm'},
+					{type: 'tool-use', toolUseId: 't1', name: 'Read', input: {file_path: '/x'}},
+					{type: 'tool-result', toolUseId: 't1', isError: false, text: 'ok', patch},
+				],
+			},
+		},
+	};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(frame)), [frame]);
+	const plain: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'agent-message', agentId: 'a', items: []}}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(plain)), [plain]);
+	const bad = (event: unknown) => line({v: 1, type: 'event', event: {type: 'ui', event}});
+	const ok = {kind: 'agent-message', agentId: 'a', items: [{type: 'text', text: 'x'}]};
+	for (const event of [
+		{...ok, agentId: 7},
+		{...ok, agentId: 'a'.repeat(257)},
+		{...ok, model: 'm'.repeat(257)},
+		{...ok, items: 'x'},
+		{...ok, items: Array.from({length: 65}, () => ({type: 'text', text: 'x'}))},
+		{...ok, items: [{type: 'image', text: 'x'}]},
+		{...ok, items: [{type: 'text', text: 3}]},
+		{...ok, items: [null]},
+		{...ok, items: [{type: 'tool-use', toolUseId: 't'.repeat(257), name: 'Read', input: {}}]},
+		{...ok, items: [{type: 'tool-use', toolUseId: 't', name: 'n'.repeat(257), input: {}}]},
+		{...ok, items: [{type: 'tool-result', toolUseId: 't', isError: 'no', text: 'x'}]},
+		{...ok, items: [{type: 'tool-result', toolUseId: 't', isError: false, text: 'x', patch: {hunks: 'x'}}]},
+	]) {
+		assert.throws(() => createDecoder('toClient').push(bad(event)), ProtocolError, JSON.stringify(event).slice(0, 80));
+	}
+});
+
+test('an agent-activity event from an older runner is still read', () => {
+	const frame: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'agent-activity', toolUseId: 'a', name: 'Read', input: {file_path: '/x'}}}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(frame)), [frame]);
+});
+
+test('task events carry the subagent origin fields; bad values are rejected', () => {
+	const frame: RunnerFrame = {
+		v: 1,
+		type: 'event',
+		event: {
+			type: 'ui',
+			event: {kind: 'task', id: 'a2', status: 'running', toolUseId: 'tu', taskType: 'local_agent', subagentType: 'Explore', prompt: 'find it', parentTaskId: 'a1', depth: 1},
+		},
+	};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(frame)), [frame]);
+	const bad = (extra: object) => line({v: 1, type: 'event', event: {type: 'ui', event: {kind: 'task', id: 'a2', status: 'running', ...extra}}});
+	for (const extra of [{prompt: 'p'.repeat(16 * 1024 + 1)}, {parentTaskId: ''}, {depth: 1.5}, {subagentType: 's'.repeat(257)}, {prompt: 1}]) {
+		assert.throws(() => createDecoder('toClient').push(bad(extra)), ProtocolError, JSON.stringify(extra).slice(0, 60));
+	}
+});
+
+test('snapshot tasks keep their tool use id and subagent type', () => {
+	const task = {id: 't1', status: 'running', description: 'd', background: false, startedAt: 1, taskType: 'local_agent', toolUseId: 'tu', subagentType: 'Explore'};
+	const snap = {v: 1, type: 'snapshot', state: 'idle', mode: 'default', needsNewSession: false, pendingPermissions: [], tasks: [task], commands: [], queued: [], startedAt: 1};
+	const [back] = createDecoder('toClient').push(line(snap)) as unknown as [{tasks: unknown[]}];
+	assert.deepEqual(back.tasks, [task]);
+	assert.throws(() => createDecoder('toClient').push(line({...snap, tasks: [{...task, toolUseId: 'x'.repeat(257)}]})), ProtocolError);
+});

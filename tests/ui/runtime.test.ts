@@ -14,6 +14,9 @@ const {StatusBar, ListPicker, Frame, Spinner, SPINNERS} = await import(${JSON.st
 const {InputLine} = await import(${JSON.stringify(src('InputLine.tsx'))});
 const {LiveTools} = await import(${JSON.stringify(src('LiveTools.tsx'))});
 const {ChatView} = await import(${JSON.stringify(src('ChatView.tsx'))});
+const {AgentPanel} = await import(${JSON.stringify(src('AgentPanel.tsx'))});
+const {createAgentStore} = await import(${JSON.stringify(src('agent-store.ts'))});
+const {initialAgents, reduceAgents} = await import(${JSON.stringify(src('agents.ts'))});
 const {PermissionPrompt} = await import(${JSON.stringify(src('PermissionPrompt.tsx'))});
 const {QuestionPrompt} = await import(${JSON.stringify(src('QuestionPrompt.tsx'))});
 const {initToolPrompt, initQuestionPrompt, layoutPrompt} = await import(${JSON.stringify(src('prompt-state.ts'))});
@@ -32,6 +35,8 @@ await show('Spinner', React.createElement(Spinner, {frames: SPINNERS.squareCorne
 await show('InputLine', React.createElement(InputLine, {text: 'input-ok', cursor: 2, columns: 80, running: false, maxRows: 5}));
 await show('LiveTools', React.createElement(LiveTools, {tools: [{id: 't', name: 'Bash', input: {command: 'tools-ok'}, elapsedSeconds: 0}], scrub: s => s, maxRows: 4}));
 await show('ChatView', React.createElement(ChatView, {controller: fakeController(), print() {}, close() {}, scrub: s => s}));
+const agentStore = createAgentStore(reduceAgents(initialAgents(), {type: 'ui', event: {kind: 'tool-use', toolUseId: 'a', name: 'Agent', input: {subagent_type: 'panel-ok'}}}));
+await show('AgentPanel', React.createElement(AgentPanel, {store: agentStore, scrub: s => s}));
 const reveal = s => s;
 const layout = layoutPrompt(24, 80);
 const tr = toolReq({input: {command: 'perm-ok'}});
@@ -61,6 +66,7 @@ test('ui components render under tsx run from the host root', () => {
 	assert.match(frames['InputLine'] as string, /input-ok/);
 	assert.match(frames['LiveTools'] as string, /Bash\(tools-ok\)/);
 	assert.match(frames['ChatView'] as string, /idle$/);
+	assert.match(frames['AgentPanel'] as string, /panel-ok/);
 	assert.match(frames['PermissionPrompt'] as string, /perm-ok/);
 	assert.match(frames['QuestionPrompt'] as string, /Which color\?/);
 	assert.match(frames['ChatViewModal'] as string, /modal-ok/);

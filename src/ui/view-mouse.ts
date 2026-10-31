@@ -9,6 +9,7 @@ export type ViewMouseEvent = {
 	shift: boolean;
 	meta: boolean;
 	ctrl: boolean;
+	region?: 'header';
 };
 
 export type MouseListener = (event: ViewMouseEvent) => boolean | void;
@@ -30,6 +31,7 @@ export function validEvent(e: unknown): e is ViewMouseEvent {
 	if (!KINDS.has(v.kind as string) || !BUTTONS.has(v.button as string)) return false;
 	if (v.wheel !== undefined && v.wheel !== 'up' && v.wheel !== 'down') return false;
 	if (v.kind === 'wheel' && v.wheel === undefined) return false;
+	if (v.region !== undefined && v.region !== 'header') return false;
 	if (!isCount(v.x) || !isCount(v.y) || !isCount(v.width) || !isCount(v.height)) return false;
 	return v.x >= 0 && v.x < v.width && v.y >= 0 && v.y < v.height;
 }

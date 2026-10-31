@@ -1,5 +1,5 @@
 import type {SDKMessage} from '@anthropic-ai/claude-agent-sdk';
-import type {ToolPatch, UiEvent} from './events.js';
+import type {AgentItem, ToolPatch, UiEvent} from './events.js';
 import {type Clock, parseRateLimit} from './limits.js';
 
 type Loose = Record<string, unknown>;
@@ -10,12 +10,18 @@ const PATCH_LINES_CAP = 2000;
 const PATCH_TEXT_CAP = 256 * 1024;
 const PATCH_LINE_CAP = 20_000;
 const ERROR_DETAIL_CAP = 300;
+export const AGENT_RESULT_CAP = 16 * 1024;
+export const AGENT_ITEMS_CAP = 64;
+export const AGENT_TEXT_CAP = 64 * 1024;
+export const AGENT_TOTAL_CAP = 512 * 1024;
+const TASK_PROMPT_CAP = 16 * 1024;
+const NAME_CAP = 256;
 
 const isRecord = (v: unknown): v is Loose => typeof v === 'object' && v !== null;
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 
-const resultText = (content: unknown): string => {
+const resultText = (content: unknown, cap = TOOL_RESULT_CAP): string => {
 	let text: string;
 	if (typeof content === 'string') text = content;
 	else if (Array.isArray(content)) {
@@ -25,7 +31,7 @@ const resultText = (content: unknown): string => {
 			.filter(s => s !== '')
 			.join('\n');
 	} else text = '';
-	return text.length > TOOL_RESULT_CAP ? text.slice(0, TOOL_RESULT_CAP) : text;
+	return text.length > cap ? text.slice(0, cap) : text;
 };
 
 const blocks = (msg: Loose): Loose[] => {
@@ -64,6 +70,7 @@ const fromSystem = (msg: Loose): UiEvent[] => {
 			const summary = str(msg['summary']);
 			const toolUseId = str(msg['tool_use_id']);
 			const taskType = str(msg['task_type']);
+			const nested = msg['subtype'] === 'task_notification' ? {} : taskOrigin(msg);
 			return [
 				{
 					kind: 'task',
@@ -74,8 +81,16 @@ const fromSystem = (msg: Loose): UiEvent[] => {
 					...(summary !== undefined && {summary}),
 					...(toolUseId !== undefined && {toolUseId}),
 					...(taskType !== undefined && {taskType}),
+					...nested,
 				},
 			];
+		}
+		case 'task_updated': {
+			const id = str(msg['task_id']);
+			const patch = msg['patch'];
+			if (!id || !isRecord(patch) || patch['is_backgrounded'] !== true) return [];
+			if (patch['status'] !== undefined && patch['status'] !== 'running') return [];
+			return [{kind: 'task', id, status: 'running', background: true}];
 		}
 		case 'local_command_output':
 		case 'informational': {
@@ -111,6 +126,19 @@ const fromSystem = (msg: Loose): UiEvent[] => {
 		default:
 			return [];
 	}
+};
+
+const taskOrigin = (msg: Loose): {subagentType?: string; prompt?: string; parentTaskId?: string; depth?: number} => {
+	const subagentType = str(msg['subagent_type']);
+	const prompt = str(msg['prompt']);
+	const parentTaskId = str(msg['parent_task_id']);
+	const depth = msg['spawn_depth'];
+	return {
+		...(subagentType !== undefined && subagentType.length <= NAME_CAP && {subagentType}),
+		...(prompt !== undefined && {prompt: prompt.slice(0, TASK_PROMPT_CAP)}),
+		...(parentTaskId && parentTaskId.length <= NAME_CAP && {parentTaskId}),
+		...(isCount(depth) && {depth}),
+	};
 };
 
 const fromStream = (msg: Loose): UiEvent[] => {
@@ -165,11 +193,100 @@ const fromAssistant = (msg: Loose): UiEvent[] => {
 	return out;
 };
 
-const agentActivity = (parent: string, msg: Loose): UiEvent[] => {
-	const uses = blocks(msg).filter(b => b['type'] === 'tool_use');
-	const last = uses.at(-1);
-	if (!last) return [];
-	return [{kind: 'agent-activity', toolUseId: parent, name: str(last['name']) ?? '', input: last['input']}];
+const capText = (text: string): string => (text.length > AGENT_TEXT_CAP ? text.slice(0, AGENT_TEXT_CAP) : text);
+
+const wireBytes = (v: unknown): number => Buffer.byteLength(JSON.stringify(v) ?? '');
+
+// An oversized input (a Write of a large file) would push the frame over the runner's cap; the one-liners only need its short fields.
+const capInput = (input: unknown): unknown => {
+	if (wireBytes(input) <= AGENT_TEXT_CAP) return input;
+	if (!isRecord(input) || Array.isArray(input)) return {};
+	const out: Loose = {};
+	for (const [k, v] of Object.entries(input).slice(0, 32)) {
+		if (typeof v === 'string') out[k] = v.slice(0, 1024);
+		else if (typeof v === 'number' || typeof v === 'boolean') out[k] = v;
+	}
+	return out;
+};
+
+const agentAssistantItems = (msg: Loose): AgentItem[] => {
+	const err = str(msg['error']);
+	if (err) {
+		const detail = blocks(msg)
+			.filter(b => b['type'] === 'text')
+			.map(b => str(b['text']) ?? '')
+			.join('')
+			.trim();
+		return [{type: 'text', text: capText(detail !== '' ? `API error (${err}): ${detail}` : `API error (${err})`)}];
+	}
+	const out: AgentItem[] = [];
+	for (const b of blocks(msg)) {
+		if (b['type'] === 'thinking') {
+			const thought = str(b['thinking']);
+			if (thought && thought.trim()) out.push({type: 'thinking', text: capText(thought)});
+		} else if (b['type'] === 'text') {
+			const text = str(b['text']);
+			if (text) out.push({type: 'text', text: capText(text)});
+		} else if (b['type'] === 'tool_use') {
+			const toolUseId = str(b['id']);
+			if (toolUseId && toolUseId.length <= NAME_CAP) {
+				out.push({type: 'tool-use', toolUseId, name: (str(b['name']) ?? '').slice(0, NAME_CAP), input: capInput(b['input'])});
+			}
+		}
+	}
+	return out;
+};
+
+const agentUserItems = (msg: Loose): AgentItem[] => {
+	const out: AgentItem[] = [];
+	const results = blocks(msg).filter(b => b['type'] === 'tool_result');
+	const patch = results.length === 1 ? toolPatch(msg['tool_use_result']) : undefined;
+	for (const b of results) {
+		const toolUseId = str(b['tool_use_id']);
+		if (!toolUseId || toolUseId.length > NAME_CAP) continue;
+		out.push({
+			type: 'tool-result',
+			toolUseId,
+			isError: b['is_error'] === true,
+			text: resultText(b['content'], AGENT_RESULT_CAP),
+			...(patch !== undefined && {patch}),
+		});
+	}
+	return out;
+};
+
+const capItems = (items: AgentItem[]): AgentItem[] => {
+	const out: AgentItem[] = [];
+	let bytes = 0;
+	for (const [i, item] of items.entries()) {
+		const size = wireBytes(item);
+		if ((items.length > AGENT_ITEMS_CAP && out.length === AGENT_ITEMS_CAP - 1) || bytes + size > AGENT_TOTAL_CAP) {
+			out.push({type: 'text', text: `… ${items.length - i} more items`});
+			break;
+		}
+		out.push(item);
+		bytes += size;
+	}
+	return out;
+};
+
+const fromAgent = (parent: string, msg: Loose): UiEvent[] => {
+	if (parent.length > NAME_CAP) return [];
+	let items: AgentItem[];
+	if (msg['type'] === 'assistant') items = agentAssistantItems(msg);
+	else if (msg['type'] === 'user') items = agentUserItems(msg);
+	else return [];
+	if (items.length === 0) return [];
+	const inner = isRecord(msg['message']) ? msg['message'] : {};
+	const model = str(inner['model']);
+	return [
+		{
+			kind: 'agent-message',
+			agentId: parent,
+			...(msg['type'] === 'assistant' && model && model.length <= NAME_CAP && {model}),
+			items: capItems(items),
+		},
+	];
 };
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
@@ -246,7 +363,7 @@ export const normalize = (message: SDKMessage, clock?: Clock): UiEvent[] => {
 	const msg = message as unknown as Loose;
 	if (!isRecord(msg)) return [];
 	const parent = msg['parent_tool_use_id'];
-	if (parent != null) return typeof parent === 'string' && msg['type'] === 'assistant' ? agentActivity(parent, msg) : [];
+	if (parent != null) return typeof parent === 'string' ? fromAgent(parent, msg) : [];
 	switch (msg['type']) {
 		case 'system':
 			return fromSystem(msg);

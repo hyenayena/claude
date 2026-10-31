@@ -20,6 +20,8 @@ import {
 	pickWorkingVerb,
 	workingText,
 	WORKING_VERBS,
+	shortModel,
+	toolOneLiner,
 } from '../../src/ui/present.js';
 
 const SECRET = 'sk-ant-oat-TESTVALUE0123456789abcdef';
@@ -411,4 +413,24 @@ test('secrets and escapes in patch lines never reach the output; a CRLF and a mi
 	assert.ok(onlyConstantEscapes(raw), JSON.stringify(raw));
 	assert.ok(!raw.includes(SECRET) && !raw.includes('\r'));
 	assert.ok(raw.includes('[redacted]'));
+});
+
+test('toolOneLiner names the tool and its main argument without parentheses', () => {
+	assert.equal(toolOneLiner('Read', {file_path: 'foo.ts'}, scrub), 'Read foo.ts');
+	assert.equal(toolOneLiner('Bash', {command: 'npm test'}, scrub), 'Bash npm test');
+	assert.equal(toolOneLiner('Thing', {}, scrub), 'Thing');
+	const shown = toolOneLiner('Bash', {command: `cat ${SECRET}`}, scrub);
+	assert.ok(!shown.includes(SECRET), shown);
+});
+
+test('shortModel shortens Claude model ids and keeps aliases', () => {
+	assert.equal(shortModel('claude-haiku-4-5-20251001', scrub), 'haiku-4.5');
+	assert.equal(shortModel('claude-opus-4-1', scrub), 'opus-4.1');
+	assert.equal(shortModel('claude-sonnet-4-20250514', scrub), 'sonnet-4');
+	assert.equal(shortModel('claude-3-5-sonnet-20241022', scrub), 'sonnet-3.5');
+	for (const alias of ['opus', 'sonnet', 'haiku', 'inherit']) assert.equal(shortModel(alias, scrub), alias);
+	const odd = shortModel(`some-very-long-model-name-${SECRET}`, scrub);
+	assert.ok(stringCells(odd) <= 20, odd);
+	assert.ok(!odd.includes('\u001b'));
+	assert.equal(shortModel(`${SECRET}`, scrub), '[redacted]');
 });

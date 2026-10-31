@@ -175,6 +175,14 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 			tools.set(e.toolUseId, {...tool, activity: {name: e.name, input: e.input}});
 			return {state: {...state, tools}, out: []};
 		}
+		case 'agent-message': {
+			const tool = state.tools.get(e.agentId);
+			const last = e.items.filter(i => i.type === 'tool-use').at(-1);
+			if (!tool || !last || last.type !== 'tool-use') return {state, out: []};
+			const tools = new Map(state.tools);
+			tools.set(e.agentId, {...tool, activity: {name: last.name, input: last.input}});
+			return {state: {...state, tools}, out: []};
+		}
 		case 'tool-progress': {
 			const tool = state.tools.get(e.toolUseId);
 			if (!tool) return {state, out: []};

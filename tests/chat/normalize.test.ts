@@ -112,13 +112,15 @@ test('result variants', () => {
 	assert.equal(max?.kind === 'result' && max.subtype, 'error_max_turns');
 });
 
-test('unknown types, subtypes and sub-agent messages are ignored', () => {
+test('unknown types, subtypes and sub-agent stream or system messages are ignored', () => {
 	assert.deepEqual(n({type: 'rate_limit_event'}), []);
 	assert.deepEqual(n({type: 'permission_denied'}), []);
 	assert.deepEqual(n({type: 'system', subtype: 'hook_started'}), []);
 	assert.deepEqual(n({type: 'brand_new'}), []);
 	assert.deepEqual(n(null), []);
-	assert.deepEqual(n({type: 'assistant', parent_tool_use_id: 'tool1', message: {id: 'm', content: [{type: 'text', text: 'sub'}]}}), []);
+	assert.deepEqual(n({type: 'system', subtype: 'init', session_id: 's', parent_tool_use_id: 'tool1'}), []);
+	assert.deepEqual(n({type: 'tool_progress', tool_use_id: 't', parent_tool_use_id: 'tool1'}), []);
+	assert.deepEqual(n({type: 'assistant', parent_tool_use_id: 7, message: {content: [{type: 'text', text: 'sub'}]}}), []);
 	assert.deepEqual(n({type: 'stream_event', parent_tool_use_id: 'tool1', event: {type: 'content_block_delta', delta: {type: 'text_delta', text: 'x'}}}), []);
 });
 
@@ -135,6 +137,54 @@ test('task_started carries tool_use_id and task_type', () => {
 		n({type: 'system', subtype: 'task_started', task_id: 'bx1', tool_use_id: 'tu1', task_type: 'local_bash', is_backgrounded: false, description: 'sleep'}),
 		[{kind: 'task', id: 'bx1', status: 'running', description: 'sleep', toolUseId: 'tu1', taskType: 'local_bash'}],
 	);
+});
+
+test('task_started and task_progress carry the subagent type, prompt, parent task and depth', () => {
+	assert.deepEqual(
+		n({
+			type: 'system',
+			subtype: 'task_started',
+			task_id: 'a2',
+			tool_use_id: 'tu2',
+			task_type: 'local_agent',
+			description: 'Look around',
+			subagent_type: 'Explore',
+			prompt: 'Find the parser',
+			parent_task_id: 'a1',
+			spawn_depth: 1,
+		}),
+		[
+			{
+				kind: 'task',
+				id: 'a2',
+				status: 'running',
+				description: 'Look around',
+				toolUseId: 'tu2',
+				taskType: 'local_agent',
+				subagentType: 'Explore',
+				prompt: 'Find the parser',
+				parentTaskId: 'a1',
+				depth: 1,
+			},
+		],
+	);
+	const long = n({type: 'system', subtype: 'task_progress', task_id: 'a2', prompt: 'p'.repeat(20_000), spawn_depth: -1, parent_task_id: ''})[0] as {prompt: string; depth?: number; parentTaskId?: string};
+	assert.equal(long.prompt.length, 16 * 1024);
+	assert.equal(long.depth, undefined);
+	assert.equal(long.parentTaskId, undefined);
+	const done = n({type: 'system', subtype: 'task_notification', task_id: 'a2', status: 'completed', subagent_type: 'Explore', prompt: 'x'})[0] as Record<string, unknown>;
+	assert.equal(done['subagentType'], undefined, 'a notification carries no origin fields');
+	assert.equal(done['prompt'], undefined);
+});
+
+test('task_updated reports only a move to the background of a running task', () => {
+	assert.deepEqual(n({type: 'system', subtype: 'task_updated', task_id: 'a1', patch: {is_backgrounded: true}}), [{kind: 'task', id: 'a1', status: 'running', background: true}]);
+	assert.deepEqual(n({type: 'system', subtype: 'task_updated', task_id: 'a1', patch: {is_backgrounded: true, status: 'running'}}), [{kind: 'task', id: 'a1', status: 'running', background: true}]);
+	assert.deepEqual(n({type: 'system', subtype: 'task_updated', task_id: 'a1', patch: {is_backgrounded: true, status: 'completed'}}), []);
+	assert.deepEqual(n({type: 'system', subtype: 'task_updated', task_id: 'a1', patch: {is_backgrounded: false}}), []);
+	assert.deepEqual(n({type: 'system', subtype: 'task_updated', task_id: 'a1', patch: {description: 'x'}}), []);
+	assert.deepEqual(n({type: 'system', subtype: 'task_updated', patch: {is_backgrounded: true}}), []);
+	assert.deepEqual(n({type: 'system', subtype: 'task_updated', task_id: 'a1'}), []);
 });
 
 test('session state and thinking token reports', () => {

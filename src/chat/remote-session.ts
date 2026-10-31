@@ -509,6 +509,8 @@ export class RemoteChatSession implements ChatHandle {
 					startedAt: known?.startedAt ?? Date.now(),
 					...((ev.summary ?? known?.summary) !== undefined && {summary: ev.summary ?? known?.summary}),
 					...((ev.taskType ?? known?.taskType) !== undefined && {taskType: ev.taskType ?? known?.taskType}),
+					...((ev.toolUseId ?? known?.toolUseId) !== undefined && {toolUseId: ev.toolUseId ?? known?.toolUseId}),
+					...((ev.subagentType ?? known?.subagentType) !== undefined && {subagentType: ev.subagentType ?? known?.subagentType}),
 				});
 				if (this._tasks.size > MAX_TASKS) this._tasks.delete(this._tasks.keys().next().value!);
 				return;
