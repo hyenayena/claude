@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import type {SDKMessage} from '@anthropic-ai/claude-agent-sdk';
-import {markLimited} from '../../src/accounts.js';
+import {markLimited, pinnedAccount, useAccount} from '../../src/accounts.js';
 import {createChatEngine, type ChatEngine} from '../../src/chat/engine.js';
 import type {ChatEvent} from '../../src/chat/events.js';
 import {accountsCtx, storeSecret, type CredentialOpts} from '../../src/credentials.js';
@@ -93,7 +93,7 @@ const setup = async () => {
 		await tick();
 		await tick();
 	};
-	return {engine, opts, queries, accountEvents, turn, log};
+	return {engine, opts, queries, events, accountEvents, turn, log};
 };
 
 test('the engine returns to the higher account once its limit has passed, at the next turn only', async () => {
@@ -134,5 +134,71 @@ test('the engine logs no account names for an account return', async () => {
 	for (const r of log.records.filter(r => r.msg === 'account changed' || r.msg === 'account returning')) {
 		assert.ok(!JSON.stringify(r.fields).match(/"(a|b)"/), JSON.stringify(r.fields));
 	}
+	engine.close();
+});
+
+const limitHit = async (q: Q | undefined) => {
+	q?.emit({type: 'system', subtype: 'init', session_id: 'sess-1', model: 'm', apiKeySource: 'env'});
+	q?.emit({type: 'rate_limit_event', rate_limit_info: {status: 'rejected', resetsAt: Math.floor(Date.now() / 1000) + 3600, rateLimitType: 'five_hour', utilization: 1}});
+	q?.emit({type: 'assistant', error: 'rate_limit', message: {id: 'm', content: [{type: 'text', text: "You've hit your limit · resets 3pm"}]}, parent_tool_use_id: null});
+	q?.emit({type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit · resets 3pm", session_id: 'sess-1'});
+	await tick();
+	await tick();
+};
+
+test('a pinned account is used at the next spawn and announced as pinned', async () => {
+	const {engine, opts, accountEvents, turn} = await setup();
+	useAccount(accountsCtx(opts), 'b', {only: false});
+	await turn('one');
+	assert.equal(engine.cred.account, 'b');
+	assert.deepEqual(accountEvents(), [{type: 'account', account: 'b', previous: 'a', reason: 'pinned'}]);
+	engine.close();
+});
+
+test('with a plain pin the chat does not return to a higher account that has reset', async () => {
+	const {engine, opts, queries, turn} = await setup();
+	await turn('one');
+	markLimited(accountsCtx(opts), 'a', Date.now() / 1000 + 3600, 'usage-limit');
+	await turn('two');
+	assert.equal(engine.cred.account, 'b');
+	useAccount(accountsCtx(opts), 'b', {only: false});
+	markLimited(accountsCtx(opts), 'a', 1, 'usage-limit');
+	await turn('three');
+	assert.equal(queries.length, 2);
+	assert.equal(engine.cred.account, 'b');
+	engine.close();
+});
+
+test('a plain pin that hits its limit is cleared and the priority order takes over', async () => {
+	const {engine, opts, queries, events, accountEvents, log} = await setup();
+	useAccount(accountsCtx(opts), 'b', {only: false});
+	engine.session.send('one');
+	await limitHit(queries.at(-1));
+	assert.equal(queries.length, 2);
+	assert.equal(engine.cred.account, 'a');
+	assert.deepEqual(accountEvents().at(-1), {type: 'account', account: 'a', previous: 'b', reason: 'usage-limit'});
+	assert.equal(pinnedAccount(accountsCtx(opts)), undefined);
+	const limited = log.records.find(r => r.msg === 'account limited');
+	assert.equal(limited?.fields?.unpinned, true);
+	assert.ok(!JSON.stringify(limited?.fields).match(/"(a|b)"/));
+	queries.at(-1)?.emit({type: 'system', subtype: 'init', session_id: 'sess-1', model: 'm', apiKeySource: 'env'});
+	queries.at(-1)?.emit({type: 'result', subtype: 'success', is_error: false, result: 'done', session_id: 'sess-1', total_cost_usd: 0.1});
+	await tick();
+	await tick();
+	assert.deepEqual(events.filter(e => e.type === 'turn-end').map(e => e.type === 'turn-end' && e.outcome), ['ok']);
+	engine.close();
+});
+
+test('an only pin never switches at its limit; the turn ends with the limit', async () => {
+	const {engine, opts, queries, events, accountEvents, log} = await setup();
+	useAccount(accountsCtx(opts), 'b', {only: true});
+	engine.session.send('one');
+	await limitHit(queries.at(-1));
+	assert.equal(queries.length, 1);
+	assert.equal(engine.cred.account, 'b');
+	assert.ok(!accountEvents().some(e => e.type === 'account' && e.reason === 'usage-limit'));
+	assert.deepEqual(events.filter(e => e.type === 'turn-end').map(e => e.type === 'turn-end' && e.outcome), ['limit']);
+	assert.deepEqual(pinnedAccount(accountsCtx(opts)), {name: 'b', only: true});
+	assert.equal(log.records.find(r => r.msg === 'account limited')?.fields?.unpinned, false);
 	engine.close();
 });

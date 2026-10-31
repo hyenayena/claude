@@ -7,7 +7,7 @@ import {inspect} from 'node:util';
 import {makeFakeLog, serialized} from './helpers/fake-log.js';
 import {fakeCredentials, seed, type FakeCredentials} from './helpers/fake-credentials.js';
 import {buildEnv, resolvePaths} from '../src/config.js';
-import {chooseAccount, listAccounts, LoginUnsavedError, markLimited, ranksAbove, removeAccount, setOrder, useAccount} from '../src/accounts.js';
+import {adoptLoginAccount, chooseAccount, clearPin, listAccounts, LoginUnsavedError, markLimited, pinnedAccount, ranksAbove, readAuth, removeAccount, setOrder, useAccount} from '../src/accounts.js';
 import {
 	accountsCtx,
 	allSecrets,
@@ -205,7 +205,9 @@ test('order, use and remove change the priority in auth.json; environment accoun
 	assert.equal(chooseAccount(ctx())?.name, 'b');
 	assert.throws(() => setOrder(ctx(), ['nope']), /No account "nope"/);
 	assert.throws(() => setOrder(ctx(), ['a', 'a']), /Each account once/);
-	assert.deepEqual(useAccount(ctx(), 'env-key').map(a => a.name), ['env-key', 'b', 'a']);
+	assert.deepEqual(useAccount(ctx(), 'env-key', {only: false}).map(a => a.name), ['b', 'a', 'env-key'], 'use keeps the order');
+	assert.equal(chooseAccount(ctx())?.name, 'env-key');
+	assert.deepEqual(setOrder(ctx(), ['env-key']).map(a => a.name), ['env-key', 'b', 'a']);
 	await assert.rejects(removeAccount(ctx(), opts.vault!, 'env-key'), /unset the variable/);
 	await removeAccount(ctx(), opts.vault!, 'b');
 	assert.ok(!fake.accounts.has('b'));
@@ -245,7 +247,7 @@ test('a limited account is skipped until its reset; when all are limited, the fi
 	assert.equal(chooseAccount(ctx())?.name, 'b', 'all limited: b resets first');
 	now += 3601_000;
 	assert.equal(chooseAccount(ctx())?.name, 'a', 'a is back after its reset');
-	useAccount(ctx(), 'b');
+	useAccount(ctx(), 'b', {only: false});
 	assert.equal(listAccounts(ctx()).find(a => a.name === 'b')!.limitedUntil, undefined, '"use" forgets the limit');
 	const c = prepareCredential(opts);
 	assert.deepEqual({...shape(c), v: c.value}, {kind: 'oauth', source: 'stored', account: 'b', v: OAUTH2});
@@ -370,8 +372,102 @@ test('a stored token or key reaches Claude Code as the matching variable only', 
 	assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, OAUTH);
 	assert.ok(!('ANTHROPIC_API_KEY' in env));
 	const key = await storeSecret(opts, KEY);
-	useAccount(accountsCtx(opts), key.name);
+	useAccount(accountsCtx(opts), key.name, {only: false});
 	env = buildEnv({CLAUDE_CODE_OAUTH_TOKEN: 'stale'}, resolvePaths(dataDir), await requireCredential(opts));
 	assert.equal(env.ANTHROPIC_API_KEY, KEY);
 	assert.ok(!('CLAUDE_CODE_OAUTH_TOKEN' in env));
+});
+
+test('readAuth keeps a well-formed pin only', async () => {
+	const {dataDir} = await setup();
+	const write = (pin: unknown) => writeFile(join(dataDir, 'auth.json'), JSON.stringify({v: 1, order: [], limits: {}, pin}));
+	await write({name: 'work', only: true});
+	assert.deepEqual(readAuth(dataDir).pin, {name: 'work', only: true});
+	for (const bad of ['work', {name: 'Work', only: false}, {name: 'work'}, {name: 'work', only: 'yes'}, {name: 7, only: false}, null]) {
+		await write(bad);
+		assert.equal(readAuth(dataDir).pin, undefined, JSON.stringify(bad));
+	}
+});
+
+test('a pin wins over the order until its limit; an only pin stays even when limited', async () => {
+	let now = 1_000_000_000_000;
+	const {opts} = await setup({}, fakeCredentials(), () => now);
+	await storeSecret(opts, OAUTH, 'a');
+	await storeSecret(opts, OAUTH2, 'b');
+	const ctx = () => accountsCtx(opts);
+	assert.equal(pinnedAccount(ctx()), undefined);
+	useAccount(ctx(), 'b', {only: false});
+	assert.deepEqual(pinnedAccount(ctx()), {name: 'b', only: false});
+	assert.equal(chooseAccount(ctx())?.name, 'b');
+	assert.deepEqual(listAccounts(ctx()).map(a => a.name), ['a', 'b'], 'the order stays');
+	assert.deepEqual(markLimited(ctx(), 'a', now / 1000 + 60, 'usage-limit'), {unpinned: false});
+	assert.equal(chooseAccount(ctx())?.name, 'b');
+	assert.deepEqual(markLimited(ctx(), 'b', now / 1000 + 3600, 'usage-limit'), {unpinned: true});
+	assert.equal(pinnedAccount(ctx()), undefined, 'a plain pin ends at its limit');
+	now += 120_000;
+	assert.equal(chooseAccount(ctx())?.name, 'a', 'the priority order takes over');
+
+	useAccount(ctx(), 'b', {only: true});
+	assert.equal(listAccounts(ctx()).find(a => a.name === 'b')!.limitedUntil, undefined, 'use forgets the limit');
+	assert.deepEqual(markLimited(ctx(), 'b', now / 1000 + 3600, 'billing'), {unpinned: false});
+	assert.deepEqual(pinnedAccount(ctx()), {name: 'b', only: true});
+	const chosen = chooseAccount(ctx());
+	assert.equal(chosen?.name, 'b', 'an only pin is kept at its limit');
+	assert.ok(chosen?.limitedUntil !== undefined);
+
+	useAccount(ctx(), 'b', {only: false});
+	markLimited(ctx(), 'b', now / 1000 + 3600, 'usage-limit');
+	useAccount(ctx(), 'b', {only: false});
+	assert.equal(chooseAccount(ctx())?.name, 'b', 'pinning again clears the limit');
+});
+
+test('a pin on an unusable or missing account is ignored and pruned', async () => {
+	const fake = fakeCredentials();
+	seed(fake, 'a', 'anthropic-token', OAUTH);
+	seed(fake, 'b', 'anthropic-token', OAUTH2);
+	const {opts, dataDir} = await setup({ANTHROPIC_API_KEY: KEY}, fake);
+	await opts.vault!.load();
+	const ctx = () => accountsCtx(opts);
+	assert.throws(() => useAccount(ctx(), 'nope', {only: false}), /^Error: No account "nope"; "claude auth status" lists them$/);
+	useAccount(ctx(), 'b', {only: false});
+	fake.accounts.get('b')!.disabled = true;
+	await opts.vault!.load();
+	assert.equal(pinnedAccount(ctx()), undefined);
+	assert.equal(chooseAccount(ctx())?.name, 'env-key');
+	assert.throws(() => useAccount(ctx(), 'b', {only: false}), /^Error: Account "b" cannot be used right now \(disabled\)$/);
+	setOrder(ctx(), ['a']);
+	assert.equal(readAuth(dataDir).pin, undefined, 'saving prunes a pin on a disabled account');
+
+	useAccount(ctx(), 'env-key', {only: true});
+	assert.deepEqual(readAuth(dataDir).pin, {name: 'env-key', only: true}, 'an environment account can be pinned');
+	const unset = {...opts, env: {}};
+	assert.equal(pinnedAccount(accountsCtx(unset)), undefined, 'the variable is gone');
+	assert.equal(chooseAccount(accountsCtx(unset))?.name, 'a');
+	setOrder(accountsCtx(unset), ['a']);
+	assert.deepEqual(readAuth(dataDir).pin, {name: 'env-key', only: true}, 'environment accounts count as known');
+
+	await removeAccount(ctx(), opts.vault!, 'a');
+	useAccount(ctx(), 'env-key', {only: false});
+	assert.ok(clearPin(ctx()));
+	assert.equal(clearPin(ctx()), false);
+	assert.equal(readAuth(dataDir).pin, undefined);
+});
+
+test('removing the pinned account drops the pin; renaming its login moves it', async () => {
+	const fake = fakeCredentials();
+	seedLogin(fake, 'alice', ALICE);
+	seed(fake, 'b', 'anthropic-token', OAUTH);
+	const {opts, dataDir} = await setup({}, fake);
+	await opts.vault!.load();
+	const ctx = () => accountsCtx(opts);
+	useAccount(ctx(), 'alice', {only: true});
+	await adoptLoginAccount(ctx(), opts.vault!, 'work', slotOf(ALICE));
+	assert.deepEqual(readAuth(dataDir).pin, {name: 'work', only: true});
+	assert.equal(chooseAccount(ctx())?.name, 'work');
+	useAccount(ctx(), 'b', {only: false});
+	await removeAccount(ctx(), opts.vault!, 'b');
+	assert.equal(readAuth(dataDir).pin, undefined);
+	useAccount(ctx(), 'work', {only: false});
+	await removeAccount(ctx(), opts.vault!, 'work');
+	assert.equal(readAuth(dataDir).pin, undefined);
 });

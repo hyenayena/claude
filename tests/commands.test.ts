@@ -309,7 +309,7 @@ test('auth status lists the accounts in priority order, by name only', async () 
 test('the removed auth subcommands are gone', async () => {
 	const {command, ctx} = await setup();
 	for (const sub of ['accounts', 'list', 'key']) {
-		await assert.rejects(async () => command.run(['auth', sub], ctx), {message: 'Usage: claude auth <status|login|add|order|use|remove|logout>'}, sub);
+		await assert.rejects(async () => command.run(['auth', sub], ctx), {message: 'Usage: claude auth <status|login|add|order|use|auto|remove|logout>'}, sub);
 	}
 	await assert.rejects(async () => command.run(['auth', 'login', '--token'], ctx), /Unknown option "--token"/);
 });
@@ -324,11 +324,44 @@ test('auth order, use and remove manage the priority', async () => {
 	await assert.rejects(async () => command.run(['auth', 'order', 'nope'], ctx), /No account "nope"/);
 	printed.length = 0;
 	await command.run(['auth', 'use', 'env-key'], ctx);
-	assert.equal(printed[0], '"env-key" is first now and its limit is forgotten; new turns use it.');
+	assert.equal(printed[0], '"env-key" is pinned: new turns use it until it reaches its limit, then the priority order takes over. "claude auth auto" unpins it.');
 	printed.length = 0;
 	await command.run(['auth', 'remove', 'work'], ctx);
 	assert.equal(printed[0], 'Account "work" removed.');
 	await assert.rejects(async () => command.run(['auth', 'remove', 'env-key'], ctx), /unset the variable/);
+});
+
+test('auth use pins an account, --only keeps it at its limit, auth auto unpins', async () => {
+	const {command, ctx, printed, store} = await setup();
+	await store(OAUTH, 'work');
+	await command.run(['auth', 'use', 'work', '--only'], ctx);
+	assert.equal(printed[0], '"work" is pinned (only): new turns always use it, even at its limit. "claude auth auto" unpins it.');
+	assert.match(printed[1]!, /^  1\. env-key  /);
+	assert.match(printed[2]!, /^▸ 2\. \*work    /);
+	printed.length = 0;
+	await command.run(['auth', 'status'], ctx);
+	assert.equal(printed[1], 'Pinned: "work" only (never switches at a limit; "claude auth auto" unpins)');
+	printed.length = 0;
+	await command.run(['auth', 'use', 'work'], ctx);
+	printed.length = 0;
+	await command.run(['auth', 'status'], ctx);
+	assert.equal(printed[1], 'Pinned: "work" (until its limit; "claude auth auto" unpins)');
+	printed.length = 0;
+	await command.run(['auth', 'auto'], ctx);
+	assert.equal(printed[0], 'No account is pinned any more; new turns use the priority order.');
+	assert.match(printed[1]!, /^▸ 1\. env-key  /);
+	assert.match(printed[2]!, /^  2\. work     /);
+	printed.length = 0;
+	await command.run(['auth', 'auto'], ctx);
+	assert.equal(printed[0], 'No account was pinned.');
+	printed.length = 0;
+	await command.run(['auth', 'status'], ctx);
+	assert.ok(!printed.some(l => l.startsWith('Pinned:')));
+	for (const bad of [['use'], ['use', 'work', '--force'], ['use', '--only'], ['use', 'work', 'env-key']]) {
+		await assert.rejects(async () => command.run(['auth', ...bad], ctx), {message: 'Usage: claude auth use <account> [--only]'}, bad.join(' '));
+	}
+	await assert.rejects(async () => command.run(['auth', 'auto', 'work'], ctx), {message: 'Usage: claude auth auto'});
+	await assert.rejects(async () => command.run(['auth', 'use', 'nope'], ctx), {message: 'No account "nope"; "claude auth status" lists them'});
 });
 
 const secrets = (...values: string[]) => {
@@ -347,7 +380,7 @@ test('auth add stores a pasted key or token in the account module, tells them ap
 	printed.length = 0;
 	await command.run(['auth', 'add', '--name', 'spare'], ctx);
 	assert.equal(printed[0], 'Subscription token stored as account "spare" in the account module (account list shows it).');
-	assert.equal(printed[1], 'Note: "spare" is used after account "key": API key (stored in the account module) in priority order; "claude auth use spare" puts it first.');
+	assert.equal(printed[1], 'Note: "spare" is used after account "key": API key (stored in the account module) in priority order; "claude auth order spare" puts it first.');
 	assert.ok(printed.some(l => l.startsWith('Notice:')));
 	assert.deepEqual(s.labels, ['API key (sk-ant-…) or subscription token (sk-ant-oat…)', 'API key (sk-ant-…) or subscription token (sk-ant-oat…)']);
 	assert.deepEqual(storedIn(fake), [['key', 'anthropic-key', KEY], ['spare', 'anthropic-token', OAUTH]]);
@@ -523,7 +556,7 @@ test('claude code reports a failing exit and waits for Enter only outside headle
 test('auth without or with unknown subcommand fails with usage', async () => {
 	const {command, ctx} = await setup();
 	for (const args of [['auth'], ['auth', 'nope']]) {
-		await assert.rejects(async () => command.run(args, ctx), {message: 'Usage: claude auth <status|login|add|order|use|remove|logout>'});
+		await assert.rejects(async () => command.run(args, ctx), {message: 'Usage: claude auth <status|login|add|order|use|auto|remove|logout>'});
 	}
 });
 
@@ -594,7 +627,7 @@ test('commands carry agent policies', async () => {
 	for (const n of ['ask', 'chat', 'new', 'resume', 'rewind', 'fork', 'copy', 'memory', 'code']) assert.equal(by[n], 'deny', n);
 	const auth = command.subcommands!.find(s => s.name === 'auth')!;
 	const authBy = Object.fromEntries(auth.subcommands!.map(s => [s.name, s.agent]));
-	assert.deepEqual(authBy, {status: 'confirm', login: 'deny', add: 'confirm', order: 'confirm', use: 'confirm', remove: 'confirm', logout: 'confirm'});
+	assert.deepEqual(authBy, {status: 'confirm', login: 'deny', add: 'confirm', order: 'confirm', use: 'confirm', auto: 'confirm', remove: 'confirm', logout: 'confirm'});
 	const reconnect = command.subcommands!.find(s => s.name === 'mcp')!.subcommands!.find(s => s.name === 'reconnect')!;
 	assert.equal(reconnect.agent, undefined);
 });
@@ -967,7 +1000,7 @@ test('auth lists its subcommands with their own usages and options', () => {
 	const command = createClaudeCommand({dataDir: '/nonexistent', env: {}, loadQuery: async () => (() => []) as unknown as QueryFn});
 	const auth = command.subcommands!.find(x => x.name === 'auth')!;
 	assert.equal(auth.usage, 'claude auth <subcommand>');
-	assert.deepEqual(auth.subcommands!.map(s => s.name), ['status', 'login', 'add', 'order', 'use', 'remove', 'logout']);
+	assert.deepEqual(auth.subcommands!.map(s => s.name), ['status', 'login', 'add', 'order', 'use', 'auto', 'remove', 'logout']);
 	const login = auth.subcommands!.find(s => s.name === 'login')!;
 	assert.deepEqual(login.options!.map(o => o.name), ['--name', '--console', '--claudeai', '--sso', '--email']);
 	assert.ok(!JSON.stringify(auth).match(/--token|--from-file/));

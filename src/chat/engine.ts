@@ -3,7 +3,7 @@ import {withPatch, type ChatTuning, type LivePatch} from '../chat-prefs.js';
 import {additionalDirsOf, buildChatOptions, buildEnv, ensureMdLinks, resolvePaths, restrictDataDirs, withProjects, type ClaudePaths} from '../config.js';
 import type {LoginProbe} from '../claude-login.js';
 import {accountsCtx, liveSecrets, loginSyncOf, makeRedactor, prepareCredential, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
-import {chooseAccount, LoginUnsavedError, markLimited, prepareAccount, ranksAbove} from '../accounts.js';
+import {chooseAccount, LoginUnsavedError, markLimited, pinnedAccount, prepareAccount, ranksAbove} from '../accounts.js';
 import {degradedReason, type ClaudeVault} from '../vault.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {buildScope} from '../policy.js';
@@ -268,9 +268,9 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			const now = Date.now() / 1000;
 			const until =
 				reason === 'billing' ? now + BILLING_HOLD_S : rateLimit?.resetsAt !== undefined && rateLimit.resetsAt > now ? rateLimit.resetsAt : now + LIMIT_HOLD_S;
-			markLimited(ctx, current, until, reason);
+			const {unpinned} = markLimited(ctx, current, until, reason);
 			const next = chooseAccount(ctx);
-			log.info('account limited', {reason, next: next !== undefined && next.limitedUntil === undefined && next.name !== current});
+			log.info('account limited', {reason, unpinned, next: next !== undefined && next.limitedUntil === undefined && next.name !== current});
 			if (!next || next.limitedUntil !== undefined || next.name === current) return undefined;
 			try {
 				prepareAccount(ctx, next.name);
@@ -307,7 +307,9 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			}
 			const previous = shown;
 			shown = now;
-			return {account: now, previous, reason: ranksAbove(accountsCtx(credOpts), now, previous) ? 'restored' : 'changed'};
+			const ctx = accountsCtx(credOpts);
+			const reason = pinnedAccount(ctx)?.name === now ? 'pinned' : ranksAbove(ctx, now, previous) ? 'restored' : 'changed';
+			return {account: now, previous, reason};
 		},
 	});
 	created = session;

@@ -397,7 +397,9 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 					? `Back on account "${out.account}" (higher priority, available again).`
 					: out.reason === 'changed'
 						? `Now on account "${out.account}" instead of "${out.previous}".`
-						: `Account "${out.previous}" ${out.reason === 'billing' ? 'cannot be billed' : 'reached its usage limit'}; continuing with "${out.account}".`,
+						: out.reason === 'pinned'
+							? `Now on account "${out.account}" (chosen with "claude auth use").`
+							: `Account "${out.previous}" ${out.reason === 'billing' ? 'cannot be billed' : 'reached its usage limit'}; continuing with "${out.account}".`,
 				scrub,
 			);
 		case 'thinking':
@@ -578,6 +580,7 @@ export function tasksBarText(tasks: readonly {status: string; background: boolea
 export function statusBarText(
 	s: {
 		account?: string;
+		pin?: string;
 		model: string | undefined;
 		sessionId: string | undefined;
 		phase: Phase;
@@ -588,7 +591,8 @@ export function statusBarText(
 	scrub: Scrub,
 ): string {
 	const parts: string[] = [];
-	if (s.account) parts.push(scrub(s.account));
+	if (s.pin !== undefined && s.pin !== s.account) parts.push(s.account ? `${scrub(s.account)} -> *${scrub(s.pin)}` : `*${scrub(s.pin)}`);
+	else if (s.account) parts.push(`${s.pin !== undefined ? '*' : ''}${scrub(s.account)}`);
 	if (s.sessionId) parts.push(scrub(s.sessionId).slice(0, 8));
 	if (s.model) parts.push(scrub(s.model));
 	if (s.limit) parts.push(scrub(s.limit));

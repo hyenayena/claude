@@ -99,8 +99,8 @@ test('an account switch event crosses the protocol; an unknown reason does not',
 	assert.throws(() => createDecoder('toClient').push(line(broken)), ProtocolError);
 });
 
-test('restored and changed account events cross the protocol', () => {
-	for (const reason of ['restored', 'changed'] as const) {
+test('restored, changed and pinned account events cross the protocol', () => {
+	for (const reason of ['restored', 'changed', 'pinned'] as const) {
 		const frame: RunnerFrame = {v: 1, type: 'event', event: {type: 'account', account: 'work', previous: 'spare', reason}};
 		const [back] = createDecoder('toClient').push(encodeFrame(frame));
 		assert.deepEqual(back, frame);

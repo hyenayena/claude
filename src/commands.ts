@@ -5,7 +5,7 @@ import type {ArgumentDoc, BuildInfo, Command, CommandContext, DevFailure, Logger
 import {createFixCommand} from './fix.js';
 import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
 import {CONTINUE_TEXT, isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
-import {type AccountView, adoptLoginAccount, checkAccountName, chooseAccount, listAccounts, LoginUnsavedError, markLimited, newAccountNameProblem, removeAccount, setOrder, suggestSecretName, useAccount} from './accounts.js';
+import {type AccountView, adoptLoginAccount, checkAccountName, chooseAccount, clearPin, listAccounts, LoginUnsavedError, markLimited, newAccountNameProblem, pinnedAccount, removeAccount, setOrder, suggestSecretName, useAccount} from './accounts.js';
 import {snapshotLogin} from './login-slot.js';
 import {legacyCount} from './migrate.js';
 import {degradedReason, type ClaudeVault} from './vault.js';
@@ -103,7 +103,7 @@ const USAGE = 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|
 const RESUME_USAGE = 'Usage: claude resume [session]';
 const NO_CHAT = 'No chat is open. Claude Code commands run in the open chat; start one with "chat".';
 const ASK_USAGE = 'Usage: claude ask [--new] <text…>';
-const AUTH_USAGE = 'Usage: claude auth <status|login|add|order|use|remove|logout>';
+const AUTH_USAGE = 'Usage: claude auth <status|login|add|order|use|auto|remove|logout>';
 const ORDER_USAGE = 'Usage: claude auth order <account>…';
 const ADD_USAGE = 'Usage: claude auth add [--name <account>]';
 const CHAT_NEW_USAGE = 'Usage: chat [model]';
@@ -434,9 +434,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const now = Date.now() / 1000;
 		const resetsAt = err instanceof TurnFailure ? err.rateLimit?.resetsAt : undefined;
 		const until = kind === 'billing' ? now + BILLING_HOLD_S : resetsAt !== undefined && resetsAt > now ? resetsAt : now + LIMIT_HOLD_S;
-		markLimited(ctx, cred.account, until, kind);
+		const {unpinned} = markLimited(ctx, cred.account, until, kind);
 		const next = chooseAccount(ctx);
-		log.info('account limited', {reason: kind, next: next !== undefined && next.limitedUntil === undefined && next.name !== cred.account});
+		log.info('account limited', {reason: kind, unpinned, next: next !== undefined && next.limitedUntil === undefined && next.name !== cred.account});
 		if (!next || next.limitedUntil !== undefined || next.name === cred.account) return undefined;
 		try {
 			return prepareCredential(credOpts);
@@ -591,6 +591,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		peek: peekLock,
 		...(deps.spawnRunner && {spawnRunner: deps.spawnRunner}),
 		...deps.chatTiming,
+		onPin: refresh => {
+			refreshOpenPin = refresh;
+		},
 		onLive: apply => {
 			applyOpenChat = apply;
 		},
@@ -605,6 +608,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	let openHandle: {close: () => void; done: Promise<void>} | undefined;
 	let openSession: ChatHandle | undefined;
 	let applyOpenChat: ((patch: LivePatch) => void) | undefined;
+	let refreshOpenPin: (() => void) | undefined;
 	let deliverToOpenChat: ((text: string) => void) | undefined;
 
 	let inputMode: 'normal' | 'vim' = 'normal';
@@ -913,8 +917,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	const accountLines = (list: AccountView[]): string[] => {
 		const chosen = chooseAccount(accountsCtx(credOpts));
+		const pinned = pinnedAccount(accountsCtx(credOpts))?.name;
 		const scrub = makeScrub(redactor());
-		const width = Math.max(...list.map(a => a.name.length));
+		const width = Math.max(...list.map(a => a.name.length)) + (pinned !== undefined ? 1 : 0);
 		return list.map((a, i) => {
 			const what =
 				a.type === 'login'
@@ -929,7 +934,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 						? `${a.reason === 'billing' ? 'billing failed' : 'limit reached'}, back at ${formatReset(a.limitedUntil, systemClock)}`
 						: '';
 			const mark = chosen?.name === a.name ? '▸' : ' ';
-			return scrub(`${mark} ${i + 1}. ${a.name.padEnd(width)}  ${what}${state ? `  · ${state}` : ''}`);
+			return scrub(`${mark} ${i + 1}. ${`${pinned === a.name ? '*' : ''}${a.name}`.padEnd(width)}  ${what}${state ? `  · ${state}` : ''}`);
 		});
 	};
 
@@ -945,6 +950,14 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			ctx.print(noCredentials(vault.current()));
 		} else {
 			ctx.print(`Active credential: ${describeCredential(active)}`);
+			const pin = pinnedAccount(accountsCtx(credOpts));
+			if (pin) {
+				ctx.print(
+					pin.only
+						? `Pinned: "${pin.name}" only (never switches at a limit; "claude auth auto" unpins)`
+						: `Pinned: "${pin.name}" (until its limit; "claude auth auto" unpins)`,
+				);
+			}
 			ctx.print('Accounts, in priority order (▸ is used next; when it reaches its limit, the next one takes over):');
 			for (const line of accountLines(list)) ctx.print(line);
 			const reason = degradedReason(status);
@@ -967,12 +980,30 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	const authUse = async (args: string[], ctx: CommandContext): Promise<void> => {
-		if (args.length !== 1) throw new Error('Usage: claude auth use <account>');
+		const names = args.filter(a => a !== '--only');
+		if (names.length !== 1 || names[0]!.startsWith('--')) throw new Error('Usage: claude auth use <account> [--only]');
+		const only = names.length !== args.length;
+		const name = names[0]!;
 		await loadBundle(credOpts);
-		const list = useAccount(accountsCtx(credOpts), args[0]!);
-		log.info('auth use', {count: list.length});
-		ctx.print(`"${args[0]}" is first now and its limit is forgotten; new turns use it.`);
+		const list = useAccount(accountsCtx(credOpts), name, {only});
+		log.info('auth use', {count: list.length, only});
+		ctx.print(
+			only
+				? `"${name}" is pinned (only): new turns always use it, even at its limit. "claude auth auto" unpins it.`
+				: `"${name}" is pinned: new turns use it until it reaches its limit, then the priority order takes over. "claude auth auto" unpins it.`,
+		);
 		for (const line of accountLines(list)) ctx.print(line);
+		refreshOpenPin?.();
+	};
+
+	const authAuto = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length > 0) throw new Error('Usage: claude auth auto');
+		await loadBundle(credOpts);
+		const cleared = clearPin(accountsCtx(credOpts));
+		log.info('auth auto', {cleared});
+		ctx.print(cleared ? 'No account is pinned any more; new turns use the priority order.' : 'No account was pinned.');
+		for (const line of accountLines(listAccounts(accountsCtx(credOpts)))) ctx.print(line);
+		refreshOpenPin?.();
 	};
 
 	const authRemove = async (args: string[], ctx: CommandContext): Promise<void> => {
@@ -983,6 +1014,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		ctx.print(`Account "${args[0]}" removed${wasInstalled ? '; Claude Code is signed out of it' : ''}.`);
 		if (chatOpen) ctx.print('The open chat keeps its current account until Claude Code restarts.');
 		await printActive(ctx);
+		refreshOpenPin?.();
 	};
 
 	const promptSecret =
@@ -1051,7 +1083,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const noteIfShadowed = async (name: string, ctx: CommandContext): Promise<void> => {
 		const active = await resolveCredential(credOpts);
 		if (active && active.account !== name) {
-			ctx.print(`Note: "${name}" is used after ${describeCredential(active)} in priority order; "claude auth use ${name}" puts it first.`);
+			ctx.print(`Note: "${name}" is used after ${describeCredential(active)} in priority order; "claude auth order ${name}" puts it first.`);
 		}
 	};
 
@@ -1223,6 +1255,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				return authOrder(rest, ctx);
 			case 'use':
 				return authUse(rest, ctx);
+			case 'auto':
+				return authAuto(rest, ctx);
 			case 'remove':
 				return authRemove(rest, ctx);
 			case 'add':
@@ -1434,11 +1468,13 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				},
 				{
 					name: 'use',
-					usage: 'claude auth use <account>',
-					description: 'Put an account first and forget its limit',
+					usage: 'claude auth use <account> [--only]',
+					description: 'Pin an account for new turns and forget its limit',
 					agent: 'confirm',
 					args: [ACCOUNT_ARG],
+					options: [{name: '--only', description: 'Keep it even at its limit; never switch to another account'}],
 				},
+				{name: 'auto', usage: 'claude auth auto', description: 'Unpin the account; new turns follow the priority order', agent: 'confirm'},
 				{name: 'remove', usage: 'claude auth remove <account>', description: 'Remove an account', agent: 'confirm', args: [ACCOUNT_ARG]},
 				{name: 'logout', usage: 'claude auth logout', description: 'Sign Claude Code out of its current login', agent: 'confirm'},
 			],

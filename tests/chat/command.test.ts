@@ -4,7 +4,7 @@ import {mkdir, mkdtemp, readFile, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
-import type {CommandContext} from '../../../../src/api.js';
+import type {Command, CommandContext} from '../../../../src/api.js';
 import {CHAT_DISALLOWED_TOOLS, CHAT_TOOLS} from '../../src/policy.js';
 import {createClaudeCommand, createClaudeCommands, type ClaudeDeps} from '../../src/commands.js';
 import {resolvePaths} from '../../src/config.js';
@@ -1262,4 +1262,39 @@ test('claude send hands the message to the open chat view, or starts a chat when
 	await assert.rejects(s.command.run(['send', 'x'], s.ctx), /Wait for the answer/);
 	await assert.rejects(s.command.run(['send'], s.ctx), /Usage: claude send <message…>/);
 	release();
+});
+
+test('auth use and auth auto refresh the pin watch of the open chat', async () => {
+	let claude: Command | undefined;
+	const seen: Array<string | undefined> = [];
+	let notified = 0;
+	const s = await setupChat({
+		run: async p => {
+			const pin = p.pin!;
+			pin.subscribe(() => notified++);
+			seen.push(pin.current());
+			await claude!.run(['auth', 'use', 'env-token'], s.ctx);
+			seen.push(pin.current());
+			await claude!.run(['auth', 'auto'], s.ctx);
+			seen.push(pin.current());
+		},
+	});
+	const cmds = createClaudeCommands({
+		dataDir: s.dataDir,
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+		loadChatQuery: async () => s.q.query,
+		loadUi: async () => ({
+			createChatElement: p => {
+				s.props.push(p);
+				return {};
+			},
+		}),
+	});
+	claude = cmds[1]!;
+	await cmds[0]!.run([], s.ctx);
+	assert.deepEqual(seen, [undefined, 'env-token', undefined]);
+	assert.equal(notified, 2);
 });

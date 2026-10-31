@@ -43,7 +43,7 @@ export type ChatSessionOptions = {
 	idleCloseMs?: number;
 	onUsageLimit?: (p: {reason: 'usage-limit' | 'billing'; rateLimit?: RateLimitInfo}) => {from: string; to: string} | undefined;
 	preferAccount?: () => boolean;
-	spawnedAccount?: () => {account: string; previous: string; reason: 'restored' | 'changed'} | undefined;
+	spawnedAccount?: () => {account: string; previous: string; reason: 'restored' | 'changed' | 'pinned'} | undefined;
 };
 
 export const CONTINUE_TEXT = 'Continue from where you stopped; the previous attempt was cut off by a usage limit.';

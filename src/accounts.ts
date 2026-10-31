@@ -18,7 +18,8 @@ export type Unusable = 'disabled' | 'reserved' | 'missing';
 export type AccountView = Account & {limitedUntil?: number; reason?: LimitReason; installed?: boolean; unusable?: Unusable};
 
 type Limit = {until: number; reason: LimitReason};
-export type AuthState = {v: 1; order: string[]; limits: Record<string, Limit>; installed?: string; migrated?: {at: string; accounts: number}};
+export type Pin = {name: string; only: boolean};
+export type AuthState = {v: 1; order: string[]; limits: Record<string, Limit>; installed?: string; pin?: Pin; migrated?: {at: string; accounts: number}};
 
 export const ENV_KEY = 'env-key';
 export const ENV_TOKEN = 'env-token';
@@ -81,6 +82,8 @@ export function readAuth(dataDir: string): AuthState {
 		}
 	}
 	if (typeof raw.installed === 'string' && ACCOUNT_NAME_RE.test(raw.installed)) out.installed = raw.installed;
+	const p = raw.pin;
+	if (isRecord(p) && typeof p.name === 'string' && ACCOUNT_NAME_RE.test(p.name) && typeof p.only === 'boolean') out.pin = {name: p.name, only: p.only};
 	const m = raw.migrated;
 	if (isRecord(m) && typeof m.at === 'string' && typeof m.accounts === 'number') out.migrated = {at: m.at.slice(0, 40), accounts: m.accounts};
 	return out;
@@ -98,6 +101,11 @@ function saveAuth(ctx: AccountsCtx, f: AuthState): void {
 		const known = new Set([ENV_KEY, ENV_TOKEN, ...ctx.bundle.entries.map(e => e.name)]);
 		f.order = f.order.filter(n => known.has(n));
 		for (const n of Object.keys(f.limits)) if (!known.has(n)) delete f.limits[n];
+		const pin = f.pin;
+		if (pin) {
+			const entry = ctx.bundle.entries.find(e => e.name === pin.name);
+			if (!known.has(pin.name) || (entry && unusableOf(entry) !== undefined)) delete f.pin;
+		}
 	}
 	writeAuth(ctx.dataDir, f);
 }
@@ -143,8 +151,17 @@ export function listAccounts(ctx: AccountsCtx): AccountView[] {
 	});
 }
 
+export function pinnedAccount(ctx: AccountsCtx): Pin | undefined {
+	const pin = readAuth(ctx.dataDir).pin;
+	if (!pin) return undefined;
+	return listAccounts(ctx).some(a => a.name === pin.name && a.unusable === undefined) ? pin : undefined;
+}
+
 export function chooseAccount(ctx: AccountsCtx): AccountView | undefined {
+	const pin = pinnedAccount(ctx);
 	const list = listAccounts(ctx).filter(a => a.unusable === undefined);
+	const pinned = pin && list.find(a => a.name === pin.name);
+	if (pinned && (pinned.limitedUntil === undefined || pin.only)) return pinned;
 	return list.find(a => a.limitedUntil === undefined) ?? [...list].sort((a, b) => (a.limitedUntil ?? 0) - (b.limitedUntil ?? 0))[0];
 }
 
@@ -195,12 +212,15 @@ export function prepareAccount(ctx: AccountsCtx, name: string): Prepared {
 	return {account: publicOf(entry), kind: entry.kind, value: '', login: true};
 }
 
-export function markLimited(ctx: AccountsCtx, name: string, until: number, reason: LimitReason): void {
+export function markLimited(ctx: AccountsCtx, name: string, until: number, reason: LimitReason): {unpinned: boolean} {
 	const f = readAuth(ctx.dataDir);
 	f.limits[name] = {until: Math.floor(until), reason};
 	const now = nowSec(ctx);
 	for (const [n, l] of Object.entries(f.limits)) if (l.until <= now) delete f.limits[n];
+	const unpinned = f.pin?.name === name && !f.pin.only;
+	if (unpinned) delete f.pin;
 	saveAuth(ctx, f);
+	return {unpinned};
 }
 
 export const secretType = (value: string): 'key' | 'token' => {
@@ -238,12 +258,23 @@ export function setOrder(ctx: AccountsCtx, names: string[]): AccountView[] {
 	return listAccounts(ctx);
 }
 
-export function useAccount(ctx: AccountsCtx, name: string): AccountView[] {
-	setOrder(ctx, [name]);
+export function useAccount(ctx: AccountsCtx, name: string, opts: {only: boolean}): AccountView[] {
+	const a = listAccounts(ctx).find(x => x.name === name);
+	if (!a) throw new Error(`No account "${name}"; "claude auth status" lists them`);
+	if (a.unusable) throw new Error(`Account "${name}" cannot be used right now (${a.unusable})`);
 	const f = readAuth(ctx.dataDir);
+	f.pin = {name, only: opts.only};
 	delete f.limits[name];
 	saveAuth(ctx, f);
 	return listAccounts(ctx);
+}
+
+export function clearPin(ctx: AccountsCtx): boolean {
+	const f = readAuth(ctx.dataDir);
+	if (!f.pin) return false;
+	delete f.pin;
+	saveAuth(ctx, f);
+	return true;
 }
 
 const withBundle = (ctx: AccountsCtx, vault: ClaudeVault): AccountsCtx => ({...ctx, bundle: vault.current()});
@@ -260,7 +291,10 @@ export async function adoptLoginAccount(ctx: AccountsCtx, vault: ClaudeVault, ra
 	const same = storedEntries(vault.current()).find(e => e.type === 'login' && e.slot !== undefined && sameClaudeAccount(e.slot, slot));
 	const account = await vault.adoptLogin(rawName, slot);
 	const f = readAuth(ctx.dataDir);
-	if (same && same.name !== account.name) f.order = f.order.map(n => (n === same.name ? account.name : n));
+	if (same && same.name !== account.name) {
+		f.order = f.order.map(n => (n === same.name ? account.name : n));
+		if (f.pin?.name === same.name) f.pin = {...f.pin, name: account.name};
+	}
 	f.installed = account.name;
 	delete f.limits[account.name];
 	saveAuth(withBundle(ctx, vault), f);
@@ -273,6 +307,7 @@ export async function removeAccount(ctx: AccountsCtx, vault: ClaudeVault, name: 
 	const f = readAuth(ctx.dataDir);
 	f.order = f.order.filter(n => n !== name);
 	delete f.limits[name];
+	if (f.pin?.name === name) delete f.pin;
 	const wasInstalled = f.installed === name;
 	if (wasInstalled) {
 		delete f.installed;

@@ -36,7 +36,7 @@ test('no subcommand shows core help, or throws the usage error without it', asyn
 	await command.run([], {...ctx, showHelp: path => paths.push(path)});
 	await command.run(['auth'], {...ctx, showHelp: path => paths.push(path)});
 	assert.deepEqual(paths, [undefined, ['auth']]);
-	await assert.rejects(async () => command.run(['auth'], ctx), {message: 'Usage: claude auth <status|login|add|order|use|remove|logout>'});
+	await assert.rejects(async () => command.run(['auth'], ctx), {message: 'Usage: claude auth <status|login|add|order|use|auto|remove|logout>'});
 });
 
 test('claude declares no help subcommand of its own', async () => {

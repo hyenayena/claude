@@ -73,6 +73,7 @@ export interface ChatViewProps {
 	inputMode?: () => 'normal' | 'vim';
 	reveal?: (s: string) => string;
 	projectDir?: string;
+	pin?: {current(): string | undefined; subscribe(cb: () => void): () => void};
 	armMs?: number;
 	host?: ViewHost;
 	clock?: Clock;
@@ -449,6 +450,9 @@ export function ChatView(props: ChatViewProps) {
 		edRef.current = editorReduce(emptyEditor, {type: 'insert', text});
 		submit();
 	}, [props.initialSend, submit]);
+
+	const pinWatch = props.pin;
+	useEffect(() => pinWatch?.subscribe(render), [pinWatch, render]);
 
 	const onInbox = props.onInbox;
 	useEffect(() => {
@@ -898,9 +902,11 @@ export function ChatView(props: ChatViewProps) {
 		if (resetsAt === undefined) return;
 		return armExpiry(resetsAt * 1000, clock, render);
 	}, [resetsAt, clock, render]);
+	const pin = props.pin?.current();
 	const barStatusFull = statusBarText(
 		{
 			...(t.account !== undefined && {account: t.account}),
+			...(pin !== undefined && {pin}),
 			model: t.model,
 			sessionId: t.sessionId,
 			phase: t.phase,

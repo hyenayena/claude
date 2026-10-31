@@ -175,6 +175,11 @@ test('status bar: account, truncated session, then model, limit, phase and runni
 	);
 	assert.equal(statusBarText({model: undefined, sessionId: undefined, phase: 'idle', tasks: ''}, scrub), 'idle');
 	assert.equal(statusBarText({...base, account: 'work'}, scrub), 'work · 01234567 · m · running');
+	assert.equal(statusBarText({...base, account: 'work', pin: 'work'}, scrub), '*work · 01234567 · m · running');
+	assert.equal(statusBarText({...base, account: 'work'}, scrub), 'work · 01234567 · m · running');
+	assert.equal(statusBarText({...base, account: 'work', pin: 'spare'}, scrub), 'work -> *spare · 01234567 · m · running');
+	assert.equal(statusBarText({...base, pin: 'spare'}, scrub), '*spare · 01234567 · m · running');
+	assert.equal(statusBarText(base, scrub), '01234567 · m · running');
 });
 
 test('status line texts', () => {
@@ -260,6 +265,8 @@ test('account notices name the reason: back on a higher account, or another acco
 	const changed = formatOut({kind: 'account', account: 'spare', previous: 'work', reason: 'changed'}, scrub);
 	assert.equal(plain(changed), 'Now on account "spare" instead of "work".');
 	assert.match(plain(formatOut({kind: 'account', account: 'spare', previous: 'work', reason: 'billing'}, scrub)), /cannot be billed/);
+	const pinned = formatOut({kind: 'account', account: 'spare', previous: 'work', reason: 'pinned'}, scrub);
+	assert.equal(plain(pinned), 'Now on account "spare" (chosen with "claude auth use").');
 });
 
 const TABLE = '| name | description | notes |\n| --- | --- | --- |\n| alpha | a rather long description of alpha | first |\n| beta | another long description for beta | second |';

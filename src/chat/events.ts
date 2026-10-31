@@ -38,7 +38,7 @@ export type UiEvent =
 export type TurnOutcome = 'ok' | 'error' | 'interrupted' | 'timeout' | 'max-turns' | 'limit' | 'context';
 export type ChatState = 'idle' | 'running' | 'closed';
 
-export const ACCOUNT_REASONS = ['usage-limit', 'billing', 'restored', 'changed'] as const;
+export const ACCOUNT_REASONS = ['usage-limit', 'billing', 'restored', 'changed', 'pinned'] as const;
 export type AccountReason = (typeof ACCOUNT_REASONS)[number];
 
 export type ChatEvent =

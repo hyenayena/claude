@@ -3,8 +3,9 @@ import {tuningFromState, type ChatTuning, type LivePatch} from '../chat-prefs.js
 import type {LoginProbe} from '../claude-login.js';
 import {clockTime} from '../clock-time.js';
 import {resolvePaths, type ClaudePaths} from '../config.js';
-import {liveSecrets, loginSyncOf, makeRedactor, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
+import {accountsCtx, liveSecrets, loginSyncOf, makeRedactor, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
 import type {ClaudeVault} from '../vault.js';
+import {pinnedAccount} from '../accounts.js';
 import {clip, errClass, noopLog} from '../log.js';
 import type {spawnRunner} from '../runner/spawn.js';
 import type {LockInfo} from '../sessions/lock.js';
@@ -25,6 +26,7 @@ import {ensureShellTmp} from './shell-tmp.js';
 import {transcriptFile} from './title.js';
 import {createShellPanel} from './shell-panel.js';
 import {createShellWatch, type ShellWatch} from './shell-watch.js';
+import {createPinWatch} from './pin-watch.js';
 
 export const CHAT_USAGE = 'Usage: claude chat [--new]';
 export const NEEDS_MOUNT_MESSAGE = '"claude chat" needs an interface that can show views';
@@ -65,6 +67,7 @@ export type ChatRunDeps = {
 	onMount?: (close: () => void) => void;
 	onSession?: (session: ChatHandle | undefined) => void;
 	onLive?: (apply: ((patch: LivePatch) => void) | undefined) => void;
+	onPin?: (refresh: (() => void) | undefined) => void;
 	onInbox?: (deliver: ((text: string) => void) | undefined) => void;
 	onRulesChanged?: () => void;
 	shellTmp?: () => string;
@@ -394,6 +397,11 @@ const runLocked = async (
 
 	const shellWatch = createShellWatch({root: shellRoot, sessionId: () => session.sessionId, scrub, log});
 	const unfeed = session.subscribe(e => shellWatch.feed(e));
+	const credOpts: CredentialOpts = {env: deps.env, dataDir: deps.dataDir, log, ...(deps.vault && {vault: deps.vault})};
+	const pin = createPinWatch(() => pinnedAccount(accountsCtx(credOpts))?.name);
+	const unpin = session.subscribe(e => {
+		if (e.type === 'account' || e.type === 'turn-end') pin.refresh();
+	});
 	let chatHost: ViewHost | undefined;
 	const shellPanel =
 		ctx.mount && chatUi.createShellElement
@@ -413,6 +421,7 @@ const runLocked = async (
 
 	deps.onSession?.(session);
 	deps.onLive?.(applyLive);
+	deps.onPin?.(pin.refresh);
 	try {
 		let printHistory: ((text: string, options?: PrintOptions) => void) | undefined;
 		const mounted = mount(control => {
@@ -427,6 +436,7 @@ const runLocked = async (
 				scrub,
 				reveal,
 				projectDir: paths.projectDir,
+				pin,
 				...(initialModel !== undefined && {initialModel}),
 				...(cred.account !== undefined && {initialAccount: cred.account}),
 				...(resume && !source.fork && {initialSessionId: resume}),
@@ -472,8 +482,10 @@ const runLocked = async (
 		const model = session.model;
 		deps.onSession?.(undefined);
 		deps.onLive?.(undefined);
+		deps.onPin?.(undefined);
 		shellPanel?.dispose();
 		unfeed();
+		unpin();
 		shellWatch.close();
 		source.close();
 		unregister?.();

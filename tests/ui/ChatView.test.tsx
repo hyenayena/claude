@@ -3,6 +3,7 @@ import type {PrintOptions} from '../../../../src/api.js';
 import {afterEach, test} from 'node:test';
 import React, {createElement} from 'react';
 void React;
+import {createPinWatch} from '../../src/chat/pin-watch.js';
 import {makeScrub} from '../../src/chat/scrub.js';
 import type {PermissionRequest} from '../../src/chat/permission.js';
 import {makeReveal} from '../../src/chat/reveal.js';
@@ -1505,4 +1506,26 @@ test('an account return and a change are printed as notices', async () => {
 	assert.equal(t.printed.length, 2);
 	assert.match(t.printed[0] as string, /Back on account "work"/);
 	assert.match(t.printed[1] as string, /Now on account "spare" instead of "work"/);
+});
+
+test('the status bar shows the pinned account at once and stars it once the chat runs on it', async () => {
+	let pinned: string | undefined;
+	const pin = createPinWatch(() => pinned);
+	const t = setup(undefined, {initialAccount: 'work', pin});
+	await t.settle();
+	assert.match(t.lastFrame(), /(^|\s)work · /m);
+	assert.doesNotMatch(t.lastFrame(), /\*/);
+	pinned = 'spare';
+	pin.refresh();
+	await t.settle();
+	assert.match(t.lastFrame(), /work -> \*spare · /);
+	t.controller.emit({type: 'account', account: 'spare', previous: 'work', reason: 'pinned'});
+	await t.settle();
+	assert.match(t.lastFrame(), /(^|\s)\*spare · /m);
+	assert.doesNotMatch(t.lastFrame(), /->/);
+	pinned = undefined;
+	pin.refresh();
+	await t.settle();
+	assert.match(t.lastFrame(), /(^|\s)spare · /m);
+	assert.doesNotMatch(t.lastFrame(), /\*/);
 });
