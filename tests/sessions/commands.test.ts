@@ -3,7 +3,7 @@ import {mkdtempSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
-import type {CommandContext} from '../../../../src/api.js';
+import type {CommandContext, StyledBlock, StyledSpan} from '../../../../src/api.js';
 import {createClaudeCommand} from '../../src/commands.js';
 import {serveControl} from '../../src/sessions/control.js';
 import {acquireLock} from '../../src/sessions/lock.js';
@@ -87,4 +87,34 @@ test('an ask holds the lock while it runs and releases it afterwards', async () 
 	await command.run(['ask', 'hi'], ctx);
 	assert.equal(during, true);
 	assert.ok(acquireLock({dir, kind: 'ask', where: 'local'}).ok);
+});
+
+test('sessions prints one styled line with toned parts', async () => {
+	const {command, sessionDir, ctx} = make();
+	const got = acquireLock({dir: sessionDir, kind: 'chat', where: 'runner'});
+	assert.ok(got.ok);
+	const server = await serveControl({
+		dir: sessionDir,
+		handlers: {
+			status: () => ({kind: 'chat', where: 'runner', state: 'running', title: 'Fix it', sessionId8: 'abcdef01', startedAt: 1, pending: 2, queued: 0, attached: true}),
+			stop: () => {},
+		},
+	});
+	const blocks: StyledBlock[] = [];
+	await command.run(['sessions'], {...ctx, printStyled: b => blocks.push(...b)});
+	await server.close();
+	got.lock.release();
+	assert.equal(blocks.length, 1);
+	const b = blocks[0]!;
+	assert.equal(b.kind, 'line');
+	const spans = (b.kind === 'line' ? b.spans : []).filter((s): s is StyledSpan => typeof s !== 'string');
+	const find = (text: string) => spans.find(s => s.text === text);
+	assert.deepEqual(find('chat (background)'), {text: 'chat (background)', bold: true});
+	assert.equal(find('running')?.tone, 'ok');
+	assert.equal(find('abcdef01')?.tone, 'accent');
+	assert.equal(find('2 permissions waiting')?.tone, 'warn');
+	assert.equal(find('attached')?.tone, 'ok');
+	assert.equal(find(' · ')?.tone, 'muted');
+	assert.ok(spans.find(s => s.text.startsWith('pid '))?.tone === 'muted');
+	assert.match(spans.map(s => s.text).join(''), /^chat \(background\) · running · "Fix it" · session abcdef01 · since \d\d:\d\d · pid \d+ · 2 permissions waiting · attached$/);
 });

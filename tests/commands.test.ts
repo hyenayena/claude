@@ -4,7 +4,8 @@ import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
-import type {CommandContext} from '../../../src/api.js';
+import type {CommandContext, StyledBlock, StyledSpan} from '../../../src/api.js';
+import {markLimited} from '../src/accounts.js';
 import {storeSecret} from '../src/credentials.js';
 import {hostVault} from '../src/vault.js';
 import {fakeCredentials, type FakeCredentials} from './helpers/fake-credentials.js';
@@ -51,7 +52,7 @@ const setup = async (over: Partial<ClaudeDeps> & {env?: NodeJS.ProcessEnv; fake?
 	const vault = over.vault ?? hostVault(fake);
 	const store = (value: string, name?: string) => storeSecret({env: {}, dataDir, vault}, value, name);
 	const printed: string[] = [];
-	const ctx: CommandContext = {print: t => printed.push(t), clear: () => {}, exit: () => {}};
+	const ctx: CommandContext = {print: t => printed.push(...t.split('\n')), clear: () => {}, exit: () => {}};
 	const q = makeQuery(() => okMsgs(SID1, 'answer'));
 	const command = createClaudeCommand({
 		dataDir,
@@ -337,7 +338,7 @@ test('auth use pins an account, --only keeps it at its limit, auth auto unpins',
 	await command.run(['auth', 'use', 'work', '--only'], ctx);
 	assert.equal(printed[0], '"work" is pinned (only): new turns always use it, even at its limit. "claude auth auto" unpins it.');
 	assert.match(printed[1]!, /^  1\. env-key  /);
-	assert.match(printed[2]!, /^▸ 2\. \*work    /);
+	assert.match(printed[2]!, /^▸ 2\. \*work  /);
 	printed.length = 0;
 	await command.run(['auth', 'status'], ctx);
 	assert.equal(printed[1], 'Pinned: "work" only (never switches at a limit; "claude auth auto" unpins)');
@@ -350,7 +351,7 @@ test('auth use pins an account, --only keeps it at its limit, auth auto unpins',
 	await command.run(['auth', 'auto'], ctx);
 	assert.equal(printed[0], 'No account is pinned any more; new turns use the priority order.');
 	assert.match(printed[1]!, /^▸ 1\. env-key  /);
-	assert.match(printed[2]!, /^  2\. work     /);
+	assert.match(printed[2]!, /^  2\. work  /);
 	printed.length = 0;
 	await command.run(['auth', 'auto'], ctx);
 	assert.equal(printed[0], 'No account was pinned.');
@@ -362,6 +363,54 @@ test('auth use pins an account, --only keeps it at its limit, auth auto unpins',
 	}
 	await assert.rejects(async () => command.run(['auth', 'auto', 'work'], ctx), {message: 'Usage: claude auth auto'});
 	await assert.rejects(async () => command.run(['auth', 'use', 'nope'], ctx), {message: 'No account "nope"; "claude auth status" lists them'});
+});
+
+test('auth status prints styled blocks: bold labels, a head-less account table with toned marks and states', async () => {
+	const {command, ctx, dataDir, store, vault} = await setup();
+	await store(OAUTH, 'work');
+	await command.run(['auth', 'use', 'work', '--only'], ctx);
+	markLimited({dataDir, configDir: join(dataDir, 'config'), env: {}, bundle: vault.current()}, 'env-key', Date.now() / 1000 + 3600, 'usage-limit');
+	const blocks: StyledBlock[] = [];
+	const styled: CommandContext = {...ctx, printStyled: b => blocks.push(...b)};
+	await command.run(['auth', 'status'], styled);
+	assert.deepEqual(
+		blocks.map(b => b.kind),
+		['line', 'line', 'line', 'table'],
+	);
+	const [active, pinned, head, tbl] = blocks as [StyledBlock & {kind: 'line'}, StyledBlock & {kind: 'line'}, StyledBlock & {kind: 'line'}, StyledBlock & {kind: 'table'}];
+	assert.deepEqual(active.spans[0], {text: 'Active credential:', bold: true});
+	assert.equal((pinned.spans[0] as StyledSpan).tone, 'accent');
+	assert.deepEqual(head.spans[0], {text: 'Accounts, in priority order', bold: true});
+	assert.equal((head.spans[1] as StyledSpan).tone, 'muted');
+	assert.equal(head.spans.map(s => (typeof s === 'string' ? s : s.text)).join(''), ACCOUNTS_HEAD);
+	assert.equal(tbl.head, undefined);
+	const first = tbl.rows[0]![0] as StyledSpan[];
+	const second = tbl.rows[1]![0] as StyledSpan[];
+	assert.deepEqual(first[0], {text: ' '});
+	assert.deepEqual(first.at(-1), {text: 'env-key', bold: true});
+	assert.deepEqual(second[0], {text: '▸', tone: 'accent'});
+	assert.deepEqual(second.at(-2), {text: '*', tone: 'accent'});
+	assert.deepEqual(second.at(-1), {text: 'work', bold: true});
+	assert.equal((tbl.rows[0]![2] as StyledSpan).tone, 'warn');
+	assert.match((tbl.rows[0]![2] as StyledSpan).text, /^limit reached, back at /);
+	assert.equal(tbl.rows[1]![2], '');
+	assert.ok(!JSON.stringify(blocks).includes(OAUTH) && !JSON.stringify(blocks).includes(KEY));
+});
+
+test('auth order prints the account table through printStyled', async () => {
+	const {command, ctx, store} = await setup();
+	await store(OAUTH, 'work');
+	const blocks: StyledBlock[] = [];
+	await command.run(['auth', 'order', 'work'], {...ctx, printStyled: b => blocks.push(...b)});
+	assert.deepEqual(blocks.map(b => b.kind), ['table']);
+});
+
+test('auth status without credentials prints a warn text block', async () => {
+	const {command, ctx} = await setup({env: {}});
+	const blocks: StyledBlock[] = [];
+	await command.run(['auth', 'status'], {...ctx, printStyled: b => blocks.push(...b)});
+	assert.equal(blocks[0]?.kind, 'text');
+	assert.equal((blocks[0] as {tone?: string}).tone, 'warn');
 });
 
 const secrets = (...values: string[]) => {

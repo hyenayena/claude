@@ -1,7 +1,8 @@
 import {accessSync, constants} from 'node:fs';
 import {appendFile, mkdir, writeFile} from 'node:fs/promises';
 import path, {join} from 'node:path';
-import type {ArgumentDoc, BuildInfo, Command, CommandContext, DevFailure, Logger, OptionDoc, SettingsTab, Subcommand} from '../../../src/api.js';
+import type {ArgumentDoc, BuildInfo, Command, CommandContext, DevFailure, Logger, OptionDoc, SettingsTab, SpanTone, StyledBlock, StyledCell, StyledSpan, Subcommand} from '../../../src/api.js';
+import {line, printStyled, span, table, textBlock} from './kit.js';
 import {createFixCommand} from './fix.js';
 import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
 import {CONTINUE_TEXT, isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
@@ -44,7 +45,7 @@ import {clip, errClass, noopLog} from './log.js';
 import {openChat, runChat, type ChatOpen, type ChatRoute, type ChatRouteRequest, type ChatRunDeps, type ChatUi} from './chat/command.js';
 import {makeScrub} from './chat/scrub.js';
 import {runTurn, TurnFailure} from './session.js';
-import {queryStatus, serveControl, type ControlServer, type ControlStatus} from './sessions/control.js';
+import {queryStatus, serveControl, type ControlServer, type ControlStatus, type SessionState} from './sessions/control.js';
 import {acquireLock, isSessionId, readHolder, type LockInfo, type LockKind, type SessionLock} from './sessions/lock.js';
 import {createTurnLock, type TurnLock} from './sessions/turn-lock.js';
 import {stopHolder} from './sessions/stop.js';
@@ -921,27 +922,33 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		return dir !== undefined && readHolder(dir).holder !== undefined;
 	};
 
-	const accountLines = (list: AccountView[]): string[] => {
+	const accountTable = (list: AccountView[]): StyledBlock => {
 		const chosen = chooseAccount(accountsCtx(credOpts));
 		const pinned = pinnedAccount(accountsCtx(credOpts))?.name;
 		const scrub = makeScrub(redactor());
-		const width = Math.max(...list.map(a => a.name.length)) + (pinned !== undefined ? 1 : 0);
-		return list.map((a, i) => {
-			const what =
-				a.type === 'login'
-					? `${TYPE_LABELS.login} (${a.kind === 'oauth' ? 'subscription' : 'Console'}${a.email ? `, ${a.email}` : ''}; stored in the account module)`
-					: a.type === 'env'
-						? `${a.kind === 'api-key' ? 'ANTHROPIC_API_KEY' : 'CLAUDE_CODE_OAUTH_TOKEN'} (${TYPE_LABELS.env})`
-						: `${TYPE_LABELS[a.type]} (stored in the account module)`;
-			const state =
-				a.unusable !== undefined
-					? UNUSABLE_LABELS[a.unusable]
-					: a.limitedUntil !== undefined
-						? `${a.reason === 'billing' ? 'billing failed' : 'limit reached'}, back at ${formatReset(a.limitedUntil, systemClock)}`
-						: '';
-			const mark = chosen?.name === a.name ? '▸' : ' ';
-			return scrub(`${mark} ${i + 1}. ${`${pinned === a.name ? '*' : ''}${a.name}`.padEnd(width)}  ${what}${state ? `  · ${state}` : ''}`);
-		});
+		return table(
+			list.map((a, i) => {
+				const what =
+					a.type === 'login'
+						? `${TYPE_LABELS.login} (${a.kind === 'oauth' ? 'subscription' : 'Console'}${a.email ? `, ${a.email}` : ''}; stored in the account module)`
+						: a.type === 'env'
+							? `${a.kind === 'api-key' ? 'ANTHROPIC_API_KEY' : 'CLAUDE_CODE_OAUTH_TOKEN'} (${TYPE_LABELS.env})`
+							: `${TYPE_LABELS[a.type]} (stored in the account module)`;
+				const state: StyledCell =
+					a.unusable !== undefined
+						? span(scrub(UNUSABLE_LABELS[a.unusable]), {tone: 'error'})
+						: a.limitedUntil !== undefined
+							? span(scrub(`${a.reason === 'billing' ? 'billing failed' : 'limit reached'}, back at ${formatReset(a.limitedUntil, systemClock)}`), {tone: 'warn'})
+							: '';
+				const head: StyledSpan[] = [
+					chosen?.name === a.name ? span('▸', {tone: 'accent'}) : span(' '),
+					span(` ${i + 1}. `),
+					...(pinned === a.name ? [span('*', {tone: 'accent'})] : []),
+					span(scrub(a.name), {bold: true}),
+				];
+				return [head, scrub(what), state];
+			}),
+		);
 	};
 
 	const authStatus = async (args: string[], ctx: CommandContext): Promise<void> => {
@@ -952,28 +959,35 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const active = await resolveCredential(credOpts);
 		const status = vault.current().status;
 		log.info('auth status', {kind: active?.kind, source: active?.source, accounts: list.length, limited: list.filter(a => a.limitedUntil !== undefined).length});
+		const blocks: StyledBlock[] = [];
 		if (!active) {
-			ctx.print(noCredentials(vault.current()));
+			blocks.push(textBlock(noCredentials(vault.current()), 'warn'));
 		} else {
-			ctx.print(`Active credential: ${describeCredential(active)}`);
+			blocks.push(line(span('Active credential:', {bold: true}), ` ${describeCredential(active)}`));
 			const pin = pinnedAccount(accountsCtx(credOpts));
 			if (pin) {
-				ctx.print(
-					pin.only
-						? `Pinned: "${pin.name}" only (never switches at a limit; "claude auth auto" unpins)`
-						: `Pinned: "${pin.name}" (until its limit; "claude auth auto" unpins)`,
+				blocks.push(
+					line(
+						span(
+							pin.only
+								? `Pinned: "${pin.name}" only (never switches at a limit; "claude auth auto" unpins)`
+								: `Pinned: "${pin.name}" (until its limit; "claude auth auto" unpins)`,
+							{tone: 'accent'},
+						),
+					),
 				);
 			}
-			ctx.print('Accounts, in priority order (▸ is used next; when it reaches its limit, the next one takes over):');
-			for (const line of accountLines(list)) ctx.print(line);
+			blocks.push(line(span('Accounts, in priority order', {bold: true}), span(' (▸ is used next; when it reaches its limit, the next one takes over):', {tone: 'muted'})));
+			blocks.push(accountTable(list));
 			const reason = degradedReason(status);
-			if (reason) ctx.print(reason);
+			if (reason) blocks.push(line(span(reason, {tone: 'warn'})));
 		}
 		const waiting = status === 'ok' ? 0 : legacyCount(dataDir, join(dataDir, 'config'));
 		if (waiting > 0) {
-			ctx.print(`${waiting} stored Claude account${waiting === 1 ? '' : 's'} wait${waiting === 1 ? 's' : ''} to move to the account module: account grant claude`);
+			blocks.push(line(span(`${waiting} stored Claude account${waiting === 1 ? '' : 's'} wait${waiting === 1 ? 's' : ''} to move to the account module: account grant claude`, {tone: 'warn'})));
 		}
-		for (const warning of await inspectFileMode(dataDir)) ctx.print(`Warning: ${warning}`);
+		for (const warning of await inspectFileMode(dataDir)) blocks.push(line(span(`Warning: ${warning}`, {tone: 'warn'})));
+		printStyled(ctx, blocks);
 		if (active) await showNoticeOnce(active, ctx);
 	};
 
@@ -982,7 +996,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await loadBundle(credOpts);
 		const list = setOrder(accountsCtx(credOpts), args);
 		log.info('auth order', {count: list.length});
-		for (const line of accountLines(list)) ctx.print(line);
+		printStyled(ctx, [accountTable(list)]);
 	};
 
 	const authUse = async (args: string[], ctx: CommandContext): Promise<void> => {
@@ -993,12 +1007,14 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await loadBundle(credOpts);
 		const list = useAccount(accountsCtx(credOpts), name, {only});
 		log.info('auth use', {count: list.length, only});
-		ctx.print(
-			only
-				? `"${name}" is pinned (only): new turns always use it, even at its limit. "claude auth auto" unpins it.`
-				: `"${name}" is pinned: new turns use it until it reaches its limit, then the priority order takes over. "claude auth auto" unpins it.`,
-		);
-		for (const line of accountLines(list)) ctx.print(line);
+		printStyled(ctx, [
+			line(
+				only
+					? `"${name}" is pinned (only): new turns always use it, even at its limit. "claude auth auto" unpins it.`
+					: `"${name}" is pinned: new turns use it until it reaches its limit, then the priority order takes over. "claude auth auto" unpins it.`,
+			),
+			accountTable(list),
+		]);
 		refreshOpenPin?.();
 	};
 
@@ -1007,8 +1023,10 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await loadBundle(credOpts);
 		const cleared = clearPin(accountsCtx(credOpts));
 		log.info('auth auto', {cleared});
-		ctx.print(cleared ? 'No account is pinned any more; new turns use the priority order.' : 'No account was pinned.');
-		for (const line of accountLines(listAccounts(accountsCtx(credOpts)))) ctx.print(line);
+		printStyled(ctx, [
+			line(cleared ? 'No account is pinned any more; new turns use the priority order.' : 'No account was pinned.'),
+			accountTable(listAccounts(accountsCtx(credOpts))),
+		]);
 		refreshOpenPin?.();
 	};
 
@@ -1291,18 +1309,19 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const scrub = makeScrub(s => s);
 		const status = await queryStatus(dir).catch(() => undefined);
 		const id8 = status?.sessionId8 ?? holder.sessionId?.slice(0, 8);
-		const parts = [
-			`${holder.kind} (${holder.where === 'runner' ? 'background' : 'in yena'})`,
-			status ? status.state : 'unresponsive',
-			...(status?.title ? [`"${scrub(status.title).slice(0, 80)}"`] : []),
-			...(id8 ? [`session ${id8}`] : []),
-			`since ${clockTime(holder.startedAt)}`,
-			`pid ${holder.pid}`,
+		const stateTone: Record<SessionState, SpanTone> = {running: 'ok', idle: 'muted', 'waiting-permission': 'warn'};
+		const parts: (StyledSpan | StyledSpan[])[] = [
+			span(`${holder.kind} (${holder.where === 'runner' ? 'background' : 'in yena'})`, {bold: true}),
+			status ? span(status.state, {tone: stateTone[status.state]}) : span('unresponsive', {tone: 'error'}),
+			...(status?.title ? [span(`"${scrub(status.title).slice(0, 80)}"`)] : []),
+			...(id8 ? [[span('session '), span(id8, {tone: 'accent'})]] : []),
+			span(`since ${clockTime(holder.startedAt)}`, {tone: 'muted'}),
+			span(`pid ${holder.pid}`, {tone: 'muted'}),
 		];
-		if (status && status.pending > 0) parts.push(`${status.pending} permission${status.pending === 1 ? '' : 's'} waiting`);
-		if (status && status.queued > 0) parts.push(`${status.queued} queued`);
-		if (status && holder.where === 'runner') parts.push(status.attached ? 'attached' : 'detached');
-		ctx.print(parts.join(' · '));
+		if (status && status.pending > 0) parts.push(span(`${status.pending} permission${status.pending === 1 ? '' : 's'} waiting`, {tone: 'warn'}));
+		if (status && status.queued > 0) parts.push(span(`${status.queued} queued`));
+		if (status && holder.where === 'runner') parts.push(status.attached ? span('attached', {tone: 'ok'}) : span('detached', {tone: 'muted'}));
+		printStyled(ctx, [line(...parts.flatMap((p, i) => [...(i > 0 ? [span(' · ', {tone: 'muted'})] : []), ...(Array.isArray(p) ? p : [p])]))]);
 	};
 
 	const tierCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
