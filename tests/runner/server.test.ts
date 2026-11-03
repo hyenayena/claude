@@ -810,3 +810,24 @@ test('keep on: a background task that ends with no turn after it lets the runner
 	r.session.emit({type: 'ui', event: {kind: 'task', id: 'b1', status: 'stopped', background: true}});
 	assert.equal((await r.handle.done).reason, 'idle');
 });
+
+test('setTier goes to the engine and the snapshot carries the route', async () => {
+	const tiers: string[] = [];
+	const session = Object.assign(new FakeSession(), {route: {outcome: 'pinned', main: 'max', pinned: 'max'}});
+	const r = await rig({
+		createEngine: async () => ({
+			session: session as unknown as RunnerSession,
+			applyLive: () => undefined,
+			setTier: tier => void tiers.push(tier),
+			close: () => session.close(),
+			flush: async () => undefined,
+		}),
+	});
+	const c = await attach(r);
+	const snap = c.frames.find(f => f.type === 'snapshot') as Extract<RunnerFrame, {type: 'snapshot'}>;
+	assert.deepEqual(snap.route, {outcome: 'pinned', main: 'max', pinned: 'max'});
+	c.send({type: 'setTier', tier: 'strong'});
+	c.send({type: 'setTier', tier: 'auto'});
+	await until(() => tiers.length === 2, 'setTier dispatched');
+	assert.deepEqual(tiers, ['strong', 'auto']);
+});

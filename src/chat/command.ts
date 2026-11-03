@@ -19,6 +19,7 @@ import {editInEditor} from '../terminal.js';
 import type {ConsoleSdk} from './console-tools.js';
 import {createChatEngine, type EngineDeps} from './engine.js';
 import type {ChatHandle} from './handle.js';
+import type {Tier} from './tiers.js';
 import {RemoteChatSession} from './remote-session.js';
 import {makeReveal} from './reveal.js';
 import {makeScrub} from './scrub.js';
@@ -67,6 +68,7 @@ export type ChatRunDeps = {
 	onMount?: (close: () => void) => void;
 	onSession?: (session: ChatHandle | undefined) => void;
 	onLive?: (apply: ((patch: LivePatch) => void) | undefined) => void;
+	onTier?: (set: ((tier: Tier | 'auto') => void) | undefined) => void;
 	onPin?: (refresh: (() => void) | undefined) => void;
 	onInbox?: (deliver: ((text: string) => void) | undefined) => void;
 	onRulesChanged?: () => void;
@@ -171,6 +173,7 @@ type ViewSource = {
 	resume: string | undefined;
 	shellRoot: string | undefined;
 	applyLive: (patch: LivePatch) => void;
+	setTier: (tier: Tier | 'auto') => void;
 	initialModel: string | undefined;
 	draft: string | undefined;
 	send?: string;
@@ -222,6 +225,7 @@ const openLocal = async (open: ChatOpen, ctx: CommandContext, deps: ChatRunDeps)
 		resume: engine.resume,
 		shellRoot: engine.shellRoot,
 		applyLive: engine.applyLive,
+		setTier: engine.setTier,
 		initialModel: model !== undefined ? model : !fresh ? state.lastModel : undefined,
 		draft,
 		...(open.send && {send: open.send}),
@@ -337,6 +341,7 @@ const openRemote = async (
 		resume: spawned ? resumeId : remote.sessionId,
 		shellRoot,
 		applyLive: patch => remote.applyLive(patch),
+		setTier: tier => remote.setTier(tier),
 		initialModel: spawned ? open.model : remote.model,
 		draft: spawned ? open.draft : undefined,
 		...(open.send && {send: open.send}),
@@ -421,6 +426,7 @@ const runLocked = async (
 
 	deps.onSession?.(session);
 	deps.onLive?.(applyLive);
+	deps.onTier?.(source.setTier);
 	deps.onPin?.(pin.refresh);
 	try {
 		let printHistory: ((text: string, options?: PrintOptions) => void) | undefined;
@@ -482,6 +488,7 @@ const runLocked = async (
 		const model = session.model;
 		deps.onSession?.(undefined);
 		deps.onLive?.(undefined);
+		deps.onTier?.(undefined);
 		deps.onPin?.(undefined);
 		shellPanel?.dispose();
 		unfeed();

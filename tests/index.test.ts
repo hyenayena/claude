@@ -30,7 +30,7 @@ test('ping prints pong', async () => {
 test('no subcommand shows core help, or throws the usage error without it', async () => {
 	const {command, ctx} = await setup();
 	await assert.rejects(async () => command.run([], ctx), {
-		message: 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|auth|help|<Claude Code command>>',
+		message: 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|tier|auth|help|<Claude Code command>>',
 	});
 	const paths: (string[] | undefined)[] = [];
 	await command.run([], {...ctx, showHelp: path => paths.push(path)});

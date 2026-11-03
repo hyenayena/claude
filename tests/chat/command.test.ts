@@ -667,7 +667,28 @@ test('the Claude tab offers permission mode, model, effort, thinking, fast mode 
 	const s = await setupChat();
 	assert.deepEqual(
 		s.chat.settings!.settings.map(x => x.key),
-		['chatPermissionMode', 'chatModel', 'chatEffort', 'chatThinking', 'chatFastMode', 'chatOutputStyle', 'chatMcp', 'chatHooks', 'chatKeepRunning', 'chatInputMode'],
+		[
+			'chatPermissionMode',
+			'chatRouter',
+			'chatClassifier',
+			'tierLightModel',
+			'tierLightEffort',
+			'tierStandardModel',
+			'tierStandardEffort',
+			'tierStrongModel',
+			'tierStrongEffort',
+			'tierMaxModel',
+			'tierMaxEffort',
+			'chatModel',
+			'chatEffort',
+			'chatThinking',
+			'chatFastMode',
+			'chatOutputStyle',
+			'chatMcp',
+			'chatHooks',
+			'chatKeepRunning',
+			'chatInputMode',
+		],
 	);
 });
 
@@ -1297,4 +1318,44 @@ test('auth use and auth auto refresh the pin watch of the open chat', async () =
 	await cmds[0]!.run([], s.ctx);
 	assert.deepEqual(seen, [undefined, 'env-token', undefined]);
 	assert.equal(notified, 2);
+});
+
+test('claude tier pins the open chat, shows the pin, returns it to the router and is gone after close', async () => {
+	let release!: () => void;
+	const gate = new Promise<void>(r => (release = r));
+	const s = await setupChat({run: async p => {
+		const done = turnDone(p);
+		p.controller.send('hi');
+		await done;
+		await gate;
+	}});
+	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({chatRouter: 'on', chatClassifier: 'off'}));
+	const [chat, claude] = createClaudeCommands({
+		dataDir: s.dataDir,
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+		loadChatQuery: async () => s.q.query,
+		loadUi: async () => ({
+			createChatElement: p => {
+				s.props.push(p);
+				return {};
+			},
+		}),
+	}) as [typeof s.chat, typeof s.chat];
+	const running = chat.run([], s.ctx);
+	await new Promise(r => setTimeout(r, 60));
+	const controller = s.props.at(-1)!.controller;
+	await claude.run(['tier', 'MAX'], s.ctx);
+	assert.deepEqual(controller.route, {outcome: 'pinned', main: 'max', pinned: 'max'});
+	assert.match(s.printed.at(-1)!, /pinned to the max tier until "claude tier auto"/);
+	await claude.run(['tier'], s.ctx);
+	assert.equal(s.printed.at(-1), 'Pinned to the max tier.');
+	await claude.run(['tier', 'auto'], s.ctx);
+	assert.equal(controller.route?.pinned, undefined);
+	release();
+	await running;
+	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({chatRouter: 'on'}));
+	await assert.rejects(async () => claude.run(['tier', 'max'], s.ctx), /No chat is open/);
 });

@@ -1,4 +1,6 @@
 import type {Options, SDKMessage, SDKUserMessage} from '@anthropic-ai/claude-agent-sdk';
+import type {Effort} from './chat-prefs.js';
+import type {TierModel} from './chat/tiers.js';
 
 export type CredentialKind = 'api-key' | 'oauth';
 export type CredentialSource = 'env' | 'claude-login' | 'stored';
@@ -37,6 +39,16 @@ export type ClaudeState = {
 	chatMcp?: 'off';
 	chatHooks?: 'on';
 	chatKeepRunning?: 'on';
+	chatRouter?: 'on';
+	chatClassifier?: 'off';
+	tierLightModel?: TierModel;
+	tierLightEffort?: Effort;
+	tierStandardModel?: TierModel;
+	tierStandardEffort?: Effort;
+	tierStrongModel?: TierModel;
+	tierStrongEffort?: Effort;
+	tierMaxModel?: TierModel;
+	tierMaxEffort?: Effort;
 	allowedCommands?: string[];
 	subscriptionNoticeShown?: boolean;
 };

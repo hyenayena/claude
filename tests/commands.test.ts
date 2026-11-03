@@ -1014,3 +1014,18 @@ test('auth add from the terminal never runs the Claude Code CLI', async () => {
 	assert.deepEqual(s.fake.accounts.get('token')!.secrets, {token: OAUTH});
 	assert.ok(!s.printed.join('\n').includes(OAUTH));
 });
+
+test('claude tier is a confirm subcommand with usage errors, a router check and a no-chat error', async () => {
+	const {command, ctx, printed, dataDir} = await setup();
+	const tier = command.subcommands!.find(s => s.name === 'tier')!;
+	assert.equal(tier.agent, 'confirm');
+	assert.equal(tier.usage, 'claude tier [auto|light|standard|strong|max]');
+	await assert.rejects(async () => command.run(['tier', 'max', 'now'], ctx), {message: 'Usage: claude tier [auto|light|standard|strong|max]'});
+	await assert.rejects(async () => command.run(['tier', 'huge'], ctx), /Unknown tier "huge"; use auto, light, standard, strong or max/);
+	await assert.rejects(async () => command.run(['tier', 'max'], ctx), {message: 'The model router is off; turn it on in the Chat settings'});
+	await writeFile(join(dataDir, 'state.json'), JSON.stringify({chatRouter: 'on'}));
+	await assert.rejects(async () => command.run(['tier', 'max'], ctx), /No chat is open/);
+	await assert.rejects(async () => command.run(['tier', 'auto'], ctx), /No chat is open/);
+	await command.run(['tier'], ctx);
+	assert.equal(printed.at(-1), 'No chat is open.');
+});

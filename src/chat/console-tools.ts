@@ -61,7 +61,9 @@ export const COMMAND_KEY_PREFIX = 'cmd:';
 export const commandKey = (req: Pick<CommandConfirmRequest, 'command' | 'subcommand'>): string =>
 	`${COMMAND_KEY_PREFIX}${req.subcommand === undefined ? req.command : `${req.command} ${req.subcommand}`}`;
 
-export const neverAlways = (key: string): boolean => key === 'cmd:claude auth' || key.startsWith('cmd:claude auth ');
+export const alwaysAsk = (key: string): boolean => key === 'cmd:claude tier';
+
+export const neverAlways = (key: string): boolean => key === 'cmd:claude auth' || key.startsWith('cmd:claude auth ') || alwaysAsk(key);
 
 const signalOf = (extra: unknown): AbortSignal | undefined => {
 	const s = typeof extra === 'object' && extra !== null ? (extra as {signal?: unknown}).signal : undefined;
@@ -80,11 +82,11 @@ export function createConsoleServer(deps: ConsoleServerDeps): ReturnType<typeof 
 	const confirmWith =
 		(signal: AbortSignal | undefined, flagged: boolean) =>
 		async (req: CommandConfirmRequest): Promise<boolean> => {
-			if (prompter.mode === 'auto' && !flagged) {
+			const key = commandKey(req);
+			if (prompter.mode === 'auto' && !flagged && !alwaysAsk(key)) {
 				prompter.audit({outcome: 'auto-accepted', toolName: 'Command', summary: req.line});
 				return true;
 			}
-			const key = commandKey(req);
 			const alwaysOk = prompter.mode !== 'plan' && !neverAlways(key);
 			if (alwaysOk && prompter.hasApproved(key)) {
 				prompter.audit({outcome: 'always-allowed', toolName: 'Command', summary: req.line});

@@ -1,5 +1,6 @@
 import type {Options} from '@anthropic-ai/claude-agent-sdk';
-import type {Logger, Setting, SettingOption} from '../../../src/api.js';
+import type {Logger, Setting, SettingInline, SettingOption} from '../../../src/api.js';
+import {DEFAULT_TIERS, TIER_MODELS, TIER_STATE_KEYS, TIERS, type Tier, type TierModel} from './chat/tiers.js';
 import type {ClaudeState} from './types.js';
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -118,7 +119,11 @@ type PrefKey =
 	| 'chatInputMode'
 	| 'chatMcp'
 	| 'chatHooks'
-	| 'chatKeepRunning';
+	| 'chatKeepRunning'
+	| 'chatRouter'
+	| 'chatClassifier'
+	| (typeof TIER_STATE_KEYS)[Tier]['model']
+	| (typeof TIER_STATE_KEYS)[Tier]['effort'];
 
 type Store = {read: () => Promise<ClaudeState>; update: (patch: Partial<ClaudeState>) => Promise<unknown>};
 
@@ -127,6 +132,7 @@ type PrefSpec = {
 	label: string;
 	description: string;
 	options: SettingOption[];
+	inline?: SettingInline;
 	parse: (value: string) => ClaudeState[PrefKey];
 	show: (state: ClaudeState) => string;
 	onSet?: (value: string) => void;
@@ -172,6 +178,42 @@ const KEEP_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Off'},
 	{value: 'on', label: 'On', description: 'the chat finishes its work after you leave yena'},
 ];
+const ROUTER_OPTIONS: SettingOption[] = [
+	{value: '', label: 'Off'},
+	{value: 'on', label: 'On', description: 'light work on cheaper models, hard work on stronger ones'},
+];
+const CLASSIFIER_OPTIONS: SettingOption[] = [
+	{value: '', label: 'On', description: 'a light model rates every message'},
+	{value: 'off', label: 'Off', description: 'tiers change only with "claude tier"'},
+];
+const TIER_MODEL_OPTIONS: SettingOption[] = TIER_MODELS.map(m => ({value: m, label: m}));
+const TIER_EFFORT_OPTIONS: SettingOption[] = EFFORTS.map(e => ({value: e, label: e}));
+const unlessDefault = <T>(value: T | undefined, fallback: T | undefined): T | undefined => (value === fallback ? undefined : value);
+const tierLabel = (t: Tier): string => t[0]!.toUpperCase() + t.slice(1);
+
+function tierSpecs(): PrefSpec[] {
+	return TIERS.flatMap((t): PrefSpec[] => [
+		{
+			key: TIER_STATE_KEYS[t].model,
+			label: `${tierLabel(t)} tier: model`,
+			description: `The model of the ${t} tier when the model router is on`,
+			options: TIER_MODEL_OPTIONS,
+			inline: {row: t, section: 'Model tiers'},
+			parse: v => unlessDefault(fromOptions<TierModel>(TIER_MODEL_OPTIONS, v), DEFAULT_TIERS[t].model),
+			show: s => s[TIER_STATE_KEYS[t].model] ?? DEFAULT_TIERS[t].model,
+		},
+		{
+			key: TIER_STATE_KEYS[t].effort,
+			label: `${tierLabel(t)} tier: effort`,
+			description: `The effort of the ${t} tier when the model router is on`,
+			options: TIER_EFFORT_OPTIONS,
+			inline: {row: t, section: 'Model tiers'},
+			parse: v => (v === '' ? undefined : unlessDefault(fromOptions<Effort>(TIER_EFFORT_OPTIONS, v), DEFAULT_TIERS[t].effort)),
+			show: s => s[TIER_STATE_KEYS[t].effort] ?? DEFAULT_TIERS[t].effort ?? '',
+		},
+	]);
+}
+
 const STYLE_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Default'},
 	{value: 'Explanatory', label: 'Explanatory', description: 'explains its choices'},
@@ -202,9 +244,26 @@ export function chatSettings(
 			onSet: v => hooks.applyMode?.(v === '' ? 'default' : (v as 'acceptEdits' | 'plan' | 'auto')),
 		},
 		{
+			key: 'chatRouter',
+			label: 'Model router',
+			description: 'Picks the model of the chat and its agents by tier',
+			options: ROUTER_OPTIONS,
+			parse: v => fromOptions<'on'>(ROUTER_OPTIONS, v),
+			show: s => s.chatRouter ?? '',
+		},
+		{
+			key: 'chatClassifier',
+			label: 'Task classifier',
+			description: 'A light model rates each message; only with the model router on',
+			options: CLASSIFIER_OPTIONS,
+			parse: v => fromOptions<'off'>(CLASSIFIER_OPTIONS, v),
+			show: s => s.chatClassifier ?? '',
+		},
+		...tierSpecs(),
+		{
 			key: 'chatModel',
 			label: 'Chat model',
-			description: 'The model yena answers with',
+			description: 'The model yena answers with, used when the model router is off or the chat is not routed',
 			options: MODEL_OPTIONS,
 			parse: v => {
 				if (v !== '' && !isModelId(v)) throw new Error('Invalid model id');
@@ -215,7 +274,7 @@ export function chatSettings(
 		{
 			key: 'chatEffort',
 			label: 'Effort',
-			description: 'How much effort yena puts into answers',
+			description: 'How much effort yena puts into answers, used when the model router is off or the chat is not routed',
 			options: EFFORT_OPTIONS,
 			parse: v => fromOptions<Effort>(EFFORT_OPTIONS, v),
 			show: s => s.chatEffort ?? '',
@@ -286,6 +345,7 @@ export function chatSettings(
 		label: spec.label,
 		description: `${spec.description}; ${spec.newChatsOnly ? 'applies to new chats' : 'applies now and to new chats'}`,
 		options: spec.options,
+		...(spec.inline && {inline: spec.inline}),
 		get: async () => spec.show(await store.read()),
 		set: async value => {
 			const stored = spec.parse(value);

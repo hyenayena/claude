@@ -6,6 +6,7 @@ import type {LivePatch} from '../chat-prefs.js';
 import type {ChatSession} from '../chat/chat-session.js';
 import type {ChatEvent} from '../chat/events.js';
 import type {EngineIo, EngineOpen} from '../chat/engine.js';
+import type {Tier} from '../chat/tiers.js';
 import {resolveCommandLine} from '../kit.js';
 import {clip, errClass} from '../log.js';
 import {removeLeftoverSocket, type ControlStatus} from '../sessions/control.js';
@@ -43,6 +44,7 @@ export type RunnerSession = Pick<
 	| 'mode'
 	| 'needsNewSession'
 	| 'title'
+	| 'route'
 	| 'pendingPermissions'
 	| 'tasks'
 	| 'commands'
@@ -68,6 +70,7 @@ export type RunnerSession = Pick<
 export type RunnerEngine = {
 	session: RunnerSession;
 	applyLive: (patch: LivePatch) => void;
+	setTier?: (tier: Tier | 'auto') => void;
 	close: () => void;
 	flush: () => Promise<void>;
 };
@@ -325,6 +328,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 			mode: s.mode,
 			needsNewSession: s.needsNewSession,
 			...(s.title !== undefined && {title: s.title}),
+			...(s.route !== undefined && {route: s.route}),
 			pendingPermissions: [...s.pendingPermissions],
 			tasks: [...s.tasks],
 			commands: [...s.commands],
@@ -549,6 +553,9 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 					break;
 				case 'applyLive':
 					engine?.applyLive(frame.patch);
+					break;
+				case 'setTier':
+					engine?.setTier?.(frame.tier);
 					break;
 				case 'setTitle':
 					s.setTitle(frame.title);

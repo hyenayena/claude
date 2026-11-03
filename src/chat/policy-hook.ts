@@ -40,6 +40,7 @@ export type PolicyHookOptions = {
 	beforeBash?: () => Promise<void>;
 	procHidden?: boolean;
 	bashTracker?: {begin(id: string): void; end(id: string, cwd?: string): Promise<void>};
+	agentRoute?: (input: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
 };
 
 export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: PolicyHookOptions = {}): HookCallback {
@@ -114,6 +115,15 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 				}
 				hookOpts.bashTracker?.begin(input.tool_use_id);
 				return allow;
+			}
+			case 'Agent':
+			case 'Task': {
+				const denial = agentDenial(tool, args);
+				if (denial) return denyWith(denial);
+				const updatedInput = await hookOpts.agentRoute?.(args).catch(() => undefined);
+				return updatedInput
+					? {hookSpecificOutput: {hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput}}
+					: allow;
 			}
 			default: {
 				const denial = agentDenial(tool, args);

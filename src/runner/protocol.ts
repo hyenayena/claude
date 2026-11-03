@@ -1,7 +1,8 @@
 import type {AgentPolicy, CommandConfirmRequest, CommandInfo, CommandInfoSub, CommandRunResult, CommandRunStatus} from '../../../../src/api.js';
 import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import type {SlashCommandInfo, TaskInfo} from '../chat/chat-session.js';
-import {ACCOUNT_REASONS, type AgentItem, type ChatEvent, type ChatState, type ToolPatch, type TurnOutcome, type UiEvent} from '../chat/events.js';
+import {ACCOUNT_REASONS, ROUTE_OUTCOMES, ROUTE_SOURCES, type AgentItem, type ChatEvent, type ChatState, type RouteInfo, type ToolPatch, type TurnOutcome, type UiEvent} from '../chat/events.js';
+import {TIERS, type Tier} from '../chat/tiers.js';
 import type {LimitType, RateLimitInfo} from '../chat/limits.js';
 import {ACCOUNT_NAME_RE} from '../accounts.js';
 import {parseSlot} from '../login-slot.js';
@@ -51,6 +52,7 @@ export type Snapshot = {
 	mode: ChatMode;
 	needsNewSession: boolean;
 	title?: string;
+	route?: RouteInfo;
 	pendingPermissions: PermissionRequest[];
 	tasks: TaskInfo[];
 	commands: SlashCommandInfo[];
@@ -85,6 +87,7 @@ export type ClientFrame = Base &
 		| {type: 'answer'; id: string; decision: PermissionDecision}
 		| {type: 'reset'}
 		| {type: 'applyLive'; patch: LivePatch}
+		| {type: 'setTier'; tier: Tier | 'auto'}
 		| {type: 'setTitle'; title: string}
 		| {type: 'forget'; key: string}
 		| {type: 'queue'; lines: string[]}
@@ -534,6 +537,25 @@ const readUiEvent = (v: unknown): UiEvent => {
 	}
 };
 
+const readRoute = (v: unknown): RouteInfo => {
+	const o = rec(v, 'route');
+	const tier = (key: string): Tier | undefined => (has(o, key) ? oneOf(o[key], TIERS, key) : undefined);
+	const main = tier('main');
+	const rated = tier('rated');
+	const pinned = tier('pinned');
+	const newTask = optBool(o, 'newTask');
+	const held = optBool(o, 'held');
+	return {
+		outcome: oneOf(o.outcome, ROUTE_OUTCOMES, 'outcome'),
+		...(main !== undefined && {main}),
+		...(rated !== undefined && {rated}),
+		...(pinned !== undefined && {pinned}),
+		...(newTask !== undefined && {newTask}),
+		...(held !== undefined && {held}),
+		...(optBool(o, 'failed') === true && {failed: true as const}),
+	};
+};
+
 export const readChatEvent = (v: unknown): ChatEvent => {
 	const o = rec(v, 'event');
 	switch (o.type) {
@@ -572,6 +594,15 @@ export const readChatEvent = (v: unknown): ChatEvent => {
 				previous: str(o.previous, 'previous', 64),
 				reason: oneOf(o.reason, ACCOUNT_REASONS, 'reason'),
 			};
+		case 'route-start':
+			return {type: 'route-start'};
+		case 'route':
+			return {
+				type: 'route',
+				route: readRoute(o.route),
+				...(has(o, 'previous') && {previous: oneOf(o.previous, TIERS, 'previous')}),
+				source: oneOf(o.source, ROUTE_SOURCES, 'source'),
+			};
 		default:
 			return fail('chat event type');
 	}
@@ -608,6 +639,7 @@ const readSnapshot = (o: Rec): Snapshot => ({
 	mode: oneOf(o.mode, MODES, 'mode'),
 	needsNewSession: bool(o.needsNewSession, 'needsNewSession'),
 	...(has(o, 'title') && {title: str(o.title, 'title', 4096)}),
+	...(has(o, 'route') && {route: readRoute(o.route)}),
 	pendingPermissions: arr(o.pendingPermissions, 'pendingPermissions', 100).map(readPermission),
 	tasks: arr(o.tasks, 'tasks', 100).map(readTask),
 	commands: arr(o.commands, 'commands', 300).map(readSlash),
@@ -706,6 +738,7 @@ const CLIENT: Record<string, Reader> = {
 	answer: o => ({id: ident(o.id, 'id'), decision: readDecision(o.decision)}),
 	reset: () => ({}),
 	applyLive: o => ({patch: readPatch(o.patch)}),
+	setTier: o => ({tier: oneOf(o.tier, [...TIERS, 'auto'] as const, 'tier')}),
 	setTitle: o => ({title: str(o.title, 'title', 4096)}),
 	forget: o => ({key: str(o.key, 'key', 4096)}),
 	queue: o => ({lines: strList(o.lines, 'lines', 16)}),

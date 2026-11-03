@@ -11,6 +11,7 @@ import {legacyCount} from './migrate.js';
 import {degradedReason, type ClaudeVault} from './vault.js';
 import {formatReset, systemClock} from './chat/limits.js';
 import type {ChatHandle} from './chat/handle.js';
+import {isTier, type Tier} from './chat/tiers.js';
 import {usageLines} from './chat/usage.js';
 import {clockTime} from './clock-time.js';
 import {runnerSocketPath} from './runner/spawn.js';
@@ -99,7 +100,7 @@ export type ClaudeDeps = {
 	};
 };
 
-const USAGE = 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|auth|help|<Claude Code command>>';
+const USAGE = 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|tier|auth|help|<Claude Code command>>';
 const RESUME_USAGE = 'Usage: claude resume [session]';
 const NO_CHAT = 'No chat is open. Claude Code commands run in the open chat; start one with "chat".';
 const ASK_USAGE = 'Usage: claude ask [--new] <text…>';
@@ -111,6 +112,7 @@ const START_USAGE = 'Usage: claude start <message…>';
 const START_MAX = 20_000;
 const SEND_USAGE = 'Usage: claude send <message…>';
 const STOP_USAGE = 'Usage: claude stop [session]';
+const TIER_USAGE = 'Usage: claude tier [auto|light|standard|strong|max]';
 
 const SLOT_WORD = /^(?:<([A-Za-z0-9_][\w-]*)(?:…|\.\.\.)?>|\[([A-Za-z0-9_][\w-]*)(?:…|\.\.\.)?\])(?:…|\.\.\.)?$/u;
 
@@ -597,6 +599,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		onLive: apply => {
 			applyOpenChat = apply;
 		},
+		onTier: set => {
+			setOpenTier = set;
+		},
 		onInbox: deliver => {
 			deliverToOpenChat = deliver;
 		},
@@ -608,6 +613,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	let openHandle: {close: () => void; done: Promise<void>} | undefined;
 	let openSession: ChatHandle | undefined;
 	let applyOpenChat: ((patch: LivePatch) => void) | undefined;
+	let setOpenTier: ((tier: Tier | 'auto') => void) | undefined;
 	let refreshOpenPin: (() => void) | undefined;
 	let deliverToOpenChat: ((text: string) => void) | undefined;
 
@@ -1299,6 +1305,40 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		ctx.print(parts.join(' · '));
 	};
 
+	const tierCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
+		if (args.length > 1) throw new Error(TIER_USAGE);
+		const session = openSession && openSession.state !== 'closed' ? openSession : undefined;
+		const routerOn = (await store.read()).chatRouter === 'on';
+		if (args.length === 0) {
+			if (!session) {
+				ctx.print('No chat is open.');
+				return;
+			}
+			const r = session.route;
+			const state = !routerOn
+				? 'The model router is off.'
+				: r?.pinned !== undefined
+					? `Pinned to the ${r.pinned} tier.`
+					: r?.rated !== undefined || r?.main !== undefined
+						? `Task: ${r.rated ?? 'not rated'} · chat: ${r.main ?? 'configured model'}.`
+						: 'The router has not rated a message of this chat yet.';
+			ctx.print(state);
+			return;
+		}
+		const wanted = args[0]!.toLowerCase();
+		if (wanted !== 'auto' && !isTier(wanted)) {
+			throw new Error(`Unknown tier "${makeScrub(s => s)(args[0]!).slice(0, 40)}"; use auto, light, standard, strong or max. ${TIER_USAGE}`);
+		}
+		if (!routerOn) throw new Error('The model router is off; turn it on in the Chat settings');
+		if (!session || !setOpenTier) throw new Error('No chat is open. Start one with "chat".');
+		setOpenTier(wanted);
+		ctx.print(
+			wanted === 'auto'
+				? 'The chat follows the router again from the next message.'
+				: `The chat is pinned to the ${wanted} tier until "claude tier auto" or a new chat.`,
+		);
+	};
+
 	const stopCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 1) throw new Error(STOP_USAGE);
 		const dir = sessionsDir();
@@ -1430,6 +1470,14 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			description: 'Stop the running chat or ask',
 			agent: 'confirm',
 			args: [SESSION_ARG('stops only when the running one matches')],
+		},
+		{
+			name: 'tier',
+			usage: 'claude tier [auto|light|standard|strong|max]',
+			description: 'Pin the open chat to a model tier, or return it to the router',
+			agent: 'confirm',
+			args: [{name: 'auto|light|standard|strong|max', description: 'A tier to pin, or auto for the router; without it, show the current tier'}],
+			notes: ['Needs the model router (Chat settings). A pin lasts until "claude tier auto" or a new chat.'],
 		},
 		{
 			name: 'auth',
@@ -1565,6 +1613,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 					return sessionsCmd(args, ctx);
 				case 'stop':
 					return stopCmd(args, ctx);
+				case 'tier':
+					return tierCmd(args, ctx);
 				case 'auth':
 					return auth(args, ctx);
 				default:

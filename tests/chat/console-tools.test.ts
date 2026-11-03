@@ -9,6 +9,7 @@ import {
 	commandKey,
 	createConsoleFlags,
 	createConsoleServer,
+	alwaysAsk,
 	neverAlways,
 	type ConsoleFlags,
 	type ConsoleSdk,
@@ -336,4 +337,31 @@ test('holdTurn is taken before the run and released after it, also when the brid
 test('neverAlways covers claude auth and every path below it, nothing else', () => {
 	for (const key of ['cmd:claude auth', 'cmd:claude auth login', 'cmd:claude auth status', 'cmd:claude auth x y']) assert.equal(neverAlways(key), true, key);
 	for (const key of ['cmd:claude', 'cmd:claude authx', 'cmd:claude mcp reconnect', 'cmd:mod auth']) assert.equal(neverAlways(key), false, key);
+});
+
+test('claude tier always asks, in auto mode too, never offers "always" and ignores a saved rule', async () => {
+	for (const mode of ['auto', 'default', 'acceptEdits'] as const) {
+		const confirms: CommandRunRequest['confirm'][] = [];
+		const {runTool, prompter} = setup(async req => {
+			confirms.push(req.confirm);
+			return ok('');
+		});
+		prompter.mode = mode;
+		prompter.approved.add('cmd:claude tier');
+		prompter.decision = {kind: 'allow', always: true};
+		await runTool.handler({command: 'claude tier max'}, {});
+		assert.equal(await confirms[0]!({line: 'claude tier max', command: 'claude', subcommand: 'tier', caller: 'yena'}), true, mode);
+		assert.equal(prompter.requests.length, 1, mode);
+		const req = prompter.requests[0]!;
+		assert.equal(req.kind === 'tool' && req.always, false, mode);
+		assert.ok(!prompter.audits.some(a => a.outcome === 'auto-accepted' || a.outcome === 'always-allowed'), mode);
+		prompter.decision = {kind: 'deny'};
+		assert.equal(await confirms[0]!({line: 'claude tier max', command: 'claude', subcommand: 'tier', caller: 'yena'}), false, mode);
+	}
+});
+
+test('alwaysAsk covers only claude tier, and neverAlways includes it', () => {
+	assert.equal(alwaysAsk('cmd:claude tier'), true);
+	assert.equal(neverAlways('cmd:claude tier'), true);
+	for (const key of ['cmd:claude', 'cmd:claude tierx', 'cmd:claude tasks', 'cmd:tier']) assert.equal(alwaysAsk(key), false, key);
 });

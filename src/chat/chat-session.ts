@@ -3,9 +3,11 @@ import type {Options, SDKUserMessage} from '@anthropic-ai/claude-agent-sdk';
 import type {Logger} from '../../../../src/api.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {AUTH_MESSAGE, mapFailure, RESUME_MESSAGE} from '../session.js';
-import type {LivePatch} from '../chat-prefs.js';
+import type {Effort, LivePatch} from '../chat-prefs.js';
 import type {ChatQueryFn, RewindResult} from '../types.js';
-import type {ChatController, ChatEvent, ChatState, TurnOutcome, UiEvent} from './events.js';
+import type {ChatController, ChatEvent, ChatState, RouteInfo, TurnOutcome, UiEvent} from './events.js';
+import type {CacheInfo} from './router.js';
+import type {Tier} from './tiers.js';
 import {InputQueue} from './input-queue.js';
 import {classifyFailure, type Clock, failureMessage, type FailureKind, type RateLimitInfo, systemClock} from './limits.js';
 import {normalize} from './normalize.js';
@@ -44,7 +46,47 @@ export type ChatSessionOptions = {
 	onUsageLimit?: (p: {reason: 'usage-limit' | 'billing'; rateLimit?: RateLimitInfo}) => {from: string; to: string} | undefined;
 	preferAccount?: () => boolean;
 	spawnedAccount?: () => {account: string; previous: string; reason: 'restored' | 'changed' | 'pinned'} | undefined;
+	route?: (p: {text: string; signal: AbortSignal; cache: CacheInfo; started: () => void}) => Promise<RouteResult | undefined>;
+	routeGuardMs?: number;
+	onReset?: () => void;
 };
+
+export type RouteApply = {model?: string | null; effort?: Effort | null};
+export type RouteResult = {apply?: RouteApply; info?: RouteInfo; previous?: Tier; settled?: (applied: boolean) => void};
+
+export const ROUTE_GUARD_MS = 10_000;
+const ROUTE_APPLY_MS = 3_000;
+
+const within = <T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> =>
+	new Promise<T>((resolve, reject) => {
+		const done = (): void => {
+			clearTimeout(timer);
+			signal?.removeEventListener('abort', onAbort);
+		};
+		const onAbort = (): void => {
+			done();
+			reject(new Error('aborted'));
+		};
+		const timer = setTimeout(() => {
+			done();
+			reject(new Error('timeout'));
+		}, ms);
+		timer.unref?.();
+		if (signal?.aborted) return onAbort();
+		signal?.addEventListener('abort', onAbort, {once: true});
+		p.then(
+			v => {
+				done();
+				resolve(v);
+			},
+			(e: unknown) => {
+				done();
+				reject(e);
+			},
+		);
+	});
+
+type Routing = {ac: AbortController; steers: string[]; done: Promise<void>};
 
 export const CONTINUE_TEXT = 'Continue from where you stopped; the previous attempt was cut off by a usage limit.';
 const MAX_SWITCHES = 8;
@@ -154,6 +196,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private readonly queue: Entry[] = [];
 	private readonly approved = new Set<string>();
 	private readonly saved = new Set<string>();
+	private routing: Routing | undefined;
+	private _route: RouteInfo | undefined;
 
 	constructor(opts: ChatSessionOptions) {
 		this.opts = opts;
@@ -189,6 +233,23 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	get mode(): ChatMode {
 		return this._mode;
 	}
+
+	get route(): RouteInfo | undefined {
+		return this._route;
+	}
+
+	applyRoute(apply: RouteApply, info: RouteInfo, previous?: Tier, settled?: (applied: boolean) => void): void {
+		if (this._state === 'closed') return;
+		const handle = this.handle;
+		if (handle) {
+			void this.applyRouted(handle, apply).then(ok => settled?.(ok && !this.lost(handle)));
+		} else {
+			settled?.(true);
+		}
+		this._route = info;
+		this.emit({type: 'route', route: info, ...(previous !== undefined && {previous}), source: 'command'});
+	}
+
 	applyLive(patch: LivePatch): void {
 		const q = this.handle?.q;
 		if (!q || this._state === 'closed') return;
@@ -310,14 +371,112 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.switches = 0;
 		this.turnHandle = handle;
 		this.armTurnTimer(this.timeoutMs);
-		this.pushUser(handle, text, opts.command === true);
+		const command = opts.command === true;
+		if (this.opts.route && !command && !text.startsWith('/')) {
+			this.emit({type: 'sent', text});
+			this.startRouting(handle, text);
+			return;
+		}
+		this.pushUser(handle, text, command);
 		this.emit({type: 'sent', text});
+	}
+
+	private startRouting(handle: Handle, text: string): void {
+		const routing: Routing = {ac: new AbortController(), steers: [], done: Promise.resolve()};
+		this.routing = routing;
+		routing.done = this.runRoute(handle, text, routing);
+	}
+
+	private async runRoute(handle: Handle, text: string, routing: Routing): Promise<void> {
+		let result: RouteResult | undefined;
+		try {
+			let announced = false;
+			const started = (): void => {
+				if (announced || this.routing !== routing || routing.ac.signal.aborted) return;
+				announced = true;
+				this.emit({type: 'route-start'});
+			};
+			const pending = this.opts.route!({text, signal: routing.ac.signal, cache: this.cacheInfo(), started});
+			result = await within(pending, this.opts.routeGuardMs ?? ROUTE_GUARD_MS, routing.ac.signal);
+		} catch (err) {
+			if (!routing.ac.signal.aborted) {
+				this.log.info('route skipped', {errClass: errClass(err)});
+				routing.ac.abort();
+			}
+			result = undefined;
+		}
+		const cut = routing.ac.signal.aborted;
+		let applied = false;
+		try {
+			if (this.lost(handle)) return;
+			if (result?.apply && !cut) applied = await this.applyRouted(handle, result.apply);
+			if (this.lost(handle)) {
+				applied = false;
+				return;
+			}
+			const info: RouteInfo = cut ? this.keptRoute() : (result?.info ?? {outcome: 'off'});
+			this._route = info;
+			const previous = cut ? undefined : result?.previous;
+			this.emit({type: 'route', route: info, ...(previous !== undefined && {previous}), source: 'message'});
+			this.pushUser(handle, text, false);
+			for (const steer of routing.steers) this.pushUser(handle, steer, false, 'next');
+		} finally {
+			if (result?.apply) result.settled?.(applied);
+			if (this.routing === routing) this.routing = undefined;
+		}
+	}
+
+	private keptRoute(): RouteInfo {
+		const prev = this._route;
+		if (!prev || prev.outcome === 'off') return {outcome: 'off'};
+		return {
+			outcome: 'kept',
+			...(prev.main !== undefined && {main: prev.main}),
+			...(prev.rated !== undefined && {rated: prev.rated}),
+			...(prev.pinned !== undefined && {pinned: prev.pinned}),
+		};
+	}
+
+	private async applyRouted(handle: Handle, apply: RouteApply): Promise<boolean> {
+		const q = handle.q;
+		const bounded = async (what: string, run: (() => Promise<unknown>) | undefined): Promise<boolean> => {
+			if (!run) return false;
+			try {
+				await within(run(), ROUTE_APPLY_MS);
+				return true;
+			} catch (err) {
+				this.log.warn('route apply failed', {what, errClass: errClass(err)});
+				return false;
+			}
+		};
+		let ok = true;
+		if (apply.model !== undefined) ok = (await bounded('model', q.setModel && (() => q.setModel!(apply.model ?? undefined)))) && ok;
+		if (apply.effort !== undefined) ok = (await bounded('effort', q.applyFlagSettings && (() => q.applyFlagSettings!({effortLevel: apply.effort})))) && ok;
+		return ok;
+	}
+
+	private lost(handle: Handle): boolean {
+		return this._state === 'closed' || this.handle !== handle;
+	}
+
+	private cacheInfo(): CacheInfo {
+		const last = this.meter.lastMain;
+		return {
+			...(last && {lastMainAt: last.at, lastContext: last.context}),
+			sessionKnown: this._sessionId !== undefined,
+		};
 	}
 
 	steer(text: string): void {
 		const handle = this.handle;
 		if (this._state !== 'running' || !handle || this.turnHandle !== handle) throw new Error('No request is running');
 		if (this.pending) throw new Error('The request is being stopped');
+		if (this.routing) {
+			this.log.info('message steered', {chars: text.length, routing: true});
+			this.routing.steers.push(text);
+			this.emit({type: 'sent', text});
+			return;
+		}
 		this.log.info('message steered', {chars: text.length});
 		this.pushUser(handle, text, false, 'next');
 		this.emit({type: 'sent', text});
@@ -371,6 +530,11 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	}
 
 	async interrupt(): Promise<void> {
+		const routing = this.routing;
+		if (routing) {
+			routing.ac.abort();
+			await routing.done;
+		}
 		const handle = this.handle;
 		if (this._state !== 'running' || !handle || this.pending) return;
 		await this.abortTurn({outcome: 'interrupted'}, handle);
@@ -483,11 +647,15 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this._model = undefined;
 		this._costUsd = undefined;
 		this._needsNewSession = false;
+		this._route = undefined;
+		this.opts.onReset?.();
 	}
 
 	close(): void {
 		if (this._state === 'closed') return;
 		const wasRunning = this._state === 'running';
+		this.routing?.ac.abort();
+		this.routing = undefined;
 		this.clearIdleTimer();
 		if (this.lockHeld) {
 			this.lockHeld = false;
@@ -583,7 +751,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		try {
 			for await (const msg of handle.q) {
 				if (this.handle !== handle) return;
-				this.meter.add(msg);
+				this.meter.add(msg, this.clock.now());
 				this.keepTurnAlive(handle);
 				for (const ev of normalize(msg, this.clock)) {
 					if (this.handle !== handle) return;

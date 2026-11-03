@@ -8,11 +8,12 @@ import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
 import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
 import {sliceCells, stringCells, truncateCells, wrapRows} from '../kit.js';
 import type {PrintAction, PrintOptions} from '../../../../src/api.js';
-import type {ToolPatch} from '../chat/events.js';
+import type {RouteInfo, ToolPatch} from '../chat/events.js';
 import type {PreviewRow} from '../chat/permission.js';
 import {openFenceLine, renderMarkdownBlocks} from './markdown.js';
 import {WRITE_HEAD_LINES, editRows, writeRows} from './tool-diff.js';
-import {LIVE, parseTodos, type Out, type Phase, type RunningTool, type StatusLine, type Todo} from './transcript.js';
+import {LIVE, parseTodos, ROUTE_TOOL_NAME, type Out, type Phase, type RunningTool, type StatusLine, type Todo} from './transcript.js';
+import type {Tier} from '../chat/tiers.js';
 
 export type Scrub = (s: string) => string;
 
@@ -162,6 +163,7 @@ export function toolArgs(name: string, input: unknown, scrub: Scrub): string {
 }
 
 export function toolHeader(name: string, input: unknown, scrub: Scrub): string {
+	if (name === ROUTE_TOOL_NAME && input === undefined) return `${ROUTE_TOOL_NAME}…`;
 	const args = toolArgs(name, input, scrub);
 	return `${scrub(displayName(name))}${args ? `(${args})` : ''}`;
 }
@@ -336,6 +338,47 @@ export function formatToolBlock(t: ToolResult, scrub: Scrub, width?: number): st
 	return `${header}\n${paint(SGR.dim, resultLines(shown).join('\n'))}`;
 }
 
+export type RouteBlock = {tier?: Tier; detail?: string; tone: 'ok' | 'dim'};
+
+export function routeBlockOf(route: RouteInfo, previous?: Tier): RouteBlock {
+	const change = route.main !== undefined && previous !== undefined && previous !== route.main ? `chat ${previous} -> ${route.main}` : undefined;
+	if (route.outcome === 'pinned') {
+		return {tone: 'ok', ...(route.pinned !== undefined && {tier: route.pinned}), detail: change ? `pinned, ${change}` : 'pinned'};
+	}
+	if (route.failed || route.outcome === 'kept') {
+		const tier = route.rated ?? route.main;
+		return tier === undefined ? {tone: 'dim', detail: 'failed, model unchanged'} : {tone: 'dim', tier, detail: 'kept'};
+	}
+	const parts: string[] = [];
+	if (route.held && route.main !== undefined) parts.push(`held, chat ${route.main}`);
+	else if (change) parts.push(change);
+	if (route.newTask && previous !== undefined) parts.push('new task');
+	return {tone: 'ok', ...(route.rated !== undefined && {tier: route.rated}), ...(parts.length > 0 && {detail: parts.join(', ')})};
+}
+
+export function formatRouteBlock(block: RouteBlock, scrub: Scrub, width?: number): string {
+	const dot = `${block.tone === 'ok' ? SGR.green : SGR.dim}●${SGR.reset}`;
+	const tier = block.tier !== undefined ? `(${scrub(block.tier)})` : '';
+	const detail = block.detail !== undefined ? ` · ${scrub(block.detail)}` : '';
+	let rest = `${tier}${detail}`;
+	if (width !== undefined) rest = truncateCells(rest, Math.max(1, width - 2 - ROUTE_TOOL_NAME.length));
+	return `${dot} ${SGR.bold}${ROUTE_TOOL_NAME}${SGR.boldOff}${rest}${SGR.reset}`;
+}
+
+export function routeNoticeText(pinned: Tier | undefined): string {
+	return pinned !== undefined ? `Tier pinned: ${pinned}` : 'Tier: back to the router';
+}
+
+export function routeBarText(route: RouteInfo | undefined): string {
+	if (!route) return '';
+	if (route.pinned !== undefined) return `tier: ${route.pinned} (pinned)`;
+	if (route.outcome === 'off') return '';
+	const parts: string[] = [];
+	if (route.rated !== undefined) parts.push(`task: ${route.rated}`);
+	if (route.main !== undefined && (route.rated === undefined || route.main !== route.rated)) parts.push(`chat: ${route.main}`);
+	return parts.join(' · ');
+}
+
 export function formatError(message: string, scrub: Scrub): string {
 	return paint(SGR.red, `Error: ${scrub(message)}`);
 }
@@ -420,6 +463,10 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 							: `Account "${out.previous}" ${out.reason === 'billing' ? 'cannot be billed' : 'reached its usage limit'}; continuing with "${out.account}".`,
 				scrub,
 			);
+		case 'route-block':
+			return formatRouteBlock(routeBlockOf(out.route, out.previous), scrub, width);
+		case 'route':
+			return formatNotice(routeNoticeText(out.pinned), scrub);
 		case 'thinking':
 			return formatThinking(out.text, scrub);
 		case 'task':
@@ -600,6 +647,7 @@ export function statusBarText(
 		account?: string;
 		pin?: string;
 		model: string | undefined;
+		route?: string;
 		sessionId: string | undefined;
 		phase: Phase;
 		pending?: number;
@@ -613,6 +661,7 @@ export function statusBarText(
 	else if (s.account) parts.push(`${s.pin !== undefined ? '*' : ''}${scrub(s.account)}`);
 	if (s.sessionId) parts.push(scrub(s.sessionId).slice(0, 8));
 	if (s.model) parts.push(scrub(s.model));
+	if (s.route) parts.push(scrub(s.route));
 	if (s.limit) parts.push(scrub(s.limit));
 	parts.push(s.pending !== undefined && s.pending > 0 ? 'awaiting approval' : s.phase);
 	if (s.tasks) parts.push(s.tasks);

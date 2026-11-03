@@ -1,6 +1,8 @@
 import type {CommandBridge, Logger} from '../../../../src/api.js';
 import {withPatch, type ChatTuning, type LivePatch} from '../chat-prefs.js';
-import {additionalDirsOf, buildChatOptions, buildEnv, ensureMdLinks, resolvePaths, restrictDataDirs, withProjects, type ClaudePaths} from '../config.js';
+import path from 'node:path';
+import type {AgentDefinition} from '@anthropic-ai/claude-agent-sdk';
+import {additionalDirsOf, buildChatOptions, buildEnv, buildRouterOptions, ensureMdLinks, resolvePaths, restrictDataDirs, withProjects, type ClaudePaths} from '../config.js';
 import type {LoginProbe} from '../claude-login.js';
 import {accountsCtx, liveSecrets, loginSyncOf, makeRedactor, prepareCredential, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
 import {chooseAccount, LoginUnsavedError, markLimited, pinnedAccount, prepareAccount, ranksAbove} from '../accounts.js';
@@ -8,7 +10,7 @@ import {degradedReason, type ClaudeVault} from '../vault.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {buildScope} from '../policy.js';
 import type {ChatQueryFn, ClaudeState, Credential} from '../types.js';
-import {ChatSession} from './chat-session.js';
+import {ChatSession, type RouteResult} from './chat-session.js';
 import {createConsoleFlags, createConsoleServer, type ConsoleSdk} from './console-tools.js';
 import {createChatCanUseTool} from './permission-bridge.js';
 import {sdkPermissionMode} from './permission.js';
@@ -22,6 +24,12 @@ import {createProcessStatus, statusLine} from './process-status.js';
 import {buildSandbox, createSandboxSync, sandboxProblem} from './sandbox.js';
 import {createLeftoverSweeper} from './sandbox-leftovers.js';
 import {readSessionTitle, titleFromPrompt, transcriptFile} from './title.js';
+import {buildAgentDefinitions} from './agent-defs.js';
+import {routeAgentInput} from './agent-route.js';
+import {createClassifier} from './classifier.js';
+import type {RouteInfo} from './events.js';
+import {applyVerdict, classifierPrompt, decideMain, noteContinuing, Router} from './router.js';
+import {tierMapFromState, type Tier, type TierMap} from './tiers.js';
 
 const TITLE_RETRY_MS = [3_000, 10_000];
 
@@ -78,6 +86,7 @@ export type ChatEngine = {
 	resume: string | undefined;
 	shellRoot: string | undefined;
 	applyLive: (patch: LivePatch) => void;
+	setTier: (tier: Tier | 'auto') => void;
 	close: () => void;
 	flush: () => Promise<void>;
 };
@@ -189,7 +198,126 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	let live = {...(model !== undefined && {model}), tuning: {...tuning}};
 	const applyLive = (patch: LivePatch): void => {
 		live = withPatch(live, patch);
-		session.applyLive(patch);
+		if (router.main === undefined) return session.applyLive(patch);
+		const {model: _model, effort: _effort, ...rest} = patch;
+		if (Object.keys(rest).length > 0) session.applyLive(rest);
+	};
+
+	const router = new Router();
+	const flags: {routerOn: boolean; classifierOn: boolean; map: TierMap} = {routerOn: false, classifierOn: true, map: tierMapFromState(state)};
+	const readFlags = (s: ClaudeState): void => {
+		flags.routerOn = s.chatRouter === 'on';
+		flags.classifierOn = s.chatClassifier !== 'off';
+		flags.map = tierMapFromState(s);
+	};
+	readFlags(state);
+	const agentDirs = [path.join(paths.projectDir, '.claude', 'agents'), path.join(paths.configDir, 'agents')];
+	let agentDefs: Record<string, AgentDefinition> | undefined;
+	const refreshDefs = async (): Promise<void> => {
+		try {
+			agentDefs = await buildAgentDefinitions({dirs: agentDirs, map: flags.map, log});
+		} catch (err) {
+			log.warn('agent definitions failed', {errClass: errClass(err)});
+		}
+	};
+	await refreshDefs();
+	const classifier = createClassifier({
+		query,
+		log,
+		options: () => buildRouterOptions({paths, cred, abortController: new AbortController(), model: flags.map.light.model, env}),
+	});
+	const backToConfigured = (): {model: string | null; effort: ChatTuning['effort'] | null} => ({
+		model: live.model ?? null,
+		effort: live.tuning.effort ?? null,
+	});
+	const tierApply = (t: Tier): {model: string; effort: ChatTuning['effort'] | null} => ({
+		model: flags.map[t].model,
+		effort: flags.map[t].effort ?? null,
+	});
+	const routeOff: RouteInfo = {outcome: 'off'};
+	const settleTo = (target: Tier | undefined) => (ok: boolean): void => {
+		if (ok) router.main = target;
+	};
+	const switchTo = (target: Tier | undefined): Pick<RouteResult, 'apply' | 'settled'> =>
+		target === router.main
+			? {}
+			: {apply: target === undefined ? backToConfigured() : tierApply(target), settled: settleTo(target)};
+	const route: NonNullable<ConstructorParameters<typeof ChatSession>[0]['route']> = async ({text, signal, cache, started}) => {
+		const stored = await store.read();
+		if (signal.aborted) return undefined;
+		readFlags(stored);
+		void refreshDefs();
+		if (!flags.routerOn) {
+			if (router.main !== undefined) {
+				log.info('route', {outcome: 'off'});
+				return {...switchTo(undefined), info: routeOff};
+			}
+			return session.route && session.route.outcome !== 'off' ? {info: routeOff} : undefined;
+		}
+		const pinnedResult = (pinned: Tier): RouteResult => {
+			const previous = router.main;
+			if (pinned !== previous) log.info('route', {outcome: 'pinned', tier: pinned});
+			return {
+				...switchTo(pinned),
+				info: {outcome: 'pinned', main: pinned, pinned},
+				...(previous !== undefined && previous !== pinned && {previous}),
+			};
+		};
+		if (router.pinned !== undefined) return pinnedResult(router.pinned);
+		if (!flags.classifierOn) {
+			if (router.main === undefined) return session.route && session.route.outcome !== 'off' ? {info: routeOff} : undefined;
+			log.info('route', {outcome: 'off', reason: 'classifier-off'});
+			return {...switchTo(undefined), info: routeOff};
+		}
+		started();
+		const r = await classifier.classify(classifierPrompt(router, text), signal);
+		if (signal.aborted) return undefined;
+		if (router.pinned !== undefined) return pinnedResult(router.pinned);
+		if (!r.ok) {
+			noteContinuing(router, text);
+			log.info('route', {outcome: 'kept', reason: r.reason, tier: router.main, rated: router.rated, ms: r.ms});
+			return {
+				info: {outcome: 'kept', failed: true, ...(router.main !== undefined && {main: router.main}), ...(router.rated !== undefined && {rated: router.rated})},
+			};
+		}
+		const {rated, newTask} = applyVerdict(router, r.verdict, text);
+		const previous = router.main;
+		const decided = decideMain({prev: previous, rated, cache, now: Date.now()});
+		log.info('route', {
+			outcome: 'rated',
+			tier: decided.tier,
+			rated,
+			newTask,
+			held: decided.held === true,
+			ms: r.ms,
+			inTokens: r.tokens.in,
+			outTokens: r.tokens.out,
+		});
+		return {
+			...switchTo(decided.tier),
+			info: {outcome: 'rated', main: decided.tier, rated, newTask, ...(decided.held && {held: true})},
+			...(previous !== undefined && {previous}),
+		};
+	};
+	const setTier = (tier: Tier | 'auto'): void => {
+		log.info('tier set', {tier});
+		if (tier === 'auto') {
+			router.pinned = undefined;
+			session.applyRoute(
+				{},
+				{outcome: 'kept', ...(router.main !== undefined && {main: router.main}), ...(router.rated !== undefined && {rated: router.rated})},
+			);
+			return;
+		}
+		const previous = router.main;
+		router.pinned = tier;
+		session.applyRoute(tierApply(tier), {outcome: 'pinned', main: tier, pinned: tier}, previous, settleTo(tier));
+	};
+	const routedModel = (): {model?: string; tuning: ChatTuning} => {
+		if (router.main === undefined) return live;
+		const setting = flags.map[router.main];
+		const {effort: _effort, ...rest} = live.tuning;
+		return {model: setting.model, tuning: {...rest, ...(setting.effort !== undefined && {effort: setting.effort})}};
 	};
 
 	const turnLock = deps.turnLock?.(() => created);
@@ -223,14 +351,15 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			const access = paths.projects?.readSync();
 			const box = problem === undefined ? buildSandbox(paths, access && {...access, managed: []}, undefined, undefined, sandboxExtras) : undefined;
 			if (box) sandbox.spawned(box);
+			const routed = routedModel();
 			return {
 			...buildChatOptions({
 				paths,
 				cred,
 				abortController,
 				resume: id,
-				...(live.model !== undefined && {model: live.model}),
-				tuning: live.tuning,
+				...(routed.model !== undefined && {model: routed.model}),
+				tuning: routed.tuning,
 				env: buildEnv(env, paths, cred, shellRoot),
 				...(box && {sandbox: box}),
 				...(consoleSdk && io.commandBridge && {
@@ -258,9 +387,24 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			includePartialMessages: true,
 			...(firstSpawn() && {...(fork && {forkSession: true}), ...(resumeAt && {resumeSessionAt: resumeAt})}),
 			permissionMode: sdkPermissionMode(prompter.mode),
-			hooks: policyHooks(scope, paths.configDir, {approved: key => prompter.hasApproved(key), bashTracker: leftovers, ...(box && {beforeBash: () => sandbox.refresh(), procHidden: true})}),
+			hooks: policyHooks(scope, paths.configDir, {
+				approved: key => prompter.hasApproved(key),
+				bashTracker: leftovers,
+				...(box && {beforeBash: () => sandbox.refresh(), procHidden: true}),
+				agentRoute: input =>
+					routeAgentInput(input, {
+						routerOn: flags.routerOn,
+						rating: router.pinned ?? (flags.classifierOn ? router.rated : undefined),
+						map: flags.map,
+						dirs: agentDirs,
+						log,
+					}),
+			}),
+			...(agentDefs && Object.keys(agentDefs).length > 0 && {agents: agentDefs}),
 			};
 		},
+		route,
+		onReset: () => router.reset(),
 		onUsageLimit: ({reason, rateLimit}) => {
 			const current = cred.account;
 			if (current === undefined) return undefined;
@@ -334,6 +478,9 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	};
 	if (resume) void refreshTitle();
 	session.subscribe(e => {
+		if (e.type === 'ui' && e.event.kind === 'text') router.noteAnswer(e.event.text);
+	});
+	session.subscribe(e => {
 		if (e.type === 'sent' && session.title === undefined && !e.text.startsWith('/')) {
 			const stand = titleFromPrompt(e.text);
 			if (stand) session.setTitle(stand);
@@ -393,6 +540,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		resume,
 		shellRoot,
 		applyLive,
+		setTier,
 		close: () => {
 			for (const timer of titleTimers) clearTimeout(timer);
 			titleTimers.clear();

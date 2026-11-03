@@ -275,3 +275,26 @@ test('commands are sent after refresh and only when they changed', async () => {
 	await r.until(() => r.frames.some(f => f.type === 'commands'));
 	assert.equal(r.frames.filter(f => f.type === 'commands').length, 1);
 });
+
+test('setTier writes a frame; the route comes from the snapshot and follows route events', async () => {
+	const r = await fakeRunner({...SNAPSHOT, route: {outcome: 'pinned', main: 'max', pinned: 'max'}});
+	const s = await connect(r.socketPath);
+	cleanup.push(() => s.close());
+	assert.deepEqual(s.route, {outcome: 'pinned', main: 'max', pinned: 'max'});
+	s.setTier('auto');
+	s.setTier('light');
+	await r.until(() => r.frames.filter(f => f.type === 'setTier').length === 2);
+	assert.deepEqual(
+		r.frames.filter(f => f.type === 'setTier'),
+		[
+			{v: 1, type: 'setTier', tier: 'auto'},
+			{v: 1, type: 'setTier', tier: 'light'},
+		],
+	);
+	const seen: ChatEvent[] = [];
+	s.subscribe(e => seen.push(e));
+	r.send({type: 'event', event: {type: 'route', route: {outcome: 'rated', main: 'strong', rated: 'standard', held: true}, source: 'message'}});
+	await r.until(() => s.route?.outcome === 'rated');
+	assert.deepEqual(s.route, {outcome: 'rated', main: 'strong', rated: 'standard', held: true});
+	assert.equal(seen.at(-1)?.type, 'route');
+});

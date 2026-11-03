@@ -15,6 +15,7 @@ import {
 	MAX_TURNS,
 } from './policy.js';
 import {CONSOLE_SERVER_NAME} from './chat/console-tools.js';
+import {ROUTER_SYSTEM} from './chat/router.js';
 import type {SandboxSettings} from './chat/sandbox.js';
 import {cliTmpOf} from './chat/shell-tmp.js';
 import {ensureHub, HUB_DIRS, hubDirFor} from './deps/md.js';
@@ -346,8 +347,41 @@ export function buildChatHint(paths: ClaudePaths): string {
 		" Tool calls that run commands or change files (Bash, Edit, Write) need the user's approval in this interface." +
 		' Bash runs as root in the project directory.' +
 		' If the user denies a call, do not retry it or work around the denial; explain what you needed and ask.' +
-		' The tools mcp__yena__list_commands and mcp__yena__run_command inspect and run yena console commands; commands that change state ask the user first.'
+		' The tools mcp__yena__list_commands and mcp__yena__run_command inspect and run yena console commands; commands that change state ask the user first.' +
+		' If a task is stuck or keeps failing on the current model tier, you may ask for a stronger model with the console line "claude tier max"; the user confirms it.'
 	);
+}
+
+export function buildRouterOptions(p: {
+	paths: ClaudePaths;
+	cred: Credential;
+	abortController: AbortController;
+	model: string;
+	env: NodeJS.ProcessEnv;
+}): Options {
+	const base = buildOptions({
+		paths: p.paths,
+		cred: p.cred,
+		abortController: p.abortController,
+		model: p.model,
+		env: buildEnv(p.env, p.paths, p.cred),
+	});
+	return {
+		...base,
+		systemPrompt: ROUTER_SYSTEM,
+		additionalDirectories: [],
+		tools: [],
+		disallowedTools: [],
+		settingSources: [],
+		mcpServers: {},
+		strictMcpConfig: true,
+		settings: {disableAllHooks: true},
+		persistSession: false,
+		maxTurns: 1,
+		effort: 'low',
+		thinking: {type: 'disabled'},
+		canUseTool: async () => ({behavior: 'deny', message: 'No tools are available to the router'}),
+	};
 }
 
 const SOUL_MAX_BYTES = 16 * 1024;

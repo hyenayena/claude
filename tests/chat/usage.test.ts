@@ -20,3 +20,14 @@ test('usage adds each API call once, the main chat and subagents apart', () => {
 		'agents: 1 calls, context 1.1k (cache write 100), output 50',
 	]);
 });
+
+test('lastMain records the context of the last main-thread call only', () => {
+	const m = new UsageMeter();
+	assert.equal(m.lastMain, undefined);
+	m.add(msg('a', {input_tokens: 3, cache_creation_input_tokens: 40, cache_read_input_tokens: 500, output_tokens: 9}), 1000);
+	assert.deepEqual(m.lastMain, {at: 1000, context: 543});
+	m.add(msg('b', {input_tokens: 1, cache_read_input_tokens: 90_000}, 'toolu_1'), 2000);
+	assert.deepEqual(m.lastMain, {at: 1000, context: 543});
+	m.add(msg('c', {input_tokens: 7}), 3000);
+	assert.deepEqual(m.lastMain, {at: 3000, context: 7});
+});

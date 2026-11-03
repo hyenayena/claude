@@ -13,8 +13,9 @@ const MAX_SEEN = 2000;
 export class UsageMeter {
 	private readonly seen = new Set<string>();
 	total: ChatUsage = emptyChatUsage();
+	lastMain: {at: number; context: number} | undefined;
 
-	add(message: unknown): void {
+	add(message: unknown, now: number = Date.now()): void {
 		if (!isRecord(message) || message['type'] !== 'assistant') return;
 		const inner = message['message'];
 		if (!isRecord(inner) || !isRecord(inner['usage'])) return;
@@ -31,6 +32,9 @@ export class UsageMeter {
 		into.cacheWrite += n(u['cache_creation_input_tokens']);
 		into.cacheRead += n(u['cache_read_input_tokens']);
 		into.output += n(u['output_tokens']);
+		if (into === this.total.main) {
+			this.lastMain = {at: now, context: n(u['input_tokens']) + n(u['cache_creation_input_tokens']) + n(u['cache_read_input_tokens'])};
+		}
 	}
 }
 

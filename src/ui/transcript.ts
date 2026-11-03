@@ -1,6 +1,7 @@
-import type {AccountReason, ChatEvent, ToolPatch, TurnOutcome, UiEvent} from '../chat/events.js';
+import type {AccountReason, ChatEvent, RouteInfo, ToolPatch, TurnOutcome, UiEvent} from '../chat/events.js';
 import type {RateLimitInfo} from '../chat/limits.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
+import type {Tier} from '../chat/tiers.js';
 
 export const LIVE = {
 	maxRawChars: 2_000_000,
@@ -77,7 +78,12 @@ export type Out =
 	| {kind: 'account'; account: string; previous: string; reason: AccountReason}
 	| {kind: 'thinking'; text: string}
 	| {kind: 'task'; status: string; description: string; summary?: string}
+	| {kind: 'route-block'; route: RouteInfo; previous?: Tier}
+	| {kind: 'route'; pinned?: Tier}
 	| {kind: 'blank'};
+
+export const ROUTE_TOOL_ID = 'yena-route';
+export const ROUTE_TOOL_NAME = 'Routing';
 
 export interface Step {
 	state: TranscriptState;
@@ -286,6 +292,22 @@ export function reduceTranscript(state: TranscriptState, event: ChatEvent): Step
 		case 'steer-failed':
 		case 'title':
 			return {state, out: []};
+		case 'route-start': {
+			const tools = new Map(state.tools);
+			tools.set(ROUTE_TOOL_ID, {id: ROUTE_TOOL_ID, name: ROUTE_TOOL_NAME, input: undefined, elapsedSeconds: 0});
+			return {state: {...state, tools}, out: []};
+		}
+		case 'route': {
+			if (event.source === 'command') return {state, out: [{kind: 'route', ...(event.route.pinned !== undefined && {pinned: event.route.pinned})}]};
+			let next = state;
+			if (state.tools.has(ROUTE_TOOL_ID)) {
+				const tools = new Map(state.tools);
+				tools.delete(ROUTE_TOOL_ID);
+				next = {...state, tools};
+			}
+			if (event.route.outcome === 'off') return {state: next, out: []};
+			return {state: next, out: [{kind: 'route-block', route: event.route, ...(event.previous !== undefined && {previous: event.previous})}]};
+		}
 		case 'account':
 			return {
 				state: {...state, account: event.account, limit: undefined, pendingApiError: undefined},

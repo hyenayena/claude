@@ -241,3 +241,52 @@ test('snapshot tasks keep their tool use id and subagent type', () => {
 	assert.deepEqual(back.tasks, [task]);
 	assert.throws(() => createDecoder('toClient').push(line({...snap, tasks: [{...task, toolUseId: 'x'.repeat(257)}]})), ProtocolError);
 });
+
+test('a setTier frame crosses for a tier or auto; anything else is rejected', () => {
+	for (const tier of ['light', 'standard', 'strong', 'max', 'auto'] as const) {
+		const frame: ClientFrame = {v: 1, type: 'setTier', tier};
+		assert.deepEqual(createDecoder('toRunner').push(Buffer.from(encodeFrame(frame))), [frame]);
+	}
+	for (const tier of ['MAX', 'huge', 3, undefined]) {
+		assert.throws(() => createDecoder('toRunner').push(line({v: 1, type: 'setTier', tier})), ProtocolError, String(tier));
+	}
+});
+
+test('route-start and route events cross with every field; bad enums are rejected', () => {
+	const start: RunnerFrame = {v: 1, type: 'event', event: {type: 'route-start'}};
+	assert.deepEqual(createDecoder('toClient').push(Buffer.from(encodeFrame(start))), [start]);
+	const full: RunnerFrame = {
+		v: 1,
+		type: 'event',
+		event: {type: 'route', route: {outcome: 'rated', main: 'strong', rated: 'standard', newTask: true, held: true}, previous: 'max', source: 'message'},
+	};
+	assert.deepEqual(createDecoder('toClient').push(Buffer.from(encodeFrame(full))), [full]);
+	const failed: RunnerFrame = {v: 1, type: 'event', event: {type: 'route', route: {outcome: 'kept', failed: true}, source: 'message'}};
+	assert.deepEqual(createDecoder('toClient').push(Buffer.from(encodeFrame(failed))), [failed]);
+	const pinned: RunnerFrame = {v: 1, type: 'event', event: {type: 'route', route: {outcome: 'pinned', main: 'max', pinned: 'max'}, source: 'command'}};
+	assert.deepEqual(createDecoder('toClient').push(Buffer.from(encodeFrame(pinned))), [pinned]);
+	const ev = (route: unknown, extra: Record<string, unknown> = {}) => line({v: 1, type: 'event', event: {type: 'route', route, source: 'message', ...extra}});
+	for (const bad of [
+		ev({outcome: 'maybe'}),
+		ev({outcome: 'rated', main: 'huge'}),
+		ev({outcome: 'rated', rated: 'MAX'}),
+		ev({outcome: 'pinned', pinned: 1}),
+		ev({outcome: 'rated', held: 'yes'}),
+		ev({outcome: 'kept', failed: 'true'}),
+		ev({outcome: 'rated'}, {previous: 'huge'}),
+		ev({outcome: 'rated'}, {source: 'robot'}),
+		ev('rated'),
+	]) {
+		assert.throws(() => createDecoder('toClient').push(bad), ProtocolError, bad);
+	}
+});
+
+test('a snapshot carries the route, validated the same way', () => {
+	const snap = {v: 1, type: 'snapshot', state: 'idle', mode: 'default', needsNewSession: false, pendingPermissions: [], tasks: [], commands: [], queued: [], startedAt: 1};
+	const route = {outcome: 'pinned', main: 'max', pinned: 'max'};
+	const [back] = createDecoder('toClient').push(line({...snap, route})) as unknown as [{route: unknown}];
+	assert.deepEqual(back.route, route);
+	const [none] = createDecoder('toClient').push(line(snap)) as unknown as [{route?: unknown}];
+	assert.equal(none.route, undefined);
+	assert.throws(() => createDecoder('toClient').push(line({...snap, route: {outcome: 'rated', main: 'giant'}})), ProtocolError);
+});

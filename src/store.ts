@@ -2,6 +2,7 @@ import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {Logger} from '../../../src/api.js';
 import {isEffort, isOutputStyle} from './chat-prefs.js';
+import {isTierModel, TIER_STATE_KEYS, TIERS} from './chat/tiers.js';
 import {atomicWriteFile} from './fsutil.js';
 import {noopLog} from './log.js';
 import type {ClaudeState} from './types.js';
@@ -34,6 +35,15 @@ const sanitize = (raw: unknown): ClaudeState => {
 	if (r.chatMcp === 'off') state.chatMcp = 'off';
 	if (r.chatHooks === 'on') state.chatHooks = 'on';
 	if (r.chatKeepRunning === 'on') state.chatKeepRunning = 'on';
+	if (r.chatRouter === 'on') state.chatRouter = 'on';
+	if (r.chatClassifier === 'off') state.chatClassifier = 'off';
+	for (const t of TIERS) {
+		const keys = TIER_STATE_KEYS[t];
+		const model = r[keys.model];
+		const effort = r[keys.effort];
+		if (isTierModel(model)) state[keys.model] = model;
+		if (isEffort(effort)) state[keys.effort] = effort;
+	}
 	if (Array.isArray(r.allowedCommands)) {
 		const list = r.allowedCommands.filter(
 			(c): c is string => typeof c === 'string' && c.trim() !== '' && c.length <= MAX_RULE && !/[\n\0]/.test(c),

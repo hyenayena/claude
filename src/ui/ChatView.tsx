@@ -24,6 +24,7 @@ import {
 	formatUserLine,
 	liveTail,
 	modeHint,
+	routeBarText,
 	statusBarText,
 	tasksBarText,
 	todoLines,
@@ -280,7 +281,7 @@ export function ChatView(props: ChatViewProps) {
 					print(block.text, block.options);
 					continue;
 				}
-				if (out.kind === 'tool' || out.kind === 'audit') {
+				if (out.kind === 'tool' || out.kind === 'audit' || out.kind === 'route-block') {
 					if (out.kind === 'tool') beatRef.current++;
 					const width = lastWidthRef.current > 1 ? lastWidthRef.current - 1 : undefined;
 					const text = formatOut(out, scrub, reveal, width);
@@ -290,7 +291,7 @@ export function ChatView(props: ChatViewProps) {
 					continue;
 				}
 				const text = formatOut(out, scrub, reveal, lastWidthRef.current || undefined);
-				if (out.kind === 'mode' || out.kind === 'account') printNotice(text);
+				if (out.kind === 'mode' || out.kind === 'account' || out.kind === 'route') printNotice(text);
 				else print(text);
 			}
 			if (event.type === 'turn-end' && queueRef.current.length > 0) {
@@ -1028,6 +1029,7 @@ export function ChatView(props: ChatViewProps) {
 			...(t.account !== undefined && {account: t.account}),
 			...(pin !== undefined && {pin}),
 			model: t.model,
+			route: routeBarText(controller.route),
 			sessionId: t.sessionId,
 			phase: t.phase,
 			pending: controller.pendingPermissions.length,

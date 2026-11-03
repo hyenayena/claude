@@ -118,3 +118,31 @@ test('chatKeepRunning keeps only "on" and survives a round trip', async () => {
 	await store.update({chatKeepRunning: 'on'});
 	assert.deepEqual(await createStore(dir).read(), {chatKeepRunning: 'on'});
 });
+
+test('router, classifier and tier keys keep only valid values', async () => {
+	const dir = await tmp();
+	await writeFile(
+		join(dir, 'state.json'),
+		JSON.stringify({
+			chatRouter: 'on',
+			chatClassifier: 'off',
+			tierLightModel: 'sonnet',
+			tierLightEffort: 'low',
+			tierStandardModel: 'claude-opus-9',
+			tierStandardEffort: 'turbo',
+			tierStrongModel: 'fable',
+			tierMaxEffort: 'max',
+		}),
+	);
+	const store = createStore(dir);
+	assert.deepEqual(await store.read(), {
+		chatRouter: 'on',
+		chatClassifier: 'off',
+		tierLightModel: 'sonnet',
+		tierLightEffort: 'low',
+		tierStrongModel: 'fable',
+		tierMaxEffort: 'max',
+	});
+	await writeFile(join(dir, 'state.json'), JSON.stringify({chatRouter: 'off', chatClassifier: 'on', tierMaxModel: 3}));
+	assert.deepEqual(await store.read(), {});
+});

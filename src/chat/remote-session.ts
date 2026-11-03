@@ -11,8 +11,9 @@ import {readHolder} from '../sessions/lock.js';
 import type {RewindResult} from '../types.js';
 import {type CredentialBundle, encodeBundle} from '../vault.js';
 import type {SlashCommandInfo, TaskInfo} from './chat-session.js';
-import type {ChatEvent, ChatState} from './events.js';
+import type {ChatEvent, ChatState, RouteInfo} from './events.js';
 import type {ChatHandle} from './handle.js';
+import type {Tier} from './tiers.js';
 import type {RateLimitInfo} from './limits.js';
 import {MODE_CYCLE, PERMISSION_IDLE_MS} from './permission.js';
 import type {ChatMode, PermissionDecision, PermissionRequest, ToolRequest} from './permission.js';
@@ -71,6 +72,7 @@ export class RemoteChatSession implements ChatHandle {
 	private _model: string | undefined;
 	private _mode: ChatMode = 'default';
 	private _title: string | undefined;
+	private _route: RouteInfo | undefined;
 	private _needsNewSession = false;
 	private _commands: SlashCommandInfo[] = [];
 	private _rateLimit: RateLimitInfo | undefined;
@@ -181,6 +183,9 @@ export class RemoteChatSession implements ChatHandle {
 	get mode(): ChatMode {
 		return this._mode;
 	}
+	get route(): RouteInfo | undefined {
+		return this._route;
+	}
 	get title(): string | undefined {
 		return this._title;
 	}
@@ -279,6 +284,11 @@ export class RemoteChatSession implements ChatHandle {
 	applyLive(patch: LivePatch): void {
 		if (this._state === 'closed') return;
 		this.write({v: 1, type: 'applyLive', patch});
+	}
+
+	setTier(tier: Tier | 'auto'): void {
+		if (this._state === 'closed') return;
+		this.write({v: 1, type: 'setTier', tier});
 	}
 
 	setTitle(title: string): void {
@@ -393,6 +403,7 @@ export class RemoteChatSession implements ChatHandle {
 		this._mode = s.mode;
 		this._needsNewSession = s.needsNewSession;
 		this._title = s.title;
+		this._route = s.route;
 		this.remotePending = [...s.pendingPermissions];
 		this._tasks.clear();
 		for (const t of [...s.tasks].reverse()) this._tasks.set(t.id, t);
@@ -481,6 +492,9 @@ export class RemoteChatSession implements ChatHandle {
 			}
 			case 'ui':
 				this.onUi(event.event);
+				break;
+			case 'route':
+				this._route = event.route;
 				break;
 			default:
 				break;

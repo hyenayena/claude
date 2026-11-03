@@ -391,3 +391,26 @@ test('the hooks and a real sweeper remove a placeholder only once no Bash call i
 	assert.equal(existsSync(placeholder), false);
 	assert.equal(existsSync(path.join(dir, '.claude')), false);
 });
+
+test('an Agent call routed by agentRoute is allowed with the updated input; isolation is still denied first', async () => {
+	const seen: Record<string, unknown>[] = [];
+	const routed = createPolicyHook(buildScope(paths, path.join(tmp, 'home')), paths.configDir, {
+		agentRoute: async input => {
+			seen.push(input);
+			return input.subagent_type === 'plain' ? undefined : {...input, model: 'opus', effort: 'high'};
+		},
+	});
+	const call = (tool_name: string, tool_input: Record<string, unknown>) =>
+		routed({hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: projectDir} as never, 't', opts);
+	assert.deepEqual(await call('Agent', {subagent_type: 'coder', prompt: 'x'}), {
+		hookSpecificOutput: {hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput: {subagent_type: 'coder', prompt: 'x', model: 'opus', effort: 'high'}},
+	});
+	assert.deepEqual(await call('Task', {subagent_type: 'plain', prompt: 'x'}), {continue: true});
+	const denied = (await call('Agent', {prompt: 'x', isolation: 'remote'})) as {hookSpecificOutput: {permissionDecision: string}};
+	assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+	assert.equal(seen.length, 2, 'agentRoute is not asked for a denied call');
+});
+
+test('without agentRoute an Agent call passes as before', async () => {
+	assert.deepEqual(await run('Agent', {subagent_type: 'coder', prompt: 'x', model: 'haiku'}), {continue: true});
+});

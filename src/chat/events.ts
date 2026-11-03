@@ -1,4 +1,5 @@
 import type {RateLimitInfo} from './limits.js';
+import type {Tier} from './tiers.js';
 import type {AuditEntry, ChatMode, PermissionDecision, PermissionRequest} from './permission.js';
 
 export type ToolPatch = {hunks: {oldStart: number; newStart: number; lines: string[]}[]; created?: true};
@@ -74,7 +75,23 @@ export type ChatEvent =
 	| {type: 'sent'; text: string}
 	| {type: 'steer-failed'; text: string}
 	| {type: 'title'; title: string}
-	| {type: 'account'; account: string; previous: string; reason: AccountReason};
+	| {type: 'account'; account: string; previous: string; reason: AccountReason}
+	| {type: 'route-start'}
+	| {type: 'route'; route: RouteInfo; previous?: Tier; source: RouteSource};
+
+export const ROUTE_OUTCOMES = ['rated', 'kept', 'pinned', 'off'] as const;
+export const ROUTE_SOURCES = ['message', 'command'] as const;
+export type RouteSource = (typeof ROUTE_SOURCES)[number];
+
+export type RouteInfo = {
+	main?: Tier;
+	rated?: Tier;
+	pinned?: Tier;
+	newTask?: boolean;
+	held?: boolean;
+	failed?: true;
+	outcome: (typeof ROUTE_OUTCOMES)[number];
+};
 
 export interface ChatController {
 	readonly state: ChatState;
@@ -83,6 +100,7 @@ export interface ChatController {
 	readonly needsNewSession: boolean;
 	readonly mode: ChatMode;
 	readonly title: string | undefined;
+	readonly route?: RouteInfo;
 	readonly tasks?: readonly {id?: string; status: string; background: boolean; taskType?: string; toolUseId?: string; subagentType?: string; description?: string}[];
 	backgroundTasks?(): Promise<boolean>;
 	readonly pendingPermissions: readonly PermissionRequest[];
