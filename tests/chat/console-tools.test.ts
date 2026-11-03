@@ -360,8 +360,34 @@ test('claude tier always asks, in auto mode too, never offers "always" and ignor
 	}
 });
 
-test('alwaysAsk covers only claude tier, and neverAlways includes it', () => {
-	assert.equal(alwaysAsk('cmd:claude tier'), true);
-	assert.equal(neverAlways('cmd:claude tier'), true);
-	for (const key of ['cmd:claude', 'cmd:claude tierx', 'cmd:claude tasks', 'cmd:tier']) assert.equal(alwaysAsk(key), false, key);
+test('alwaysAsk covers claude tier, start and send, and neverAlways includes them', () => {
+	for (const key of ['cmd:claude tier', 'cmd:claude start', 'cmd:claude send']) {
+		assert.equal(alwaysAsk(key), true, key);
+		assert.equal(neverAlways(key), true, key);
+	}
+	for (const key of ['cmd:claude', 'cmd:claude tierx', 'cmd:claude tasks', 'cmd:claude startx', 'cmd:tier', 'cmd:start']) assert.equal(alwaysAsk(key), false, key);
+});
+
+test('claude start and send always ask a person, in auto mode too, and ignore a saved rule', async () => {
+	for (const sub of ['start', 'send'] as const) {
+		for (const mode of ['auto', 'default', 'acceptEdits'] as const) {
+			const confirms: CommandRunRequest['confirm'][] = [];
+			const {runTool, prompter} = setup(async req => {
+				confirms.push(req.confirm);
+				return ok('');
+			});
+			prompter.mode = mode;
+			prompter.approved.add(`cmd:claude ${sub}`);
+			prompter.decision = {kind: 'allow', always: true};
+			const line = `claude ${sub} hello`;
+			await runTool.handler({command: line}, {});
+			assert.equal(await confirms[0]!({line, command: 'claude', subcommand: sub, caller: 'yena'}), true, `${sub} ${mode}`);
+			assert.equal(prompter.requests.length, 1, `${sub} ${mode}`);
+			const req = prompter.requests[0]!;
+			assert.equal(req.kind === 'tool' && req.always, false, `${sub} ${mode}`);
+			assert.ok(!prompter.audits.some(a => a.outcome === 'auto-accepted' || a.outcome === 'always-allowed'), `${sub} ${mode}`);
+			prompter.decision = {kind: 'deny'};
+			assert.equal(await confirms[0]!({line, command: 'claude', subcommand: sub, caller: 'yena'}), false, `${sub} ${mode}`);
+		}
+	}
 });
