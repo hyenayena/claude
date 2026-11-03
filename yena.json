@@ -6,9 +6,7 @@
 	"entry": "src/index.ts",
 	"install": "bin/install",
 	"credentials": {
-		"anthropic-key": "write",
-		"anthropic-token": "write",
-		"claude-login": "write"
+		"anthropic-key": "write"
 	},
 	"dependencies": {
 		"md": "git@github.com:hyenayena/md.git",
