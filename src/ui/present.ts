@@ -454,13 +454,9 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 			return formatModeLine(out.mode, out.error, scrub);
 		case 'account':
 			return formatNotice(
-				out.reason === 'restored'
-					? `Back on account "${out.account}" (higher priority, available again).`
-					: out.reason === 'changed'
-						? `Now on account "${out.account}" instead of "${out.previous}".`
-						: out.reason === 'pinned'
-							? `Now on account "${out.account}" (chosen with "claude auth use").`
-							: `Account "${out.previous}" ${out.reason === 'billing' ? 'cannot be billed' : 'reached its usage limit'}; continuing with "${out.account}".`,
+				out.reason === 'pinned'
+					? `Now on account "${out.account}" (chosen with "claude auth use").`
+					: `Now on account "${out.account}" instead of "${out.previous}".`,
 				scrub,
 			);
 		case 'route-block':

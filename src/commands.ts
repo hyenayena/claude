@@ -5,12 +5,10 @@ import type {ArgumentDoc, BuildInfo, Command, CommandContext, DevFailure, Logger
 import {line, printStyled, span, table, textBlock} from './kit.js';
 import {createFixCommand} from './fix.js';
 import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
-import {CONTINUE_TEXT, isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
-import {type AccountView, adoptLoginAccount, checkAccountName, chooseAccount, clearPin, listAccounts, LoginUnsavedError, markLimited, newAccountNameProblem, pinnedAccount, removeAccount, setOrder, suggestSecretName, useAccount} from './accounts.js';
-import {snapshotLogin} from './login-slot.js';
+import {isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
+import {type AccountView, checkAccountName, chooseAccount, clearPin, listAccounts, newAccountNameProblem, pinnedAccount, removeAccount, setOrder, suggestSecretName, useAccount} from './accounts.js';
 import {legacyCount} from './migrate.js';
 import {degradedReason, type ClaudeVault} from './vault.js';
-import {formatReset, systemClock} from './chat/limits.js';
 import type {ChatHandle} from './chat/handle.js';
 import {isTier, type Tier} from './chat/tiers.js';
 import {usageLines} from './chat/usage.js';
@@ -30,17 +28,20 @@ import {
 	inspectFileMode,
 	isSubscription,
 	loadBundle,
-	loginSyncOf,
+	noteLoginStatus,
+	refreshLoginInfo,
 	makeRedactor,
+	API_KEY_ONLY,
 	noCredentials,
 	prepareCredential,
 	registerLogRedaction,
-	removeStored,
+	requireCredential,
 	resolveCredential,
 	storeSecret,
 	vaultOf,
 } from './credentials.js';
 import {editFile, readHidden, readLine, runInteractive, runInteractiveStatus, waitForEnter} from './terminal.js';
+import {loadRetiredCredentials} from './deps/account.js';
 import {clip, errClass, noopLog} from './log.js';
 import {openChat, runChat, type ChatOpen, type ChatRoute, type ChatRouteRequest, type ChatRunDeps, type ChatUi} from './chat/command.js';
 import {makeScrub} from './chat/scrub.js';
@@ -62,9 +63,6 @@ const ruleKind = (rule: string): string =>
 				: 'Bash command allowed with "always"';
 
 const LIMIT_KINDS = new Set(['usage-limit', 'rate-limit', 'billing', 'context']);
-const MAX_ASK_SWITCHES = 8;
-const LIMIT_HOLD_S = 5 * 3600;
-const BILLING_HOLD_S = 24 * 3600;
 
 const limitKind = (err: unknown): string | undefined =>
 	err instanceof TurnFailure && err.kind !== undefined && LIMIT_KINDS.has(err.kind) ? err.kind : undefined;
@@ -86,6 +84,7 @@ export type ClaudeDeps = {
 	sessionDir?: () => string;
 	log?: Logger;
 	vault?: ClaudeVault;
+	loadRetired?: typeof loadRetiredCredentials;
 	redactExtra?: (text: string) => string;
 	timeoutMs?: number;
 	registerAbort?: (c: AbortController) => () => void;
@@ -145,8 +144,11 @@ const passthroughDescription = (text: string | undefined): string => {
 export {MODEL_OPTIONS} from './chat-prefs.js';
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
+const SUBSCRIPTION_NOTICE_VERSION = 2;
 const SUBSCRIPTION_NOTICE =
-	"Notice: you are using your Claude subscription (OAuth), through Claude Code's own claude.ai login or a setup-token. Anthropic's terms say third-party products built on the Agent SDK may not offer claude.ai login; yena runs that login for your own personal use only, as you approved. Do not share or redistribute this setup; see README \"Policy caveat\". Prefer ANTHROPIC_API_KEY.";
+	"Notice: you are using your own Claude subscription through Claude Code's own sign-in (or CLAUDE_CODE_OAUTH_TOKEN from your environment). Anthropic allows this for ordinary, individual use of Claude Code and the Agent SDK by the plan's purchaser; yena does not store or pass on Claude.ai credentials and does not switch accounts at a usage limit. Use only accounts that are your own (Anthropic's Consumer Terms do not allow sharing accounts). Do not share this setup or run it for others; see README \"Policy caveat\". API keys are recommended for everyone and for anything else (\"claude auth add\" or ANTHROPIC_API_KEY).";
+
+const unattended = (ctx: CommandContext): boolean => ctx.signal !== undefined && ctx.caller !== 'yena';
 
 const kindLabel = (info: CredentialInfo): string => {
 	if (info.source === 'claude-login') return isSubscription(info) ? 'subscription login' : 'API key (login)';
@@ -166,7 +168,6 @@ const TYPE_LABELS: Record<AccountView['type'], string> = {
 	env: 'environment variable',
 	login: 'Claude Code login',
 	key: 'API key',
-	token: 'subscription token',
 };
 
 const SOURCE_LABELS: Record<CredentialInfo['source'], string> = {
@@ -194,9 +195,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const {dataDir, env} = deps;
 	const log = deps.log ?? noopLog;
 	const store = createStore(dataDir, log);
-	const credOpts: CredentialOpts = {env, dataDir, log, ...(deps.vault && {vault: deps.vault})};
-	const vault = vaultOf(credOpts);
-	const loginSync = () => loginSyncOf(credOpts);
 	const redactor = (cred?: Credential) => makeRedactor(cred, allSecrets(credOpts), deps.redactExtra);
 	const loginPaths = () => resolvePaths(dataDir, deps.moduleDir);
 	const cliBin = (): string | undefined => {
@@ -209,6 +207,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			const bin = cliBin();
 			return bin ? probeLogin({bin, env: cliEnv(env, loginPaths())}) : undefined;
 		});
+	const credOpts: CredentialOpts = {env, dataDir, log, probeLogin: probe, ...(deps.vault && {vault: deps.vault})};
+	const vault = vaultOf(credOpts);
 	const runCli = deps.login?.run ?? ((bin, args, e) => runInteractive(bin, args, e));
 	const runCode = deps.runCode ?? runInteractiveStatus;
 	const wait = deps.login?.wait ?? waitForEnter;
@@ -398,11 +398,27 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		return {free: false, title: makeScrub(s => s)(title).slice(0, 80)};
 	};
 
+	const showRetiredOnce = async (ctx: CommandContext): Promise<void> => {
+		let record;
+		try {
+			record = await (deps.loadRetired ?? loadRetiredCredentials)(dataDir);
+		} catch (err) {
+			log.warn('retired credentials record unavailable', {errClass: errClass(err)});
+			return;
+		}
+		if (!record || (await store.read()).retiredNoticeAt === record.at) return;
+		ctx.print(
+			`yena no longer stores Claude logins or subscription tokens (Anthropic's rules: sign-in to a Claude account must complete through Claude Code's own flow). Removed from the account module: ${record.logins} login(s), ${record.tokens} token(s). The Claude Code login in use stays; "claude auth login" signs in to another account. A usage limit now ends the turn; yena no longer switches accounts on its own ("claude auth use <account>" picks one).`,
+		);
+		await store.update({retiredNoticeAt: record.at});
+	};
+
 	const showNoticeOnce = async (cred: CredentialInfo, ctx: CommandContext): Promise<void> => {
+		await showRetiredOnce(ctx);
 		if (!isSubscription(cred)) return;
-		if ((await store.read()).subscriptionNoticeShown) return;
+		if (((await store.read()).subscriptionNotice ?? 0) >= SUBSCRIPTION_NOTICE_VERSION) return;
 		ctx.print(SUBSCRIPTION_NOTICE);
-		await store.update({subscriptionNoticeShown: true});
+		await store.update({subscriptionNotice: SUBSCRIPTION_NOTICE_VERSION});
 	};
 
 	const ask = async (args: string[], ctx: CommandContext): Promise<void> => {
@@ -429,36 +445,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 
-	const switchAfterLimit = async (err: unknown, cred: Credential): Promise<Credential | undefined> => {
-		const kind = limitKind(err);
-		if ((kind !== 'usage-limit' && kind !== 'billing') || cred.account === undefined) return undefined;
-		await loginSync().sync();
-		const ctx = accountsCtx(credOpts);
-		const now = Date.now() / 1000;
-		const resetsAt = err instanceof TurnFailure ? err.rateLimit?.resetsAt : undefined;
-		const until = kind === 'billing' ? now + BILLING_HOLD_S : resetsAt !== undefined && resetsAt > now ? resetsAt : now + LIMIT_HOLD_S;
-		const {unpinned} = markLimited(ctx, cred.account, until, kind);
-		const next = chooseAccount(ctx);
-		log.info('account limited', {reason: kind, unpinned, next: next !== undefined && next.limitedUntil === undefined && next.name !== cred.account});
-		if (!next || next.limitedUntil !== undefined || next.name === cred.account) return undefined;
-		try {
-			return prepareCredential(credOpts);
-		} catch (e) {
-			if (!(e instanceof LoginUnsavedError)) throw e;
-			log.info('account switch skipped', {reason: 'login-unsaved'});
-			return undefined;
-		}
-	};
-
 	const prepareAsk = async (): Promise<Credential> => {
 		await loadBundle(credOpts);
-		try {
-			return prepareCredential(credOpts);
-		} catch (err) {
-			if (!(err instanceof LoginUnsavedError)) throw err;
-			await loginSync().sync();
-			return prepareCredential(credOpts);
-		}
+		return prepareCredential(credOpts);
 	};
 
 	const runAsk = async (text: string, fresh: boolean, ctx: CommandContext): Promise<void> => {
@@ -508,26 +497,12 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			const paths = await withProjects(resolvePaths(dataDir, deps.moduleDir));
 			ensureMdLinks(paths);
 			restrictDataDirs(paths);
-			let resume = fresh ? undefined : state.lastSessionId;
-			let prompt = text;
+			const resume = fresh ? undefined : state.lastSessionId;
 			let result;
-			for (let switches = 0; ; switches++) {
 			const options = buildOptions({paths, cred, abortController: controller, resume, env: buildEnv(env, paths, cred)});
 			try {
-				result = await runTurn({query, prompt, options, signal: controller.signal, redact, log});
-				break;
+				result = await runTurn({query, prompt: text, options, signal: controller.signal, redact, log});
 			} catch (err) {
-				const next = !timedOut && switches < MAX_ASK_SWITCHES ? await switchAfterLimit(err, cred) : undefined;
-				if (next) {
-					ctx.print(`Account "${cred.account}" ${limitKind(err) === 'billing' ? 'cannot be billed' : 'reached its usage limit'}; continuing with "${next.account}".`);
-					if (err instanceof TurnFailure && err.sessionId) {
-						resume = err.sessionId;
-						prompt = CONTINUE_TEXT;
-					}
-					cred = next;
-					registerLogRedaction(log, cred);
-					continue;
-				}
 				const failure = timedOut ? new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds`) : err;
 				if (err instanceof TurnFailure && err.sessionId && err.kind !== 'resume') {
 					await store
@@ -544,7 +519,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				});
 				throw failure;
 			}
-			}
 			await store.update({lastSessionId: result.sessionId, ...(result.model && {lastModel: result.model})});
 			ctx.print(scrub(result.text));
 			const model = result.model ?? 'unknown';
@@ -560,7 +534,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			askAbort = undefined;
 			clearTimeout(timer);
 			unregister?.();
-			await loginSync().sync();
 		}
 	};
 
@@ -617,6 +590,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	let setOpenTier: ((tier: Tier | 'auto') => void) | undefined;
 	let refreshOpenPin: (() => void) | undefined;
 	let deliverToOpenChat: ((text: string) => void) | undefined;
+	let openKeyOnly = false;
 
 	let inputMode: 'normal' | 'vim' = 'normal';
 	void store.read().then(
@@ -661,7 +635,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		};
 	};
 
-	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>, endIdleRemote = true, onOpened?: () => void): Promise<void> => {
+	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>, endIdleRemote = true, onOpened?: () => void, keyOnly = false): Promise<void> => {
 		if (askRunning) throw new Error('An ask is already running');
 		if (endIdleRemote && openSession?.state === 'idle') openSession.end?.();
 		const previous = openHandle;
@@ -669,6 +643,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			previous.close();
 			await previous.done.catch(() => {});
 		}
+		openKeyOnly = keyOnly;
 		let close: (() => void) | undefined;
 		let closeRequested = false;
 		const done = start(
@@ -701,6 +676,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const text = args.join(' ').trim();
 		if (text === '') throw new Error(START_USAGE);
 		if (text.length > START_MAX) throw new Error(`The message is longer than ${START_MAX} characters`);
+		const keyOnly = unattended(ctx);
+		if (keyOnly) await requireCredential(credOpts, {apiKeyOnly: true});
 		if (openSession?.state === 'running') throw new Error('A chat is answering; start the new one when it is done (or press Esc in it).');
 		const view = ctx.signal ? mainCtx : ctx;
 		if (!view?.mount) throw new Error('No chat view is available; open the chat once with "chat".');
@@ -710,13 +687,14 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			opened = resolve;
 		});
 		const running = replaceChat(
-			d => openChat({fresh: true, ...(state.chatModel && {model: state.chatModel}), tuning: tuningFromState(state), send: text}, view, d),
+			d => openChat({fresh: true, ...(state.chatModel && {model: state.chatModel}), tuning: tuningFromState(state), send: text, ...(keyOnly && {apiKeyOnly: true})}, view, d),
 			true,
 			opened,
+			keyOnly,
 		);
 		running.catch(err => log.warn('started chat failed', {errClass: errClass(err)}));
 		await Promise.race([up, running]);
-		log.info('chat started with a message', {chars: text.length, byCaller: ctx.signal !== undefined});
+		log.info('chat started with a message', {chars: text.length, byCaller: ctx.signal !== undefined, apiKeyOnly: keyOnly});
 		ctx.print('Started a new chat with the message.');
 	};
 
@@ -726,6 +704,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (text.length > START_MAX) throw new Error(`The message is longer than ${START_MAX} characters`);
 		const deliver = deliverToOpenChat;
 		if (!deliver) return startChat(args, ctx);
+		if (unattended(ctx) && !openKeyOnly) throw new Error(API_KEY_ONLY);
 		deliver(text);
 		log.info('message sent to the open chat', {chars: text.length, byCaller: ctx.signal !== undefined});
 		ctx.print('Sent the message to the open chat.');
@@ -930,16 +909,11 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			list.map((a, i) => {
 				const what =
 					a.type === 'login'
-						? `${TYPE_LABELS.login} (${a.kind === 'oauth' ? 'subscription' : 'Console'}${a.email ? `, ${a.email}` : ''}; stored in the account module)`
+						? `Claude Code login (${a.kind === 'oauth' ? 'subscription' : 'Console'}${a.email ? `, ${a.email}` : ''})`
 						: a.type === 'env'
 							? `${a.kind === 'api-key' ? 'ANTHROPIC_API_KEY' : 'CLAUDE_CODE_OAUTH_TOKEN'} (${TYPE_LABELS.env})`
-							: `${TYPE_LABELS[a.type]} (stored in the account module)`;
-				const state: StyledCell =
-					a.unusable !== undefined
-						? span(scrub(UNUSABLE_LABELS[a.unusable]), {tone: 'error'})
-						: a.limitedUntil !== undefined
-							? span(scrub(`${a.reason === 'billing' ? 'billing failed' : 'limit reached'}, back at ${formatReset(a.limitedUntil, systemClock)}`), {tone: 'warn'})
-							: '';
+							: 'API key (stored in the account module)';
+				const state: StyledCell = a.unusable !== undefined ? span(scrub(UNUSABLE_LABELS[a.unusable]), {tone: 'error'}) : '';
 				const head: StyledSpan[] = [
 					chosen?.name === a.name ? span('▸', {tone: 'accent'}) : span(' '),
 					span(` ${i + 1}. `),
@@ -954,41 +928,35 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const authStatus = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 0) throw new Error('Usage: claude auth status');
 		await loadBundle(credOpts);
-		await loginSync().sync();
 		const list = listAccounts(accountsCtx(credOpts));
 		const active = await resolveCredential(credOpts);
 		const status = vault.current().status;
-		log.info('auth status', {kind: active?.kind, source: active?.source, accounts: list.length, limited: list.filter(a => a.limitedUntil !== undefined).length});
+		log.info('auth status', {kind: active?.kind, source: active?.source, accounts: list.length});
 		const blocks: StyledBlock[] = [];
 		if (!active) {
 			blocks.push(textBlock(noCredentials(vault.current()), 'warn'));
 		} else {
 			blocks.push(line(span('Active credential:', {bold: true}), ` ${describeCredential(active)}`));
 			const pin = pinnedAccount(accountsCtx(credOpts));
-			if (pin) {
-				blocks.push(
-					line(
-						span(
-							pin.only
-								? `Pinned: "${pin.name}" only (never switches at a limit; "claude auth auto" unpins)`
-								: `Pinned: "${pin.name}" (until its limit; "claude auth auto" unpins)`,
-							{tone: 'accent'},
-						),
-					),
-				);
-			}
-			blocks.push(line(span('Accounts, in priority order', {bold: true}), span(' (▸ is used next; when it reaches its limit, the next one takes over):', {tone: 'muted'})));
+			if (pin) blocks.push(line(span(`Pinned: "${pin.name}" ("claude auth auto" unpins)`, {tone: 'accent'})));
+			blocks.push(
+				line(
+					span('Accounts', {bold: true}),
+					span(' (▸ is used for new turns: the pinned account, else the first in this order; yena never switches on its own):', {tone: 'muted'}),
+				),
+			);
 			blocks.push(accountTable(list));
 			const reason = degradedReason(status);
 			if (reason) blocks.push(line(span(reason, {tone: 'warn'})));
 		}
-		const waiting = status === 'ok' ? 0 : legacyCount(dataDir, join(dataDir, 'config'));
+		const waiting = status === 'ok' ? 0 : legacyCount(dataDir);
 		if (waiting > 0) {
 			blocks.push(line(span(`${waiting} stored Claude account${waiting === 1 ? '' : 's'} wait${waiting === 1 ? 's' : ''} to move to the account module: account grant claude`, {tone: 'warn'})));
 		}
 		for (const warning of await inspectFileMode(dataDir)) blocks.push(line(span(`Warning: ${warning}`, {tone: 'warn'})));
 		printStyled(ctx, blocks);
 		if (active) await showNoticeOnce(active, ctx);
+		else await showRetiredOnce(ctx);
 	};
 
 	const authOrder = async (args: string[], ctx: CommandContext): Promise<void> => {
@@ -1000,21 +968,15 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	const authUse = async (args: string[], ctx: CommandContext): Promise<void> => {
-		const names = args.filter(a => a !== '--only');
-		if (names.length !== 1 || names[0]!.startsWith('--')) throw new Error('Usage: claude auth use <account> [--only]');
-		const only = names.length !== args.length;
-		const name = names[0]!;
+		if (args.includes('--only')) {
+			throw new Error('Unknown option "--only": yena no longer switches accounts on its own, so "claude auth use <account>" already keeps it until "claude auth auto"');
+		}
+		if (args.length !== 1 || args[0]!.startsWith('--')) throw new Error('Usage: claude auth use <account>');
+		const name = args[0]!;
 		await loadBundle(credOpts);
-		const list = useAccount(accountsCtx(credOpts), name, {only});
-		log.info('auth use', {count: list.length, only});
-		printStyled(ctx, [
-			line(
-				only
-					? `"${name}" is pinned (only): new turns always use it, even at its limit. "claude auth auto" unpins it.`
-					: `"${name}" is pinned: new turns use it until it reaches its limit, then the priority order takes over. "claude auth auto" unpins it.`,
-			),
-			accountTable(list),
-		]);
+		const list = useAccount(accountsCtx(credOpts), name);
+		log.info('auth use', {count: list.length});
+		printStyled(ctx, [line(`"${name}" is pinned: new turns use it until "claude auth auto".`), accountTable(list)]);
 		refreshOpenPin?.();
 	};
 
@@ -1024,7 +986,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const cleared = clearPin(accountsCtx(credOpts));
 		log.info('auth auto', {cleared});
 		printStyled(ctx, [
-			line(cleared ? 'No account is pinned any more; new turns use the priority order.' : 'No account was pinned.'),
+			line(cleared ? 'No account is pinned any more; new turns use the first account in the order.' : 'No account was pinned.'),
 			accountTable(listAccounts(accountsCtx(credOpts))),
 		]);
 		refreshOpenPin?.();
@@ -1033,9 +995,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const authRemove = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length !== 1) throw new Error('Usage: claude auth remove <account>');
 		await loadBundle(credOpts);
-		const {wasInstalled} = await removeAccount(accountsCtx(credOpts), vault, args[0]!);
-		log.info('auth remove', {login: wasInstalled});
-		ctx.print(`Account "${args[0]}" removed${wasInstalled ? '; Claude Code is signed out of it' : ''}.`);
+		await removeAccount(accountsCtx(credOpts), vault, args[0]!);
+		log.info('auth remove');
+		ctx.print(`Account "${args[0]}" removed.`);
 		if (chatOpen) ctx.print('The open chat keeps its current account until Claude Code restarts.');
 		await printActive(ctx);
 		refreshOpenPin?.();
@@ -1079,11 +1041,11 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const authAdd = async (rawArgs: string[], ctx: CommandContext): Promise<void> => {
 		const {name: given, rest} = takeName(rawArgs);
 		if (rest.length > 0) {
-			throw new Error(`Keys and tokens are not accepted as arguments: they would stay in the scrollback and history. ${ADD_USAGE}`);
+			throw new Error(`Keys are not accepted as arguments: they would stay in the scrollback and history. ${ADD_USAGE}`);
 		}
 		const reason = degradedReason((await loadBundle(credOpts)).status);
 		if (reason) throw new Error(reason);
-		const value = (await promptSecret(ctx, 'API key (sk-ant-…) or subscription token (sk-ant-oat…)')).trim();
+		const value = (await promptSecret(ctx, 'API key (sk-ant-…)')).trim();
 		if (value === '') {
 			ctx.print('Cancelled; nothing was saved.');
 			return;
@@ -1099,9 +1061,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 		const account = await storeSecret(credOpts, value, name);
 		log.info('credential stored', {type: account.type});
-		ctx.print(`${account.type === 'token' ? 'Subscription token' : 'API key'} stored as account "${account.name}" in the account module (account list shows it).`);
+		ctx.print(`API key stored as account "${account.name}" in the account module (account list shows it).`);
 		await noteIfShadowed(account.name, ctx);
-		if (account.type === 'token') await showNoticeOnce({kind: 'oauth', source: 'stored'}, ctx);
+		await showRetiredOnce(ctx);
 	};
 
 	const noteIfShadowed = async (name: string, ctx: CommandContext): Promise<void> => {
@@ -1111,34 +1073,29 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 
-	const loginPresent = async (): Promise<boolean> => {
+	const cliLoggedIn = async (): Promise<boolean> => {
 		const status = await probe().catch(() => undefined);
+		noteLoginStatus(credOpts, status);
 		return status?.loggedIn === true;
 	};
 
 	const authLogout = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 0) throw new Error(LOGOUT_USAGE);
-		const removed = await removeStored(credOpts);
-		log.info('stored credential removed', {removed});
-		ctx.print(
-			removed
-				? 'Every stored account removed (keys, tokens and logins). Environment variables are not touched. "claude auth remove <account>" removes one.'
-				: 'No stored account.',
-		);
-		const reason = degradedReason(vault.current().status);
-		if (reason) ctx.print(reason);
-		if (await loginPresent()) {
+		if (await cliLoggedIn()) {
 			const bin = cliBin();
 			const ok = bin ? await logoutCli(bin, cliEnv(env, loginPaths())) : false;
-			const still = await loginPresent();
+			const still = await cliLoggedIn();
 			log.info('claude logout', {ok, stillLoggedIn: still});
 			if (still) {
 				ctx.print('Warning: Claude Code still reports a login. Run "claude auth logout" in the Claude Code CLI, or remove it from the Claude Code config directory.');
 			} else {
-				ctx.print('Claude Code login removed.');
+				ctx.print('Claude Code is signed out.');
 				if (chatOpen) ctx.print('The open chat keeps running with its credentials until you close it.');
 			}
+		} else {
+			ctx.print('Claude Code was not signed in.');
 		}
+		ctx.print('Stored API keys stay; "claude auth remove <account>" removes one.');
 		await printActive(ctx);
 	};
 
@@ -1152,35 +1109,24 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 		const status = await ctx.suspend(() => runCode(bin, args, env));
 		log.info('claude code finished', {args: args.length, status});
-		await loadBundle(credOpts);
-		await loginSync().sync();
+		await refreshLoginInfo(credOpts, true);
 		if (status === 0) return;
 		if (!ctx.headless) wait('\nClaude Code did not finish cleanly. Press Enter to return to yena. ');
 		throw new Error(status === undefined ? 'Claude Code did not run to completion (it did not start or was stopped by a signal)' : `Claude Code exited with status ${status}`);
 	};
 
-	const authLogin = async (rawArgs: string[], ctx: CommandContext): Promise<void> => {
-		const {name, rest: args} = takeName(rawArgs);
+	const authLogin = async (args: string[], ctx: CommandContext): Promise<void> => {
 		const request = parseLoginArgs(args);
 		if (!ctx.suspend) throw new Error('"claude auth login" needs an interface that can hand over the terminal');
 		const bin = cliBin();
 		if (!bin) throw new Error('Claude Code is not installed for this module. Run modules/claude/bin/install.');
-		return authLoginBrowser(bin, request, ctx, name);
+		return authLoginBrowser(bin, request, ctx);
 	};
 
-	const authLoginBrowser = async (
-		bin: string,
-		request: LoginRequest,
-		ctx: CommandContext,
-		name: string | undefined,
-	): Promise<void> => {
+	const authLoginBrowser = async (bin: string, request: LoginRequest, ctx: CommandContext): Promise<void> => {
 		const paths = loginPaths();
 		const {meta} = request;
 		if (chatRunning()) throw new Error('A chat is answering; wait for it (a sign-in replaces the login Claude Code is using)');
-		const reason = degradedReason((await loadBundle(credOpts)).status);
-		if (reason) throw new Error(reason);
-		await loginSync().sync();
-		if (loginSync().dirty()) throw new LoginUnsavedError();
 		log.info('claude login started', {method: meta.console ? 'console' : 'claude.ai', sso: meta.sso, email: meta.email});
 		const ok = await ctx.suspend!(() => {
 			const done = runCli(bin, ['auth', 'login', ...request.cliArgs], cliEnv(env, paths) as NodeJS.ProcessEnv);
@@ -1188,6 +1134,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			return done;
 		});
 		const status = await probe().catch(() => undefined);
+		noteLoginStatus(credOpts, status);
 		log.info('claude login finished', {
 			exitOk: ok,
 			loggedIn: status?.loggedIn === true,
@@ -1198,15 +1145,10 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			ctx.print('Login did not complete; nothing was changed.');
 			return;
 		}
-		const slot = snapshotLogin(paths.configDir);
-		if (!slot) throw new Error('Claude Code has no login in its config dir');
-		const account = await adoptLoginAccount(accountsCtx(credOpts), vault, name, slot);
 		ctx.print(
-			status.method === 'claude.ai'
-				? `Signed in with Claude Code (claude.ai) as account "${account.name}". Its login is stored in the account module and copied into Claude Code's config when it is used; Claude Code refreshes it and yena saves it back.`
-				: `Signed in with Claude Code (Console account) as account "${account.name}" (stored in the account module).`,
+			`Signed in with Claude Code (${status.method === 'claude.ai' ? 'claude.ai' : 'Console'} account). yena does not store this login; Claude Code keeps it in its own config.`,
 		);
-		await noteIfShadowed(account.name, ctx);
+		await noteIfShadowed('login', ctx);
 		await showNoticeOnce({kind: status.method === 'claude.ai' ? 'oauth' : 'api-key', source: 'claude-login'}, ctx);
 	};
 
@@ -1501,18 +1443,17 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		{
 			name: 'auth',
 			usage: 'claude auth <subcommand>',
-			description: 'Accounts in priority order; the next one takes over at a limit',
+			description: 'Accounts in priority order; yena never switches on its own',
 			args: [{name: 'subcommand', description: 'One of the subcommands below'}],
 			agent: 'confirm',
 			subcommands: [
 				{name: 'status', usage: 'claude auth status', description: 'Show the active credential and the accounts in order', agent: 'confirm'},
 				{
 					name: 'login',
-					usage: 'claude auth login [--name <account>] [--console | --claudeai] [--sso] [--email <address>]',
-					description: "Sign in with Claude Code's browser login",
+					usage: 'claude auth login [--console | --claudeai] [--sso] [--email <address>]',
+					description: "Sign in with Claude Code's own browser login (yena stores nothing)",
 					agent: 'deny',
 					options: [
-						NAME_OPTION,
 						{name: '--console', description: 'Sign in with an Anthropic Console account (API billing)'},
 						{name: '--claudeai', description: 'Sign in with a claude.ai subscription'},
 						{name: '--sso', description: 'Sign in through single sign-on'},
@@ -1522,7 +1463,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				{
 					name: 'add',
 					usage: 'claude auth add [--name <account>]',
-					description: 'Add an API key or subscription token (typed into a hidden input)',
+					description: 'Add an API key (typed into a hidden input)',
 					agent: 'confirm',
 					options: [NAME_OPTION],
 				},
@@ -1535,15 +1476,14 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				},
 				{
 					name: 'use',
-					usage: 'claude auth use <account> [--only]',
-					description: 'Pin an account for new turns and forget its limit',
+					usage: 'claude auth use <account>',
+					description: 'Pin an account for new turns until "claude auth auto"',
 					agent: 'confirm',
 					args: [ACCOUNT_ARG],
-					options: [{name: '--only', description: 'Keep it even at its limit; never switch to another account'}],
 				},
-				{name: 'auto', usage: 'claude auth auto', description: 'Unpin the account; new turns follow the priority order', agent: 'confirm'},
-				{name: 'remove', usage: 'claude auth remove <account>', description: 'Remove an account', agent: 'confirm', args: [ACCOUNT_ARG]},
-				{name: 'logout', usage: 'claude auth logout', description: 'Sign Claude Code out of its current login', agent: 'confirm'},
+				{name: 'auto', usage: 'claude auth auto', description: 'Unpin the account; new turns use the first account in the order', agent: 'confirm'},
+				{name: 'remove', usage: 'claude auth remove <account>', description: 'Remove a stored API key account', agent: 'confirm', args: [ACCOUNT_ARG]},
+				{name: 'logout', usage: 'claude auth logout', description: 'Sign Claude Code out (stored API keys stay)', agent: 'confirm'},
 			],
 		},
 	];

@@ -1,13 +1,12 @@
 import {createHash} from 'node:crypto';
 import {inspect} from 'node:util';
 import type {CredentialAccount, Credentials, Logger} from '../../../src/api.js';
-import {type Account, type AccountKind, ACCOUNT_NAME_RE, checkAccountName, freeNames, RESERVED, secretType, toAccountName} from './accounts.js';
+import {type Account, type AccountKind, ACCOUNT_NAME_RE, checkAccountName, freeNames, RESERVED, secretType} from './accounts.js';
 import {registerLogValues} from './credentials.js';
 import {errClass, noopLog} from './log.js';
-import {type LoginSlot, parseSlot, sameClaudeAccount, slotEmail, slotKind, slotLeaves} from './login-slot.js';
 
 export type VaultStatus = 'ok' | 'no-provider' | 'no-grant' | 'old-host' | 'error';
-export type EntryType = 'key' | 'token' | 'login';
+export type EntryType = 'key';
 
 export type VaultEntry = {
 	readonly name: string;
@@ -17,29 +16,24 @@ export type VaultEntry = {
 	readonly disabled: boolean;
 	readonly reserved?: boolean;
 	readonly value?: string;
-	readonly slot?: LoginSlot;
 };
 
 export type CredentialBundle = {readonly status: VaultStatus; readonly entries: readonly VaultEntry[]};
 
-export type WireEntry = {name: string; type: EntryType; kind: AccountKind; email?: string; disabled: boolean; reserved?: boolean; value?: string; slot?: LoginSlot};
+export type WireEntry = {name: string; type: EntryType; kind: AccountKind; email?: string; disabled: boolean; reserved?: boolean; value?: string};
 export type WireBundle = {status: VaultStatus; entries: WireEntry[]};
 
 export type ClaudeVault = {
 	load(): Promise<CredentialBundle>;
 	current(): CredentialBundle;
-	saveLogin(name: string, slot: LoginSlot): Promise<void>;
-	adoptLogin(name: string | undefined, slot: LoginSlot): Promise<Account>;
 	addSecret(name: string | undefined, value: string): Promise<Account>;
 	remove(name: string): Promise<void>;
-	removeAll(): Promise<number>;
 	onChange(cb: (bundle: CredentialBundle) => void): () => void;
 	readonly channel?: Credentials;
 };
 
-export const KIND_OF: Record<EntryType, string> = {key: 'anthropic-key', token: 'anthropic-token', login: 'claude-login'};
-export const FIELD_OF: Record<EntryType, string> = {key: 'key', token: 'token', login: 'login'};
-const TYPE_LABEL: Record<EntryType, string> = {key: 'API key', token: 'subscription token', login: 'login'};
+export const KIND_OF: Record<EntryType, string> = {key: 'anthropic-key'};
+export const FIELD_OF: Record<EntryType, string> = {key: 'key'};
 export const MAX_ENTRIES = 50;
 const LOAD_WAIT_MS = 5000;
 
@@ -60,7 +54,7 @@ export const degradedReason = (status: VaultStatus): string | undefined => {
 
 export const isAccessError = (err: unknown): boolean => (err as {code?: unknown} | null)?.code === 'CREDENTIAL_ACCESS';
 
-export function makeEntry(pub: Omit<WireEntry, 'value' | 'slot'>, secret: {value?: string; slot?: LoginSlot} = {}): VaultEntry {
+export function makeEntry(pub: Omit<WireEntry, 'value'>, secret: {value?: string} = {}): VaultEntry {
 	const entry: Record<string | symbol, unknown> = {
 		name: pub.name,
 		type: pub.type,
@@ -70,7 +64,6 @@ export function makeEntry(pub: Omit<WireEntry, 'value' | 'slot'>, secret: {value
 		...(pub.reserved && {reserved: true}),
 	};
 	if (secret.value !== undefined) Object.defineProperty(entry, 'value', {value: secret.value, enumerable: false});
-	if (secret.slot !== undefined) Object.defineProperty(entry, 'slot', {value: secret.slot, enumerable: false});
 	Object.defineProperty(entry, inspect.custom, {value: () => `VaultEntry<${pub.type} ${pub.name}> [redacted]`, enumerable: false});
 	return Object.freeze(entry) as unknown as VaultEntry;
 }
@@ -85,17 +78,16 @@ export const encodeBundle = (b: CredentialBundle): WireBundle => ({
 		disabled: e.disabled,
 		...(e.reserved && {reserved: true}),
 		...(e.value !== undefined && {value: e.value}),
-		...(e.slot !== undefined && {slot: e.slot}),
 	})),
 });
 
 export const decodeBundle = (w: WireBundle): CredentialBundle => ({
 	status: w.status,
-	entries: w.entries.map(({value, slot, ...pub}) => makeEntry(pub, {...(value !== undefined && {value}), ...(slot !== undefined && {slot})})),
+	entries: w.entries.map(({value, ...pub}) => makeEntry(pub, value !== undefined ? {value} : {})),
 });
 
 export const bundleSecrets = (b: CredentialBundle): string[] =>
-	b.entries.flatMap(e => [...(e.value !== undefined ? [e.value] : []), ...(e.slot ? slotLeaves(e.slot) : [])]);
+	b.entries.flatMap(e => (e.value !== undefined ? [e.value] : []));
 
 const bundleDigest = (b: CredentialBundle): string => createHash('sha256').update(JSON.stringify(encodeBundle(b))).digest('hex');
 
@@ -104,15 +96,8 @@ const empty = (status: VaultStatus): CredentialBundle => ({status, entries: []})
 function entryOf(a: CredentialAccount, type: EntryType, raw: string | undefined): VaultEntry | undefined {
 	if (!ACCOUNT_NAME_RE.test(a.name)) return undefined;
 	const reserved = RESERVED.has(a.name);
-	const pub = {name: a.name, type, disabled: a.disabled, ...(reserved && {reserved: true})};
-	if (type !== 'login') {
-		const value = raw?.trim() ? raw.trim() : undefined;
-		return makeEntry({...pub, kind: type === 'key' ? 'api-key' : 'oauth'}, value !== undefined ? {value} : {});
-	}
-	const slot = raw !== undefined ? parseSlot(raw) : undefined;
-	const email = slot ? slotEmail(slot) : typeof a.fields.email === 'string' ? a.fields.email.slice(0, 320) : undefined;
-	const kind: AccountKind = slot ? slotKind(slot) : a.fields.method === 'console' ? 'api-key' : 'oauth';
-	return makeEntry({...pub, kind, ...(email !== undefined && {email})}, slot ? {slot} : {});
+	const value = raw?.trim() ? raw.trim() : undefined;
+	return makeEntry({name: a.name, type, kind: 'api-key', disabled: a.disabled, ...(reserved && {reserved: true})}, value !== undefined ? {value} : {});
 }
 
 export async function createCredential(
@@ -139,11 +124,6 @@ export async function createCredential(
 	}
 	throw first ?? new Error('No free account name');
 }
-
-const loginFields = (slot: LoginSlot): Record<string, string> => {
-	const email = slotEmail(slot);
-	return {method: slotKind(slot) === 'oauth' ? 'claude.ai' : 'console', ...(email !== undefined && {email})};
-};
 
 export function hostVault(creds: Credentials | undefined, log: Logger = noopLog): ClaudeVault {
 	let current = empty(creds ? 'error' : 'old-host');
@@ -212,45 +192,15 @@ export function hostVault(creds: Credentials | undefined, log: Logger = noopLog)
 			listeners.add(cb);
 			return () => void listeners.delete(cb);
 		},
-		async saveLogin(name, slot) {
-			const {creds: c} = usable();
-			await c.write(name, FIELD_OF.login, JSON.stringify(slot));
-			await load();
-		},
-		async adoptLogin(rawName, slot) {
-			const {creds: c, bundle} = usable();
-			const same = bundle.entries.find(e => e.type === 'login' && e.slot !== undefined && sameClaudeAccount(e.slot, slot));
-			const blob = JSON.stringify(slot);
-			let name: string;
-			if (rawName !== undefined) {
-				name = checkAccountName(rawName);
-				const taken = bundle.entries.find(e => e.name === name);
-				if (taken && taken !== same && taken.type !== 'login') throw new Error(`"${name}" is already ${taken.type === 'key' ? 'an' : 'a'} ${TYPE_LABEL[taken.type]} account`);
-				if (taken) await c.write(name, FIELD_OF.login, blob);
-				else await createCredential(c, {base: name, explicit: true, taken: new Set(), type: 'login', fields: loginFields(slot), value: blob});
-			} else if (same) {
-				name = same.name;
-				await c.write(name, FIELD_OF.login, blob);
-			} else {
-				const email = slotEmail(slot);
-				const base = toAccountName(email?.split('@')[0] ?? 'login', 'login');
-				name = await createCredential(c, {base, explicit: false, taken: new Set(bundle.entries.map(e => e.name)), type: 'login', fields: loginFields(slot), value: blob});
-			}
-			if (same && same.name !== name) await c.remove(same.name);
-			await load();
-			const email = slotEmail(slot);
-			return {name, type: 'login', kind: slotKind(slot), ...(email !== undefined && {email})};
-		},
 		async addSecret(rawName, raw) {
 			const value = raw.trim();
 			const type = secretType(value);
 			if (rawName !== undefined) checkAccountName(rawName);
 			const {creds: c, bundle} = usable();
 			const dup = bundle.entries.find(e => e.value === value);
-			if (dup && dup.name !== rawName) throw new Error(`That ${type === 'key' ? 'key' : 'token'} is already account "${dup.name}"`);
+			if (dup && dup.name !== rawName) throw new Error(`That key is already account "${dup.name}"`);
 			let name: string;
 			const existing = rawName !== undefined ? bundle.entries.find(e => e.name === rawName) : undefined;
-			if (existing && existing.type !== type) throw new Error(`"${existing.name}" is ${existing.type === 'key' ? 'an' : 'a'} ${TYPE_LABEL[existing.type]} account; choose another name`);
 			if (existing) {
 				name = existing.name;
 				await c.write(name, FIELD_OF[type], value);
@@ -264,24 +214,13 @@ export function hostVault(creds: Credentials | undefined, log: Logger = noopLog)
 				});
 			}
 			await load();
-			return {name, type, kind: type === 'key' ? 'api-key' : 'oauth'};
+			return {name, type, kind: 'api-key'};
 		},
 		async remove(name) {
 			const {creds: c, bundle} = usable();
 			if (!bundle.entries.some(e => e.name === name)) throw new Error(`No account "${name}"; "claude auth status" lists them`);
 			await c.remove(name);
 			await load();
-		},
-		async removeAll() {
-			if (current.status !== 'ok' || !creds) return 0;
-			let n = 0;
-			for (const e of current.entries) {
-				if (e.reserved) continue;
-				await creds.remove(e.name);
-				n++;
-			}
-			await load();
-			return n;
 		},
 	};
 }
@@ -326,10 +265,7 @@ export function bundleVault(log: Logger = noopLog, waitMs = LOAD_WAIT_MS): Runne
 			listeners.add(cb);
 			return () => void listeners.delete(cb);
 		},
-		saveLogin: readOnly,
-		adoptLogin: readOnly,
 		addSecret: readOnly,
 		remove: readOnly,
-		removeAll: readOnly,
 	};
 }

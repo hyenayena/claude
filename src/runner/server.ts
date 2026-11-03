@@ -92,7 +92,6 @@ export type RunnerOptions = {
 export type RunnerControl = {
 	status: () => ControlStatus;
 	stop: () => void;
-	loginChanged: () => void;
 };
 
 export type RunnerHandle = {
@@ -453,10 +452,11 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 					...(spec.resume !== undefined && {resume: spec.resume}),
 					...(spec.fork !== undefined && {fork: spec.fork}),
 					...(spec.resumeAt !== undefined && {resumeAt: spec.resumeAt}),
+					...(spec.apiKeyOnly === true && {apiKeyOnly: true}),
 				},
 				io,
 				log,
-				{status, stop: () => void shutdown('stopped'), loginChanged: () => client && write(client, {type: 'loginChanged'})},
+				{status, stop: () => void shutdown('stopped')},
 			);
 		} catch (err) {
 			opening = false;

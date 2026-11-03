@@ -61,7 +61,6 @@ const main = async (): Promise<number> => {
 						store,
 						probeLogin: probe,
 						vault,
-						onLoginChanged: control.loginChanged,
 						isMissingModule,
 						shellTmp: ensureShellTmp,
 						turnLock: session =>

@@ -50,7 +50,8 @@ const sanitize = (raw: unknown): ClaudeState => {
 		);
 		if (list.length > 0) state.allowedCommands = [...new Set(list)].slice(-MAX_RULES);
 	}
-	if (typeof r.subscriptionNoticeShown === 'boolean') state.subscriptionNoticeShown = r.subscriptionNoticeShown;
+	if (typeof r.subscriptionNotice === 'number' && Number.isInteger(r.subscriptionNotice) && r.subscriptionNotice >= 0 && r.subscriptionNotice < 1000) state.subscriptionNotice = r.subscriptionNotice;
+	if (typeof r.retiredNoticeAt === 'string' && r.retiredNoticeAt.length <= 40 && PRINTABLE.test(r.retiredNoticeAt)) state.retiredNoticeAt = r.retiredNoticeAt;
 	return state;
 };
 

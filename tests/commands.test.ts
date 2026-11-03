@@ -5,11 +5,9 @@ import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
 import type {CommandContext, StyledBlock, StyledSpan} from '../../../src/api.js';
-import {markLimited} from '../src/accounts.js';
 import {storeSecret} from '../src/credentials.js';
 import {hostVault} from '../src/vault.js';
 import {fakeCredentials, type FakeCredentials} from './helpers/fake-credentials.js';
-import {CONTINUE_TEXT} from '../src/chat/chat-session.js';
 import {createClaudeCommand, createClaudeCommands, type ClaudeDeps} from '../src/commands.js';
 import {checkCommandDocs} from '../src/kit.js';
 import type {LoginStatus} from '../src/claude-login.js';
@@ -18,7 +16,8 @@ import {TurnFailure} from '../src/session.js';
 import {makeFakeLog, serialized} from './helpers/fake-log.js';
 
 const KEY = 'sk-ant-api03-TESTVALUE0123456789abcdef';
-const OAUTH = 'sk-ant-oat-TESTVALUE0123456789abcdef';
+const KEY2 = 'sk-ant-api03-SECONDVALUE0123456789abcdef';
+const OAUTH = 'sk-ant-oat01-TESTVALUE0123456789abcdef';
 const SID1 = '11111111-aaaa-4bbb-8ccc-222222222222';
 const SID2 = '33333333-aaaa-4bbb-8ccc-444444444444';
 
@@ -171,7 +170,7 @@ test('missing credential makes ask throw the exact error', async () => {
 	const {command, ctx} = await setup({env: {}});
 	await assert.rejects(async () => command.run(['ask', 'x'], ctx), {
 		message:
-			'No credentials found. Run "claude auth login" to sign in through the browser, or "claude auth add" to paste an API key or a subscription token. See "claude auth status".',
+			'No credentials found. Run "claude auth login" to sign in with Claude Code, or "claude auth add" to paste an API key. See "claude auth status".',
 	});
 });
 
@@ -217,14 +216,32 @@ test('registerAbort controller is registered and released', async () => {
 	assert.equal(released, 1);
 });
 
-test('subscription notice is shown once across status and ask', async () => {
-	const {command, ctx, printed} = await setup({env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH}});
+test('subscription notice is shown once across status and ask (versioned flag)', async () => {
+	const {command, ctx, printed, dataDir} = await setup({env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH}});
 	await command.run(['ask', 'x'], ctx);
 	assert.equal(printed.filter(l => l.startsWith('Notice:')).length, 1);
 	assert.equal(printed.at(-1), '[session 11111111 · model claude-test-1 · subscription token]');
 	await command.run(['auth', 'status'], ctx);
 	assert.equal(printed.filter(l => l.startsWith('Notice:')).length, 1);
 	assert.ok(!printed.join('\n').includes(OAUTH));
+	assert.equal((await state(dataDir)).subscriptionNotice, 2);
+	assert.equal('subscriptionNoticeShown' in (await state(dataDir)), false);
+});
+
+test('the subscription notice has the new wording and an old "shown" flag does not hide it', async () => {
+	const {command, ctx, printed, dataDir} = await setup({env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH}});
+	await writeFile(join(dataDir, 'state.json'), JSON.stringify({subscriptionNoticeShown: true}));
+	await command.run(['auth', 'status'], ctx);
+	const notice = printed.filter(l => l.startsWith('Notice:'));
+	assert.equal(notice.length, 1);
+	assert.match(notice[0]!, /your own Claude subscription through Claude Code's own sign-in \(or CLAUDE_CODE_OAUTH_TOKEN from your environment\)/);
+	assert.match(notice[0]!, /ordinary, individual use of Claude Code and the Agent SDK by the plan's purchaser/);
+	assert.match(notice[0]!, /does not switch accounts at a usage limit/);
+	assert.match(notice[0]!, /Use only accounts that are your own \(Anthropic's Consumer Terms do not allow sharing accounts\)/);
+	assert.match(notice[0]!, /API keys are recommended for everyone/);
+	assert.doesNotMatch(notice[0]!, /OAuth|setup-token|approved/);
+	await command.run(['auth', 'status'], ctx);
+	assert.equal(printed.filter(l => l.startsWith('Notice:')).length, 1, 'shown once for version 2');
 });
 
 test('no notice for API keys', async () => {
@@ -249,13 +266,15 @@ test('new clears the session; session prints id and model', async () => {
 
 test('auth status warns on a world-readable auth.json and reports no secret', async () => {
 	const {command, ctx, printed, dataDir, store} = await setup({env: {}});
-	await store(OAUTH);
+	await store(KEY2);
+	await command.run(['auth', 'order', 'key'], ctx);
 	await chmod(join(dataDir, 'auth.json'), 0o644);
 	await command.run(['auth', 'status'], ctx);
 	const out = printed.join('\n');
-	assert.match(out, /account "token": subscription token \(stored in the account module\)/);
+	assert.match(out, /account "key": API key \(stored in the account module\)/);
 	assert.match(out, /Warning: auth\.json is readable by other users/);
-	assert.ok(!out.includes(OAUTH));
+	assert.ok(!out.includes(KEY2));
+	printed.length = 0;
 });
 
 test('auth status and the auth commands say why stored accounts cannot be used', async () => {
@@ -289,21 +308,21 @@ test('auth status without credentials prints the missing message', async () => {
 	assert.match(printed[0]!, /^No credentials found/);
 });
 
-const ACCOUNTS_HEAD = 'Accounts, in priority order (▸ is used next; when it reaches its limit, the next one takes over):';
+const ACCOUNTS_HEAD = 'Accounts (▸ is used for new turns: the pinned account, else the first in this order; yena never switches on its own):';
 
 test('auth status lists the accounts in priority order, by name only', async () => {
 	const {command, ctx, printed, dataDir, store} = await setup();
 	await command.run(['auth', 'status'], ctx);
 	assert.deepEqual(printed.slice(1, 3), [ACCOUNTS_HEAD, printed[2]]);
 	assert.match(printed[2]!, /^▸ 1\. env-key +ANTHROPIC_API_KEY \(environment variable\)$/);
-	await store(OAUTH);
+	await store(KEY2);
 	printed.length = 0;
 	await command.run(['auth', 'status'], ctx);
 	assert.equal(printed[0], 'Active credential: API key (from environment)');
 	assert.equal(printed[1], ACCOUNTS_HEAD);
 	assert.match(printed[2]!, /^▸ 1\. env-key +ANTHROPIC_API_KEY \(environment variable\)$/);
-	assert.match(printed[3]!, /^  2\. token +subscription token \(stored in the account module\)$/);
-	assert.ok(!printed.join('\n').includes(OAUTH) && !printed.join('\n').includes(KEY));
+	assert.match(printed[3]!, /^  2\. key +API key \(stored in the account module\)$/);
+	assert.ok(!printed.join('\n').includes(KEY2) && !printed.join('\n').includes(KEY));
 	await assert.rejects(async () => command.run(['auth', 'status', 'x'], ctx), {message: 'Usage: claude auth status'});
 });
 
@@ -316,8 +335,8 @@ test('the removed auth subcommands are gone', async () => {
 });
 
 test('auth order, use and remove manage the priority', async () => {
-	const {command, ctx, printed, dataDir, store} = await setup();
-	await store(OAUTH, 'work');
+	const {command, ctx, printed, store} = await setup();
+	await store(KEY2, 'work');
 	await command.run(['auth', 'order', 'work'], ctx);
 	assert.match(printed[0]!, /^▸ 1\. work /);
 	assert.match(printed[1]!, /^  2\. env-key /);
@@ -325,31 +344,27 @@ test('auth order, use and remove manage the priority', async () => {
 	await assert.rejects(async () => command.run(['auth', 'order', 'nope'], ctx), /No account "nope"/);
 	printed.length = 0;
 	await command.run(['auth', 'use', 'env-key'], ctx);
-	assert.equal(printed[0], '"env-key" is pinned: new turns use it until it reaches its limit, then the priority order takes over. "claude auth auto" unpins it.');
+	assert.equal(printed[0], '"env-key" is pinned: new turns use it until "claude auth auto".');
 	printed.length = 0;
 	await command.run(['auth', 'remove', 'work'], ctx);
 	assert.equal(printed[0], 'Account "work" removed.');
 	await assert.rejects(async () => command.run(['auth', 'remove', 'env-key'], ctx), /unset the variable/);
+	await assert.rejects(async () => command.run(['auth', 'remove', 'login'], ctx), {message: 'The Claude Code login is removed with "claude auth logout"'});
 });
 
-test('auth use pins an account, --only keeps it at its limit, auth auto unpins', async () => {
+test('auth use pins an account until auth auto; --only is refused with a hint', async () => {
 	const {command, ctx, printed, store} = await setup();
-	await store(OAUTH, 'work');
-	await command.run(['auth', 'use', 'work', '--only'], ctx);
-	assert.equal(printed[0], '"work" is pinned (only): new turns always use it, even at its limit. "claude auth auto" unpins it.');
+	await store(KEY2, 'work');
+	await command.run(['auth', 'use', 'work'], ctx);
+	assert.equal(printed[0], '"work" is pinned: new turns use it until "claude auth auto".');
 	assert.match(printed[1]!, /^  1\. env-key  /);
 	assert.match(printed[2]!, /^▸ 2\. \*work  /);
 	printed.length = 0;
 	await command.run(['auth', 'status'], ctx);
-	assert.equal(printed[1], 'Pinned: "work" only (never switches at a limit; "claude auth auto" unpins)');
-	printed.length = 0;
-	await command.run(['auth', 'use', 'work'], ctx);
-	printed.length = 0;
-	await command.run(['auth', 'status'], ctx);
-	assert.equal(printed[1], 'Pinned: "work" (until its limit; "claude auth auto" unpins)');
+	assert.equal(printed[1], 'Pinned: "work" ("claude auth auto" unpins)');
 	printed.length = 0;
 	await command.run(['auth', 'auto'], ctx);
-	assert.equal(printed[0], 'No account is pinned any more; new turns use the priority order.');
+	assert.equal(printed[0], 'No account is pinned any more; new turns use the first account in the order.');
 	assert.match(printed[1]!, /^▸ 1\. env-key  /);
 	assert.match(printed[2]!, /^  2\. work  /);
 	printed.length = 0;
@@ -358,18 +373,24 @@ test('auth use pins an account, --only keeps it at its limit, auth auto unpins',
 	printed.length = 0;
 	await command.run(['auth', 'status'], ctx);
 	assert.ok(!printed.some(l => l.startsWith('Pinned:')));
-	for (const bad of [['use'], ['use', 'work', '--force'], ['use', '--only'], ['use', 'work', 'env-key']]) {
-		await assert.rejects(async () => command.run(['auth', ...bad], ctx), {message: 'Usage: claude auth use <account> [--only]'}, bad.join(' '));
+	for (const bad of [['use'], ['use', 'work', '--force'], ['use', 'work', 'env-key']]) {
+		await assert.rejects(async () => command.run(['auth', ...bad], ctx), {message: 'Usage: claude auth use <account>'}, bad.join(' '));
+	}
+	for (const bad of [['use', 'work', '--only'], ['use', '--only']]) {
+		await assert.rejects(
+			async () => command.run(['auth', ...bad], ctx),
+			{message: 'Unknown option "--only": yena no longer switches accounts on its own, so "claude auth use <account>" already keeps it until "claude auth auto"'},
+			bad.join(' '),
+		);
 	}
 	await assert.rejects(async () => command.run(['auth', 'auto', 'work'], ctx), {message: 'Usage: claude auth auto'});
 	await assert.rejects(async () => command.run(['auth', 'use', 'nope'], ctx), {message: 'No account "nope"; "claude auth status" lists them'});
 });
 
-test('auth status prints styled blocks: bold labels, a head-less account table with toned marks and states', async () => {
-	const {command, ctx, dataDir, store, vault} = await setup();
-	await store(OAUTH, 'work');
-	await command.run(['auth', 'use', 'work', '--only'], ctx);
-	markLimited({dataDir, configDir: join(dataDir, 'config'), env: {}, bundle: vault.current()}, 'env-key', Date.now() / 1000 + 3600, 'usage-limit');
+test('auth status prints styled blocks: bold labels, a head-less account table with toned marks and no limit column', async () => {
+	const {command, ctx, store} = await setup();
+	await store(KEY2, 'work');
+	await command.run(['auth', 'use', 'work'], ctx);
 	const blocks: StyledBlock[] = [];
 	const styled: CommandContext = {...ctx, printStyled: b => blocks.push(...b)};
 	await command.run(['auth', 'status'], styled);
@@ -380,7 +401,7 @@ test('auth status prints styled blocks: bold labels, a head-less account table w
 	const [active, pinned, head, tbl] = blocks as [StyledBlock & {kind: 'line'}, StyledBlock & {kind: 'line'}, StyledBlock & {kind: 'line'}, StyledBlock & {kind: 'table'}];
 	assert.deepEqual(active.spans[0], {text: 'Active credential:', bold: true});
 	assert.equal((pinned.spans[0] as StyledSpan).tone, 'accent');
-	assert.deepEqual(head.spans[0], {text: 'Accounts, in priority order', bold: true});
+	assert.deepEqual(head.spans[0], {text: 'Accounts', bold: true});
 	assert.equal((head.spans[1] as StyledSpan).tone, 'muted');
 	assert.equal(head.spans.map(s => (typeof s === 'string' ? s : s.text)).join(''), ACCOUNTS_HEAD);
 	assert.equal(tbl.head, undefined);
@@ -391,15 +412,14 @@ test('auth status prints styled blocks: bold labels, a head-less account table w
 	assert.deepEqual(second[0], {text: '▸', tone: 'accent'});
 	assert.deepEqual(second.at(-2), {text: '*', tone: 'accent'});
 	assert.deepEqual(second.at(-1), {text: 'work', bold: true});
-	assert.equal((tbl.rows[0]![2] as StyledSpan).tone, 'warn');
-	assert.match((tbl.rows[0]![2] as StyledSpan).text, /^limit reached, back at /);
-	assert.equal(tbl.rows[1]![2], '');
-	assert.ok(!JSON.stringify(blocks).includes(OAUTH) && !JSON.stringify(blocks).includes(KEY));
+	for (const row of tbl.rows) assert.equal(row[2], '', 'no state for a usable account');
+	assert.ok(!JSON.stringify(blocks).includes(KEY2) && !JSON.stringify(blocks).includes(KEY));
+	assert.ok(!JSON.stringify(blocks).match(/limit|back at/i));
 });
 
 test('auth order prints the account table through printStyled', async () => {
 	const {command, ctx, store} = await setup();
-	await store(OAUTH, 'work');
+	await store(KEY2, 'work');
 	const blocks: StyledBlock[] = [];
 	await command.run(['auth', 'order', 'work'], {...ctx, printStyled: b => blocks.push(...b)});
 	assert.deepEqual(blocks.map(b => b.kind), ['table']);
@@ -421,18 +441,23 @@ const secrets = (...values: string[]) => {
 
 const storedIn = (fake: FakeCredentials) => [...fake.accounts].map(([name, a]) => [name, a.kind, Object.values(a.secrets)[0]]);
 
-test('auth add stores a pasted key or token in the account module, tells them apart and never echoes them', async () => {
-	const s = secrets(` ${KEY}\n`, OAUTH);
+test('auth add stores a pasted key, refuses a token, and never echoes them', async () => {
+	const s = secrets(` ${KEY}\n`, OAUTH, KEY2);
 	const {command, ctx, printed, dataDir, fake} = await setup({env: {}, login: {probe: async () => undefined, promptSecret: s.promptSecret}});
 	await command.run(['auth', 'add'], ctx);
 	assert.equal(printed[0], 'API key stored as account "key" in the account module (account list shows it).');
 	printed.length = 0;
+	await assert.rejects(
+		async () => command.run(['auth', 'add', '--name', 'spare'], ctx),
+		(e: Error) => e.message === 'Subscription tokens are no longer stored; sign in with "claude auth login", or set CLAUDE_CODE_OAUTH_TOKEN in your environment.' && !e.message.includes(OAUTH),
+	);
+	assert.equal(fake.accounts.size, 1, 'the token was not stored');
 	await command.run(['auth', 'add', '--name', 'spare'], ctx);
-	assert.equal(printed[0], 'Subscription token stored as account "spare" in the account module (account list shows it).');
+	assert.equal(printed[0], 'API key stored as account "spare" in the account module (account list shows it).');
 	assert.equal(printed[1], 'Note: "spare" is used after account "key": API key (stored in the account module) in priority order; "claude auth order spare" puts it first.');
-	assert.ok(printed.some(l => l.startsWith('Notice:')));
-	assert.deepEqual(s.labels, ['API key (sk-ant-…) or subscription token (sk-ant-oat…)', 'API key (sk-ant-…) or subscription token (sk-ant-oat…)']);
-	assert.deepEqual(storedIn(fake), [['key', 'anthropic-key', KEY], ['spare', 'anthropic-token', OAUTH]]);
+	assert.ok(!printed.some(l => l.startsWith('Notice:')), 'no subscription notice for a key');
+	assert.deepEqual(s.labels, ['API key (sk-ant-…)', 'API key (sk-ant-…)', 'API key (sk-ant-…)']);
+	assert.deepEqual(storedIn(fake), [['key', 'anthropic-key', KEY], ['spare', 'anthropic-key', KEY2]]);
 	assert.ok(!printed.join('\n').includes(KEY) && !printed.join('\n').includes(OAUTH));
 	assert.ok(!(await readdir(dataDir)).some(n => n !== 'auth.json' && n !== 'state.json'), 'claude keeps no secret file');
 });
@@ -461,12 +486,12 @@ test('auth add reads the terminal without echo when there is no app, and refuses
 	await assert.rejects(async () => command.run(['auth', 'add'], ctx), /needs the app \(\.\/yena\) or a terminal/);
 	const headless = {...ctx, headless: true, suspend: async <T,>(fn: () => T | Promise<T>) => fn()};
 	await command.run(['auth', 'add'], headless);
-	assert.deepEqual(asked, ['API key (sk-ant-…) or subscription token (sk-ant-oat…) (input hidden): ', 'Account name [key]: ']);
+	assert.deepEqual(asked, ['API key (sk-ant-…) (input hidden): ', 'Account name [key]: ']);
 	assert.ok(fake.accounts.has('key'));
 });
 
-test('auth add asks for the name with "token" or "key" suggested; Esc saves nothing', async () => {
-	const s = secrets(OAUTH, OAUTH, KEY);
+test('auth add asks for the name with "key" suggested; Esc saves nothing', async () => {
+	const s = secrets(KEY, KEY, KEY2);
 	const asked: {label: string; initial: string; problems: (string | undefined)[]}[] = [];
 	const answers: (string | undefined)[] = [undefined, '', 'work'];
 	const {command, ctx, printed, fake} = await setup({
@@ -475,7 +500,7 @@ test('auth add asks for the name with "token" or "key" suggested; Esc saves noth
 			probe: async () => undefined,
 			promptSecret: s.promptSecret,
 			promptName: async (_ctx, label, initial, validate) => {
-				asked.push({label, initial, problems: ['token', 'env-key', 'bad/name', 'fresh'].map(validate)});
+				asked.push({label, initial, problems: ['key', 'env-key', 'login', 'bad/name', 'fresh'].map(validate)});
 				const a = answers.shift();
 				return a === '' ? initial : a;
 			},
@@ -486,64 +511,50 @@ test('auth add asks for the name with "token" or "key" suggested; Esc saves noth
 	assert.equal(fake.accounts.size, 0);
 	printed.length = 0;
 	await command.run(['auth', 'add'], ctx);
-	assert.equal(printed[0], 'Subscription token stored as account "token" in the account module (account list shows it).');
+	assert.equal(printed[0], 'API key stored as account "key" in the account module (account list shows it).');
 	await command.run(['auth', 'add'], ctx);
 	assert.deepEqual(
 		asked.map(a => [a.label, a.initial]),
-		[['Account name', 'token'], ['Account name', 'token'], ['Account name', 'key']],
+		[['Account name', 'key'], ['Account name', 'key'], ['Account name', 'key-2']],
 	);
 	assert.equal(asked[1]!.problems[0], undefined);
-	assert.match(asked[2]!.problems[0]!, /"token" is already an account/);
+	assert.match(asked[2]!.problems[0]!, /"key" is already an account/);
 	assert.match(asked[2]!.problems[1]!, /environment variable account/);
-	assert.match(asked[2]!.problems[2]!, /An account name is/);
-	assert.equal(asked[2]!.problems[3], undefined);
-	assert.deepEqual([...fake.accounts.keys()], ['token', 'work']);
+	assert.match(asked[2]!.problems[2]!, /Claude Code login account/);
+	assert.match(asked[2]!.problems[3]!, /An account name is/);
+	assert.equal(asked[2]!.problems[4], undefined);
+	assert.deepEqual([...fake.accounts.keys()], ['key', 'work']);
 });
 
-test('auth add refuses a token that is already stored before asking for a name', async () => {
-	const s = secrets(OAUTH, OAUTH);
+test('auth add refuses a key that is already stored before asking for a name', async () => {
+	const s = secrets(KEY, KEY);
 	let asked = 0;
 	const {command, ctx} = await setup({
 		env: {},
 		login: {probe: async () => undefined, promptSecret: s.promptSecret, promptName: async (_c, _l, initial) => (asked++, initial)},
 	});
 	await command.run(['auth', 'add'], ctx);
-	await assert.rejects(async () => command.run(['auth', 'add'], ctx), /already account "token"/);
+	await assert.rejects(async () => command.run(['auth', 'add'], ctx), /already account "key"/);
 	assert.equal(asked, 1);
 });
 
 test('auth add from the terminal asks again for a taken name, then gives up', async () => {
-	const names = ['token', 'mine'];
+	const names = ['key', 'mine'];
 	const prompts: string[] = [];
 	const {command, ctx, fake, store} = await setup({
 		env: {},
-		login: {probe: async () => undefined, readSecret: () => KEY, readName: p => (prompts.push(p), names.shift() ?? 'token')},
+		login: {probe: async () => undefined, readSecret: () => KEY2, readName: p => (prompts.push(p), names.shift() ?? 'key')},
 	});
 	const term = {...ctx, headless: true, suspend: async <T,>(fn: () => T | Promise<T>) => fn()};
-	await store(OAUTH);
+	await store(KEY);
 	await command.run(['auth', 'add'], term);
-	assert.deepEqual(prompts, ['Account name [key]: ', '"token" is already an account; choose another name\nAccount name [key]: ']);
-	assert.deepEqual([...fake.accounts.keys()], ['token', 'mine']);
+	assert.deepEqual(prompts, ['Account name [key-2]: ', '"key" is already an account; choose another name\nAccount name [key-2]: ']);
+	assert.deepEqual([...fake.accounts.keys()], ['key', 'mine']);
 	const other = await setup({
 		env: {},
 		login: {probe: async () => undefined, readSecret: () => KEY, readName: () => 'env-key'},
 	});
 	await assert.rejects(async () => other.command.run(['auth', 'add'], {...other.ctx, suspend: term.suspend}), /environment variable account/);
-});
-
-const LOGGED_OUT = 'Every stored account removed (keys, tokens and logins). Environment variables are not touched. "claude auth remove <account>" removes one.';
-
-test('auth logout removes every stored account', async () => {
-	const {command, ctx, printed, fake, store} = await setup({env: {}});
-	await command.run(['auth', 'logout'], ctx);
-	assert.deepEqual(printed, ['No stored account.']);
-	printed.length = 0;
-	await store(OAUTH);
-	await store(KEY);
-	printed.length = 0;
-	await command.run(['auth', 'logout'], ctx);
-	assert.deepEqual(printed, [LOGGED_OUT]);
-	assert.equal(fake.accounts.size, 0);
 });
 
 test('auth login needs a terminal handoff', async () => {
@@ -726,17 +737,17 @@ test('ask logs lifecycle with labels only, registers the redactor first, and lea
 		{type: 'user', message: {content: [{type: 'tool_result', tool_use_id: 't1', content: SENTINELS[3]}]}},
 		{type: 'result', subtype: 'success', is_error: false, result: SENTINELS[1], session_id: SID1, num_turns: 2},
 	]);
-	const {command, ctx} = await setup({log, env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH}, loadQuery: async () => q.query});
+	const {command, ctx} = await setup({log, env: {ANTHROPIC_API_KEY: KEY}, loadQuery: async () => q.query});
 	await command.run(['ask', SENTINELS[0]!], ctx);
 	await command.run(['ask', SENTINELS[0]!], ctx);
 
 	const out = serialized(log);
-	for (const secret of [...SENTINELS, OAUTH, 'sk-ant']) assert.equal(out.includes(secret), false, secret);
+	for (const secret of [...SENTINELS, KEY, 'sk-ant']) assert.equal(out.includes(secret), false, secret);
 	assert.equal(log.redactors.length, 1);
 	assert.equal(log.trail[0], '<addRedactor>');
-	assert.equal(log.redactors[0]!(`x ${OAUTH}`), 'x [redacted]');
+	assert.equal(log.redactors[0]!(`x ${KEY}`), 'x [redacted]');
 	const find = (msg: string) => log.records.filter(r => r.msg === msg);
-	assert.deepEqual(find('credential resolved')[0]!.fields, {kind: 'oauth', source: 'env'});
+	assert.deepEqual(find('credential resolved')[0]!.fields, {kind: 'api-key', source: 'env'});
 	assert.deepEqual(find('ask started')[0]!.fields, {fresh: false, promptChars: SENTINELS[0]!.length});
 	const done = find('ask finished')[0]!;
 	assert.equal(done.level, 'info');
@@ -745,6 +756,16 @@ test('ask logs lifecycle with labels only, registers the redactor first, and lea
 	assert.equal(done.fields.numTurns, 2);
 	assert.equal(done.fields.session8, SID1.slice(0, 8));
 	assert.equal(typeof done.fields.ms, 'number');
+});
+
+test('an env subscription token is passed through: nothing to redact, nothing logged', async () => {
+	const log = makeFakeLog();
+	const {command, ctx, q} = await setup({log, env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH, PATH: '/bin'}});
+	await command.run(['ask', 'hi'], ctx);
+	assert.equal(log.redactors.length, 0);
+	assert.deepEqual(log.records.find(r => r.msg === 'credential resolved')!.fields, {kind: 'oauth', source: 'env'});
+	assert.equal((q.calls[0]!.options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN, OAUTH, 'Claude Code gets the variable untouched');
+	assert.equal(serialized(log).includes(OAUTH), false);
 });
 
 test('ask failure logs a redacted, capped reason at warn', async () => {
@@ -803,10 +824,10 @@ test('auth status, key and logout are logged with labels only', async () => {
 	await command.run(['auth', 'status'], ctx);
 	const status = log.records.find(r => r.msg === 'auth status')!;
 	assert.equal(status.level, 'info');
-	assert.deepEqual(status.fields, {kind: 'api-key', source: 'env', accounts: 1, limited: 0});
+	assert.deepEqual(status.fields, {kind: 'api-key', source: 'env', accounts: 1});
 
 	await command.run(['auth', 'logout'], ctx);
-	assert.deepEqual(log.records.find(r => r.msg === 'stored credential removed')!.fields, {removed: false});
+	assert.ok(!log.records.some(r => r.msg === 'stored credential removed'));
 
 	const added = createClaudeCommand({dataDir, env: {}, loadQuery: async () => (() => []) as unknown as QueryFn, log, vault: hostVault(fakeCredentials()), login: {promptSecret: async () => KEY}});
 	await added.run(['auth', 'add'], ctx);
@@ -829,31 +850,25 @@ test('ask limit failure logs the failure kind and no reason', async () => {
 	assert.ok(!JSON.stringify(log.records).includes('hit your limit'));
 });
 
-test('ask at a usage limit goes on with the next account in the same session', async () => {
-	const OAUTH2 = 'sk-ant-oat-SECONDVALUE0123456789abcdef';
+test('ask at a usage limit makes one turn and throws the limit text; no other account is tried', async () => {
 	const limited = [
 		{type: 'system', subtype: 'init', session_id: SID1, model: 'claude-test-1', apiKeySource: 'x'},
 		{type: 'rate_limit_event', rate_limit_info: {status: 'rejected', resetsAt: Math.floor(Date.now() / 1000) + 3600, rateLimitType: 'five_hour'}},
 		{type: 'assistant', error: 'rate_limit', message: {content: [{type: 'text', text: "You've hit your limit · resets 3pm"}]}},
 		{type: 'result', subtype: 'success', is_error: true, result: 'x', session_id: SID1},
 	];
-	const q = makeQuery((_c, n) => (n === 1 ? limited : okMsgs(SID1, 'answer')));
-	const {command, ctx, printed, dataDir, store, fake} = await setup({env: {}, loadQuery: async () => q.query});
-	await store(OAUTH, 'work');
-	await store(OAUTH2, 'spare');
-	await command.run(['ask', 'hi'], ctx);
-	assert.ok(printed.includes('Account "work" reached its usage limit; continuing with "spare".'));
-	assert.ok(printed.includes('answer'));
-	assert.equal(q.calls.length, 2);
-	assert.equal((q.calls[0]!.options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN, OAUTH);
-	assert.equal((q.calls[1]!.options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN, OAUTH2);
-	assert.equal(q.calls[1]!.options.resume, SID1);
-	assert.equal(q.calls[1]!.prompt, CONTINUE_TEXT);
-	const file = JSON.parse(await readFile(join(dataDir, 'auth.json'), 'utf8'));
-	assert.equal(file.limits.work.reason, 'usage-limit');
-	assert.ok(fake.accounts.has('work'));
-	await command.run(['ask', 'again'], ctx);
-	assert.equal((q.calls[2]!.options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN, OAUTH2);
+	const q = makeQuery(() => limited);
+	const {command, ctx, printed, dataDir, store} = await setup({env: {}, loadQuery: async () => q.query});
+	await store(KEY, 'work');
+	await store(KEY2, 'spare');
+	await assert.rejects(async () => command.run(['ask', 'hi'], ctx), /Usage limit reached/);
+	assert.equal(q.calls.length, 1);
+	assert.equal((q.calls[0]!.options.env as Record<string, string>).ANTHROPIC_API_KEY, KEY);
+	assert.ok(!printed.some(l => /continuing with|reached its usage limit/.test(l)));
+	const auth = JSON.parse(await readFile(join(dataDir, 'auth.json'), 'utf8'));
+	assert.equal('limits' in auth, false);
+	await assert.rejects(async () => command.run(['ask', 'again'], ctx), /Usage limit reached/);
+	assert.equal((q.calls[1]!.options.env as Record<string, string>).ANTHROPIC_API_KEY, KEY, 'the next turn still uses the same account');
 });
 
 const EMAIL = 'owner.person@example.com';
@@ -915,15 +930,17 @@ const loginSetup = async (over: {env?: NodeJS.ProcessEnv; status?: LoginStatus; 
 
 const SIGNED_IN: LoginStatus = {loggedIn: true, method: 'claude.ai', subscriptionType: 'max', email: EMAIL};
 
-test('auth login argument errors show without a terminal handoff', async () => {
+test('auth login argument errors show without a terminal handoff; --name is gone', async () => {
 	const s = await loginSetup();
 	await assert.rejects(async () => s.command.run(['auth', 'login', '--bogus'], s.plain), /Unknown option "--bogus"\. Usage: claude auth login/);
 	await assert.rejects(async () => s.command.run(['auth', 'login', '--token'], s.plain), /Unknown option "--token"/);
 	await assert.rejects(async () => s.command.run(['auth', 'login', '--sso'], s.plain), /needs an interface that can hand over the terminal/);
+	await assert.rejects(async () => s.command.run(['auth', 'login', '--name', 'work'], s.plain), {message: '"--name" is gone: there is one Claude Code login, account "login"'});
+	await assert.rejects(async () => s.command.run(['auth', 'login', '--name', 'work'], s.ctx), {message: '"--name" is gone: there is one Claude Code login, account "login"'});
 	assert.equal(s.runs.length, 0);
 });
 
-test('browser login success passes exact args and a credential-free env', async () => {
+test('browser login success passes exact args and a credential-free env, and stores nothing', async () => {
 	const log = makeFakeLog();
 	const s = await loginSetup({env: {ANTHROPIC_API_KEY: KEY, CLAUDE_CODE_OAUTH_TOKEN: OAUTH, PATH: '/bin'}, afterRun: SIGNED_IN, log});
 	await s.command.run(['auth', 'login', '--console', '--sso', '--email', EMAIL], s.ctx);
@@ -934,9 +951,11 @@ test('browser login success passes exact args and a credential-free env', async 
 	assert.equal(s.runs[0]!.env.CLAUDE_CONFIG_DIR, join(s.dataDir, 'config'));
 	assert.equal(s.runs[0]!.env.DISABLE_AUTOUPDATER, '1');
 	const out = s.printed.join('\n');
-	assert.match(out, /Signed in with Claude Code \(claude\.ai\) as account "owner-person"\. Its login is stored in the account module/);
+	assert.match(out, /Signed in with Claude Code \(claude\.ai account\)\. yena does not store this login; Claude Code keeps it in its own config\./);
 	assert.ok(!out.includes(s.dataDir), 'no claude data paths');
-	assert.match(out, /Note: "owner-person" is used after API key \(from environment\) in priority order/);
+	assert.match(out, /Note: "login" is used after API key \(from environment\) in priority order/);
+	assert.equal(s.fake.accounts.size, 0, 'nothing is stored in the account module');
+	assert.deepEqual(s.fake.calls.filter(c => !c.startsWith('grants') && !c.startsWith('list')), []);
 	assert.deepEqual(log.records.find(r => r.msg === 'claude login started')!.fields, {method: 'console', sso: true, email: true});
 	assert.deepEqual(log.records.find(r => r.msg === 'claude login finished')!.fields, {
 		exitOk: true,
@@ -952,22 +971,13 @@ test('browser login without an env source makes the login active and shows the n
 	const s = await loginSetup({afterRun: SIGNED_IN});
 	await s.command.run(['auth', 'login'], s.ctx);
 	assert.deepEqual(s.runs[0]!.args, ['auth', 'login']);
-	assert.ok(s.printed.some(l => l.startsWith('Signed in with Claude Code (claude.ai) as account "owner-person"')));
+	assert.ok(s.printed.some(l => l.startsWith('Signed in with Claude Code (claude.ai account).')));
 	assert.ok(!s.printed.some(l => l.startsWith('Note:')));
 	assert.equal(s.printed.filter(l => l.startsWith('Notice:')).length, 1);
-	const stored = s.fake.accounts.get('owner-person')!;
-	assert.equal(JSON.parse(stored.secrets.login!).credentials.claudeAiOauth.accessToken, 'LOGIN-ACCESS');
-	assert.deepEqual(stored.fields, {method: 'claude.ai', email: EMAIL});
+	assert.equal(s.fake.accounts.size, 0);
 	s.printed.length = 0;
 	await s.command.run(['auth', 'status'], s.plain);
-	assert.equal(s.printed[0], `Active credential: account "${NAME}": Claude subscription (Claude Code login)`);
-});
-
-test('auth login refuses while a refreshed login is unsaved and the store cannot take it', async () => {
-	const s = await loginSetup({status: SIGNED_IN, afterRun: SIGNED_IN});
-	s.fake.granted.delete('claude-login');
-	await assert.rejects(async () => s.command.run(['auth', 'login'], s.ctx), /not saved yet/);
-	assert.equal(s.runs.length, 0, 'the CLI never ran over the unsaved login');
+	assert.equal(s.printed[0], 'Active credential: account "login": Claude Code login (subscription)');
 });
 
 test('browser login that does not finish changes nothing', async () => {
@@ -983,19 +993,22 @@ test('browser login that does not finish changes nothing', async () => {
 	});
 });
 
-test('auth logout runs the CLI logout only when a login exists', async () => {
+test('auth logout runs the CLI logout only when a login exists and keeps the stored keys', async () => {
 	const none = await loginSetup();
 	await none.command.run(['auth', 'logout'], none.ctx);
 	assert.equal(none.logouts.length, 0);
+	assert.ok(none.printed.includes('Claude Code was not signed in.'));
+	assert.ok(none.printed.includes('Stored API keys stay; "claude auth remove <account>" removes one.'));
 
 	const s = await loginSetup({status: SIGNED_IN, env: {PATH: '/bin', ANTHROPIC_API_KEY: KEY}});
-	await s.store(KEY);
+	await s.store(KEY2);
 	await s.command.run(['auth', 'logout'], s.ctx);
 	assert.equal(s.logouts.length, 1);
 	assert.equal(s.logouts[0]!.env.ANTHROPIC_API_KEY, undefined);
 	assert.equal(s.logouts[0]!.env.CLAUDE_CONFIG_DIR, join(s.dataDir, 'config'));
-	assert.equal(s.fake.accounts.size, 0, 'the key and the adopted login are gone');
-	assert.ok(s.printed.includes('Claude Code login removed.'));
+	assert.equal(s.fake.accounts.size, 1, 'the stored key stays');
+	assert.ok(s.printed.includes('Claude Code is signed out.'));
+	assert.ok(s.printed.includes('Stored API keys stay; "claude auth remove <account>" removes one.'));
 });
 
 test('auth logout warns when Claude Code still reports a login', async () => {
@@ -1014,26 +1027,27 @@ test('auth logout with extra arguments is a usage error and changes nothing', as
 test('auth status shows the login with subscription and email on screen only', async () => {
 	const log = makeFakeLog();
 	const s = await loginSetup({status: SIGNED_IN, log});
-	await s.store(OAUTH);
+	await s.store(KEY2);
 	await s.command.run(['auth', 'status'], s.ctx);
-	assert.equal(s.printed[0], `Active credential: account "${NAME}": Claude subscription (Claude Code login)`);
-	assert.ok(s.printed.some(l => l.includes(`Claude Code login (subscription, ${EMAIL}; stored in the account module)`)));
-	assert.ok(s.printed.some(l => /^ {2}2\. token +subscription token \(stored in the account module\)$/.test(l)));
+	assert.equal(s.printed[0], 'Active credential: account "login": Claude Code login (subscription)');
+	assert.ok(s.printed.some(l => l.includes(`Claude Code login (subscription, ${EMAIL})`) && !l.includes('account module')));
+	assert.ok(s.printed.some(l => /^ {2}2\. key +API key \(stored in the account module\)$/.test(l)));
 	const rec = log.records.find(r => r.msg === 'auth status')!;
-	assert.deepEqual(rec.fields, {kind: 'oauth', source: 'claude-login', accounts: 2, limited: 0});
+	assert.deepEqual(rec.fields, {kind: 'oauth', source: 'claude-login', accounts: 2});
 	assert.ok(!serialized(log).includes(EMAIL));
 });
 
 test('auth status names the login among other sources when an env key has priority', async () => {
 	const s = await loginSetup({status: SIGNED_IN, env: {ANTHROPIC_API_KEY: KEY}});
 	await s.command.run(['auth', 'status'], s.ctx);
-	assert.ok(s.printed.some(l => /^ {2}2\. owner-person +Claude Code login/.test(l)));
+	assert.ok(s.printed.some(l => /^ {2}2\. login +Claude Code login/.test(l)));
 });
 
 test('auth add notes that a login shadows the stored key', async () => {
 	const s = await loginSetup({status: SIGNED_IN, token: KEY});
 	await s.command.run(['auth', 'add'], s.ctx);
-	assert.ok(s.printed.some(l => l.startsWith(`Note: "key" is used after account "${NAME}": Claude subscription (Claude Code login)`)));
+	assert.ok(s.printed.some(l => l.startsWith('Note: "key" is used after account "login": Claude Code login (subscription) in priority order')));
+	assert.ok(!s.printed.some(l => l.startsWith('Notice:')), 'a key adds no subscription notice');
 });
 
 test('ask with a login source: env without credentials, footer says subscription login', async () => {
@@ -1051,17 +1065,20 @@ test('auth lists its subcommands with their own usages and options', () => {
 	assert.equal(auth.usage, 'claude auth <subcommand>');
 	assert.deepEqual(auth.subcommands!.map(s => s.name), ['status', 'login', 'add', 'order', 'use', 'auto', 'remove', 'logout']);
 	const login = auth.subcommands!.find(s => s.name === 'login')!;
-	assert.deepEqual(login.options!.map(o => o.name), ['--name', '--console', '--claudeai', '--sso', '--email']);
+	assert.deepEqual(login.options!.map(o => o.name), ['--console', '--claudeai', '--sso', '--email']);
+	const use = auth.subcommands!.find(s => s.name === 'use')!;
+	assert.equal(use.usage, 'claude auth use <account>');
+	assert.equal(use.options, undefined);
 	assert.ok(!JSON.stringify(auth).match(/--token|--from-file/));
 	for (const s of [auth, ...auth.subcommands!]) assert.ok(s.description.length <= 70, s.name);
 });
 
 test('auth add from the terminal never runs the Claude Code CLI', async () => {
-	const s = await loginSetup({token: OAUTH});
+	const s = await loginSetup({token: KEY});
 	await s.command.run(['auth', 'add'], {...s.ctx, headless: true});
 	assert.equal(s.runs.length, 0);
-	assert.deepEqual(s.fake.accounts.get('token')!.secrets, {token: OAUTH});
-	assert.ok(!s.printed.join('\n').includes(OAUTH));
+	assert.deepEqual(s.fake.accounts.get('key')!.secrets, {key: KEY});
+	assert.ok(!s.printed.join('\n').includes(KEY));
 });
 
 test('claude tier is a confirm subcommand with usage errors, a router check and a no-chat error', async () => {
@@ -1077,4 +1094,26 @@ test('claude tier is a confirm subcommand with usage errors, a router check and 
 	await assert.rejects(async () => command.run(['tier', 'auto'], ctx), /No chat is open/);
 	await command.run(['tier'], ctx);
 	assert.equal(printed.at(-1), 'No chat is open.');
+});
+
+test('the retired-credentials notice is shown once per record, for any credential, and not without a record', async () => {
+	const none = await setup();
+	await none.command.run(['auth', 'status'], none.ctx);
+	assert.ok(!none.printed.some(l => l.startsWith('yena no longer stores')));
+	let record: {at: string; logins: number; tokens: number} | undefined = {at: '2026-11-03T10:00:00.000Z', logins: 2, tokens: 1};
+	const withRecord = await setup({loadRetired: async () => record});
+	await withRecord.command.run(['auth', 'status'], withRecord.ctx);
+	const notice = withRecord.printed.filter(l => l.startsWith('yena no longer stores'));
+	assert.equal(notice.length, 1);
+	assert.match(notice[0]!, /Removed from the account module: 2 login\(s\), 1 token\(s\)\./);
+	assert.match(notice[0]!, /A usage limit now ends the turn; yena no longer switches accounts on its own/);
+	await withRecord.command.run(['ask', 'x'], withRecord.ctx);
+	assert.equal(withRecord.printed.filter(l => l.startsWith('yena no longer stores')).length, 1, 'once per record');
+	assert.equal((await state(withRecord.dataDir)).retiredNoticeAt, '2026-11-03T10:00:00.000Z');
+	record = {at: '2026-11-04T10:00:00.000Z', logins: 0, tokens: 3};
+	await withRecord.command.run(['auth', 'status'], withRecord.ctx);
+	assert.equal(withRecord.printed.filter(l => l.startsWith('yena no longer stores')).length, 2, 'a new record shows again');
+	const broken = await setup({loadRetired: async () => { throw new Error('x'); }});
+	await broken.command.run(['auth', 'status'], broken.ctx);
+	assert.ok(!broken.printed.some(l => l.startsWith('yena no longer stores')));
 });

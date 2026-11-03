@@ -33,7 +33,6 @@ export type RemoteOptions = {
 	onLost?: (reason: string) => void;
 	open?: {open: OpenSpec; tuning: ChatTuning; mode?: ChatMode; keep: boolean};
 	credentials?: {current(): CredentialBundle; onChange(cb: (b: CredentialBundle) => void): () => void};
-	onLoginChanged?: () => void;
 	rpcTimeoutMs?: number;
 	connectTimeoutMs?: number;
 };
@@ -455,9 +454,6 @@ export class RemoteChatSession implements ChatHandle {
 				this.lose(frame.reason === '' ? 'The background chat ended.' : `The background chat ended: ${frame.reason}`);
 				return;
 			case 'statusReply':
-				return;
-			case 'loginChanged':
-				this.opts.onLoginChanged?.();
 				return;
 		}
 	}

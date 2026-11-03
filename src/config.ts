@@ -204,12 +204,11 @@ export function buildEnv(
 	if (cred.source === 'claude-login') {
 		delete env.ANTHROPIC_API_KEY;
 		delete env.CLAUDE_CODE_OAUTH_TOKEN;
+	} else if (cred.passthrough) {
+		delete env.ANTHROPIC_API_KEY;
 	} else if (cred.kind === 'api-key') {
 		env.ANTHROPIC_API_KEY = cred.value;
 		delete env.CLAUDE_CODE_OAUTH_TOKEN;
-	} else {
-		env.CLAUDE_CODE_OAUTH_TOKEN = cred.value;
-		delete env.ANTHROPIC_API_KEY;
 	}
 	return env;
 }
@@ -414,7 +413,7 @@ export function buildChatOptions(p: {
 	const {canUseTool, tuning, consoleServer, sandbox, ...rest} = p;
 	const {maxTurns: _askLimit, ...base} = buildOptions(rest);
 	const full = base.env ?? {};
-	const keep = Object.keys(full).filter(k => full[k] === p.cred.value && p.cred.value !== '');
+	const keep = p.cred.passthrough ? ['CLAUDE_CODE_OAUTH_TOKEN'] : Object.keys(full).filter(k => full[k] === p.cred.value && p.cred.value !== '');
 	return applyTuning(
 		{
 			...base,

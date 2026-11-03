@@ -4,8 +4,8 @@ import path from 'node:path';
 import type {AgentDefinition} from '@anthropic-ai/claude-agent-sdk';
 import {additionalDirsOf, buildChatOptions, buildEnv, buildRouterOptions, ensureMdLinks, resolvePaths, restrictDataDirs, withProjects, type ClaudePaths} from '../config.js';
 import type {LoginProbe} from '../claude-login.js';
-import {accountsCtx, liveSecrets, loginSyncOf, makeRedactor, prepareCredential, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
-import {chooseAccount, LoginUnsavedError, markLimited, pinnedAccount, prepareAccount, ranksAbove} from '../accounts.js';
+import {accountsCtx, liveSecrets, makeRedactor, prepareCredential, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
+import {type ChooseOpts, chooseAccount, pinnedAccount} from '../accounts.js';
 import {degradedReason, type ClaudeVault} from '../vault.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {buildScope} from '../policy.js';
@@ -40,6 +40,7 @@ export type EngineOpen = {
 	resume?: string;
 	fork?: boolean;
 	resumeAt?: string;
+	apiKeyOnly?: boolean;
 };
 
 export type EngineDeps = {
@@ -61,11 +62,7 @@ export type EngineDeps = {
 	idleCloseMs?: number;
 	vault?: ClaudeVault;
 	redactExtra?: (text: string) => string;
-	onLoginChanged?: () => void;
-	loginPollMs?: number;
 };
-
-export const LOGIN_POLL_MS = 30_000;
 
 export const IDLE_CLOSE_MS = 15_000;
 
@@ -91,30 +88,21 @@ export type ChatEngine = {
 	flush: () => Promise<void>;
 };
 
-const LIMIT_HOLD_S = 5 * 3600;
-const BILLING_HOLD_S = 24 * 3600;
-
 export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: EngineIo): Promise<ChatEngine> => {
 	const {fresh, model, tuning, resume: chosen, fork, resumeAt} = open;
+	const sel: ChooseOpts = open.apiKeyOnly ? {apiKeyOnly: true} : {};
 	const {dataDir, env, store} = deps;
 	const log = deps.log ?? noopLog;
 	const credOpts: CredentialOpts = {env, dataDir, log, ...(deps.vault && {vault: deps.vault})};
 	let cred: Credential;
 	try {
-		cred = await requireCredential({...credOpts, ...(deps.probeLogin && {probeLogin: deps.probeLogin})});
+		cred = await requireCredential({...credOpts, ...(deps.probeLogin && {probeLogin: deps.probeLogin})}, sel);
 	} catch (err) {
 		log.warn('no credential');
 		throw err;
 	}
 	let shown = cred.account;
 	registerLogRedaction(log, cred);
-	const loginSync = loginSyncOf(credOpts);
-	let lastSync: Promise<unknown> = Promise.resolve();
-	const saveLoginSoon = (): void => {
-		if (deps.onLoginChanged) {
-			if (loginSync.dirty()) deps.onLoginChanged();
-		} else lastSync = loginSync.sync();
-	};
 	const redact = makeRedactor(cred, liveSecrets(credOpts), deps.redactExtra);
 	const scrub = makeScrub(redact);
 	const reveal = makeReveal(redact);
@@ -340,12 +328,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		},
 		...(state.chatPermissionMode && {initialMode: state.chatPermissionMode}),
 		buildOptions: (abortController, id, prompter) => {
-			try {
-				cred = prepareCredential(credOpts);
-			} catch (err) {
-				if (err instanceof LoginUnsavedError) saveLoginSoon();
-				throw err;
-			}
+			cred = prepareCredential(credOpts, sel);
 			registerLogRedaction(log, cred);
 			const consoleFlags = createConsoleFlags();
 			const access = paths.projects?.readSync();
@@ -405,43 +388,11 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		},
 		route,
 		onReset: () => router.reset(),
-		onUsageLimit: ({reason, rateLimit}) => {
-			const current = cred.account;
-			if (current === undefined) return undefined;
-			const ctx = accountsCtx(credOpts);
-			const now = Date.now() / 1000;
-			const until =
-				reason === 'billing' ? now + BILLING_HOLD_S : rateLimit?.resetsAt !== undefined && rateLimit.resetsAt > now ? rateLimit.resetsAt : now + LIMIT_HOLD_S;
-			const {unpinned} = markLimited(ctx, current, until, reason);
-			const next = chooseAccount(ctx);
-			log.info('account limited', {reason, unpinned, next: next !== undefined && next.limitedUntil === undefined && next.name !== current});
-			if (!next || next.limitedUntil !== undefined || next.name === current) return undefined;
-			try {
-				prepareAccount(ctx, next.name);
-			} catch (err) {
-				if (!(err instanceof LoginUnsavedError)) throw err;
-				log.info('account switch skipped', {reason: 'login-unsaved'});
-				saveLoginSoon();
-				return undefined;
-			}
-			shown = next.name;
-			return {from: current, to: next.name};
-		},
 		preferAccount: () => {
 			const current = cred.account;
 			if (current === undefined) return false;
-			const ctx = accountsCtx(credOpts);
-			const next = chooseAccount(ctx);
-			if (!next || next.limitedUntil !== undefined || next.name === current) return false;
-			try {
-				prepareAccount(ctx, next.name);
-			} catch (err) {
-				if (!(err instanceof LoginUnsavedError)) throw err;
-				log.info('account return skipped', {reason: 'login-unsaved'});
-				saveLoginSoon();
-				return false;
-			}
-			return true;
+			const next = chooseAccount(accountsCtx(credOpts), sel);
+			return next !== undefined && next.name !== current;
 		},
 		spawnedAccount: () => {
 			const now = cred.account;
@@ -451,8 +402,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			}
 			const previous = shown;
 			shown = now;
-			const ctx = accountsCtx(credOpts);
-			const reason = pinnedAccount(ctx)?.name === now ? 'pinned' : ranksAbove(ctx, now, previous) ? 'restored' : 'changed';
+			const reason = pinnedAccount(accountsCtx(credOpts))?.name === now ? 'pinned' : 'changed';
 			return {account: now, previous, reason};
 		},
 	});
@@ -498,22 +448,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		if (e.type === 'state' || (e.type === 'ui' && (e.event.kind === 'task' || e.event.kind === 'session'))) writeStatus();
 	});
 
-	let loginPoll: NodeJS.Timeout | undefined;
-	const stopLoginPoll = (): void => {
-		if (loginPoll) clearInterval(loginPoll);
-		loginPoll = undefined;
-	};
-	session.subscribe(e => {
-		if (e.type === 'turn-end') saveLoginSoon();
-		if (e.type !== 'state') return;
-		if (e.state === 'running' && !loginPoll) {
-			loginPoll = setInterval(() => {
-				if (loginSync.changed()) saveLoginSoon();
-			}, deps.loginPollMs ?? LOGIN_POLL_MS);
-			loginPoll.unref();
-		} else if (e.state !== 'running') stopLoginPoll();
-	});
-
 	session.subscribe(e => {
 		if (e.type !== 'turn-end' || session.needsNewSession) return;
 		const lastSessionId = session.sessionId;
@@ -546,9 +480,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			titleTimers.clear();
 			session.close();
 			procStatus.clear();
-			stopLoginPoll();
-			saveLoginSoon();
 		},
-		flush: () => Promise.all([saving, lastSync]).then(() => undefined),
+		flush: () => saving,
 	};
 };

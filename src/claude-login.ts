@@ -85,7 +85,7 @@ export const runLogout = async (p: CliOpts): Promise<boolean> => {
 	return res?.code === 0;
 };
 
-export const LOGIN_USAGE = 'Usage: claude auth login [--name <account>] [--console|--claudeai] [--sso] [--email <address>]';
+export const LOGIN_USAGE = 'Usage: claude auth login [--console|--claudeai] [--sso] [--email <address>]';
 
 export type LoginRequest = {cliArgs: string[]; meta: {console: boolean; sso: boolean; email: boolean}};
 
@@ -103,7 +103,9 @@ export const parseLoginArgs = (args: string[]): LoginRequest => {
 	let email = false;
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i]!;
-		if (arg === '--console' || arg === '--claudeai') {
+		if (arg === '--name') {
+			throw new Error('"--name" is gone: there is one Claude Code login, account "login"');
+		} else if (arg === '--console' || arg === '--claudeai') {
 			if (console_ || claudeai) throw new Error(`Use only one of --console and --claudeai, once. ${LOGIN_USAGE}`);
 			if (arg === '--console') console_ = true;
 			else claudeai = true;

@@ -5,7 +5,6 @@ import {ACCOUNT_REASONS, ROUTE_OUTCOMES, ROUTE_SOURCES, type AgentItem, type Cha
 import {TIERS, type Tier} from '../chat/tiers.js';
 import type {LimitType, RateLimitInfo} from '../chat/limits.js';
 import {ACCOUNT_NAME_RE} from '../accounts.js';
-import {parseSlot} from '../login-slot.js';
 import {MAX_ENTRIES, type WireBundle, type WireEntry} from '../vault.js';
 import type {
 	AuditEntry,
@@ -33,6 +32,7 @@ export type OpenSpec = {
 	resumeAt?: string;
 	historyUntil?: string;
 	draft?: string;
+	apiKeyOnly?: boolean;
 };
 
 export type StatePatch = {lastSessionId?: string; lastModel?: string; allowedCommands?: string[]};
@@ -114,7 +114,6 @@ export type RunnerFrame = Base &
 		| {type: 'log'; level: 'error' | 'warn' | 'info' | 'debug'; msg: string; fields?: Record<string, unknown>}
 		| {type: 'statusReply'; status: SessionStatus}
 		| {type: 'bye'; reason: string}
-		| {type: 'loginChanged'}
 	);
 
 export type Frame = ClientFrame | RunnerFrame;
@@ -180,6 +179,7 @@ const readOpen = (v: unknown): OpenSpec => {
 		...(has(o, 'resumeAt') && {resumeAt: ident(o.resumeAt, 'resumeAt')}),
 		...(has(o, 'historyUntil') && {historyUntil: str(o.historyUntil, 'historyUntil')}),
 		...(has(o, 'draft') && {draft: str(o.draft, 'draft')}),
+		...(has(o, 'apiKeyOnly') && {apiKeyOnly: bool(o.apiKeyOnly, 'apiKeyOnly')}),
 	};
 };
 
@@ -696,23 +696,20 @@ const readLogFields = (v: unknown): Record<string, unknown> => {
 
 const VAULT_STATUSES = ['ok', 'no-provider', 'no-grant', 'old-host', 'error'] as const;
 const VALUE_MAX = 8192;
-const SLOT_MAX = 64 * 1024;
 
 const readWireEntry = (v: unknown): WireEntry => {
 	const o = rec(v, 'entry');
 	const name = str(o.name, 'name', 32);
 	if (!ACCOUNT_NAME_RE.test(name)) fail('account name');
-	const slot = has(o, 'slot') ? parseSlot(rec(o.slot, 'slot')) : undefined;
-	if (has(o, 'slot') && (!slot || JSON.stringify(slot).length > SLOT_MAX)) fail('slot');
+	if (has(o, 'slot')) fail('slot');
 	return {
 		name,
-		type: oneOf(o.type, ['key', 'token', 'login'] as const, 'type'),
+		type: oneOf(o.type, ['key'] as const, 'type'),
 		kind: oneOf(o.kind, ['api-key', 'oauth'] as const, 'kind'),
 		...(has(o, 'email') && {email: str(o.email, 'email', 320)}),
 		disabled: bool(o.disabled, 'disabled'),
 		...(o.reserved === true && {reserved: true}),
 		...(has(o, 'value') && {value: str(o.value, 'value', VALUE_MAX)}),
-		...(slot && {slot}),
 	};
 };
 
@@ -779,7 +776,6 @@ const RUNNER: Record<string, Reader> = {
 	}),
 	statusReply: o => ({status: readStatus(o.status)}),
 	bye: o => ({reason: str(o.reason, 'reason', 1024)}),
-	loginChanged: () => ({}),
 };
 
 export const validateFrame = (raw: unknown, direction: FrameDirection): Frame | null => {

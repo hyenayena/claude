@@ -1,19 +1,14 @@
 import assert from 'node:assert/strict';
-import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, rmSync} from 'node:fs';
 import net from 'node:net';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {inspect} from 'node:util';
 import {afterEach, test} from 'node:test';
-import {writeAuth} from '../../src/accounts.js';
 import type {ChatEvent} from '../../src/chat/events.js';
-import {RemoteChatSession} from '../../src/chat/remote-session.js';
-import {loginSyncOf} from '../../src/credentials.js';
-import {createLoginSync} from '../../src/login-sync.js';
 import {createDecoder, encodeFrame, MAX_FRAME_BYTES, ProtocolError, validateFrame, type ClientFrame, type RunnerFrame} from '../../src/runner/protocol.js';
 import {runRunner, type RunnerControl, type RunnerHandle, type RunnerSession} from '../../src/runner/server.js';
-import {bundleVault, decodeBundle, encodeBundle, hostVault, makeEntry, type CredentialBundle, type WireBundle} from '../../src/vault.js';
-import {fakeCredentials, seed} from '../helpers/fake-credentials.js';
+import {bundleVault, decodeBundle, encodeBundle, makeEntry, type CredentialBundle, type WireBundle} from '../../src/vault.js';
 import {makeFakeLog} from '../helpers/fake-log.js';
 
 const KEY = 'sk-ant-api03-RUNNERKEY0123456789abcdef';
@@ -31,13 +26,13 @@ const wire = (over: Partial<WireBundle> = {}): WireBundle => ({
 	status: 'ok',
 	entries: [
 		{name: 'key', type: 'key', kind: 'api-key', disabled: false, value: KEY},
-		{name: 'alice', type: 'login', kind: 'oauth', email: 'a@example.com', disabled: false, slot: SLOT},
+		{name: 'other', type: 'key', kind: 'api-key', disabled: false, value: `${KEY}2`},
 	],
 	...over,
 });
 const frame = (bundle: unknown) => ({v: 1, type: 'credentials', bundle});
 
-test('the credentials frame is validated: names, sizes, counts, slot shape', () => {
+test('the credentials frame is validated: names, sizes, counts; only key entries without a slot', () => {
 	const ok = validateFrame(frame(wire()), 'toRunner') as Extract<ClientFrame, {type: 'credentials'}>;
 	assert.equal(ok.bundle.entries[0]!.value, KEY);
 	const entry = wire().entries[0]!;
@@ -48,21 +43,22 @@ test('the credentials frame is validated: names, sizes, counts, slot shape', () 
 		wire({entries: [{...entry, name: 'x'.repeat(33)}]}),
 		wire({entries: [{...entry, value: 'v'.repeat(8193)}]}),
 		wire({entries: [{...entry, type: 'github' as never}]}),
-		wire({entries: [{...entry, type: 'login', slot: {credentials: 'x'} as never}]}),
-		wire({entries: [{...entry, type: 'login', slot: {...SLOT, oauthAccount: {pad: 'p'.repeat(70_000)}} as never}]}),
+		wire({entries: [{...entry, type: 'token' as never}]}),
+		wire({entries: [{...entry, type: 'login' as never}]}),
+		wire({entries: [{...entry, slot: SLOT} as never]}),
+		wire({entries: [{...entry, type: 'login', slot: {credentials: 'x'}} as never]}),
+		wire({entries: [{...entry, slot: {}} as never]}),
 	];
 	for (const b of bad) assert.throws(() => validateFrame(frame(b), 'toRunner'), ProtocolError);
-	assert.deepEqual(validateFrame({v: 1, type: 'loginChanged'}, 'toClient'), {v: 1, type: 'loginChanged'});
-	assert.equal(validateFrame({v: 1, type: 'loginChanged'}, 'toRunner'), null, 'only the runner sends it');
-	const huge = wire({entries: Array.from({length: 50}, (_, i) => ({name: `l${i}`, type: 'login' as const, kind: 'oauth' as const, disabled: false, slot: {...SLOT, oauthAccount: {pad: 'p'.repeat(60_000)}}}))});
-	assert.throws(() => encodeFrame({v: 1, type: 'credentials', bundle: huge}), /too large/);
+	assert.equal(validateFrame({v: 1, type: 'loginChanged'}, 'toClient'), null, 'an old runner loginChanged is ignored');
+	assert.equal(validateFrame({v: 1, type: 'loginChanged'}, 'toRunner'), null);
 	assert.ok(MAX_FRAME_BYTES === 1024 * 1024);
 });
 
 test('a decoded bundle hides its values from JSON and inspect; encoding brings them back', () => {
 	const b = decodeBundle(wire());
 	for (const s of [JSON.stringify(b), inspect(b, {depth: 9}), inspect(b, {depth: 9, showHidden: true})]) {
-		assert.ok(!s.includes(KEY) && !s.includes('RUNNER-ACCESS'), s);
+		assert.ok(!s.includes(KEY), s);
 	}
 	assert.equal(b.entries[0]!.value, KEY);
 	assert.deepEqual(encodeBundle(b), wire());
@@ -80,7 +76,7 @@ test('the runner vault waits for the first push, then reads only; it never write
 	v.push(decodeBundle(wire()));
 	assert.equal(seen.length, 1);
 	await assert.rejects(v.addSecret(undefined, KEY), /Changing accounts needs yena/);
-	await assert.rejects(v.saveLogin('alice', SLOT), /Changing accounts needs yena/);
+	assert.ok(!('saveLogin' in v) && !('adoptLogin' in v));
 });
 
 class Session {
@@ -163,41 +159,6 @@ test('the runner gets the bundle before open, keeps the last one, and never send
 	assert.equal(r.bundleAtOpen()?.entries.length, 2, 'the engine saw the pushed bundle');
 	send({type: 'credentials', bundle: wire({entries: [wire().entries[0]!]})});
 	await until(() => r.vault.current().entries.length === 1, 'second push');
-	r.control().loginChanged();
-	await until(() => frames.some(f => f.type === 'loginChanged'), 'loginChanged');
-	assert.ok(!raw.includes(KEY) && !raw.includes('RUNNER-ACCESS'), 'no value in snapshot, log or event frames');
+	assert.ok(!raw.includes(KEY), 'no value in snapshot, log or event frames');
 	socket.destroy();
-});
-
-test('loginChanged makes the attached yena save the runner login and push a fresh bundle; the runner is clean again', async () => {
-	const dataDir = mkdtempSync(path.join(tmpdir(), 'yrc-data-'));
-	dirs.push(dataDir);
-	const configDir = path.join(dataDir, 'config');
-	mkdirSync(configDir, {recursive: true});
-	const fake = fakeCredentials();
-	seed(fake, 'alice', 'claude-login', JSON.stringify(SLOT));
-	const log = makeFakeLog();
-	const vault = hostVault(fake, log);
-	await vault.load();
-	writeAuth(dataDir, {v: 1, order: [], limits: {}, installed: 'alice'});
-	const r = await startRunner();
-	const remote = await RemoteChatSession.connect({
-		socketPath: r.handle.socketPath,
-		cwd: dataDir,
-		stateUpdate: async () => undefined,
-		open: {open: {fresh: true}, tuning: {}, keep: false},
-		credentials: vault,
-		onLoginChanged: () => void loginSyncOf({env: {}, dataDir, vault, log}).sync(),
-	});
-	await until(() => r.vault.current().entries.length === 1, 'first push');
-	const refreshed = {...SLOT, credentials: {claudeAiOauth: {...SLOT.credentials.claudeAiOauth, accessToken: 'RUNNER-ACCESS-NEW-0123456789', expiresAt: 2000}}};
-	writeFileSync(path.join(configDir, '.credentials.json'), JSON.stringify(refreshed.credentials));
-	writeFileSync(path.join(configDir, '.claude.json'), JSON.stringify({oauthAccount: SLOT.oauthAccount}));
-	const runnerSync = createLoginSync({dataDir, configDir, vault: r.vault});
-	assert.equal(runnerSync.dirty(), true);
-	await assert.rejects(r.vault.saveLogin('alice', refreshed), /needs yena/);
-	r.control().loginChanged();
-	await until(() => !runnerSync.dirty(), 'runner clean after the push');
-	assert.equal(JSON.parse(fake.accounts.get('alice')!.secrets.login!).credentials.claudeAiOauth.accessToken, 'RUNNER-ACCESS-NEW-0123456789');
-	remote.close();
 });

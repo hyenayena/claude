@@ -2,12 +2,10 @@ import type {CredentialAccount, CredentialGrant, Credentials} from '../../../../
 
 const FIELDS: Record<string, {secret: string; public: string[]}> = {
 	'anthropic-key': {secret: 'key', public: []},
-	'anthropic-token': {secret: 'token', public: []},
-	'claude-login': {secret: 'login', public: ['email', 'method']},
 	github: {secret: 'token', public: ['user']},
 };
 
-const DECLARED = ['anthropic-key', 'anthropic-token', 'claude-login'];
+const DECLARED = ['anthropic-key'];
 
 type Stored = {kind: string; fields: Record<string, string>; secrets: Record<string, string>; disabled: boolean};
 

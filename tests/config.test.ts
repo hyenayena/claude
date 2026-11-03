@@ -23,7 +23,7 @@ import {buildChatSettings, CHAT_DISALLOWED_TOOLS, CHAT_TOOLS} from '../src/polic
 import type {Credential} from '../src/types.js';
 
 const SECRET = 'sk-ant-oat-TESTVALUE0123456789abcdef';
-const oauth: Credential = {kind: 'oauth', source: 'env', value: SECRET};
+const oauth: Credential = {kind: 'oauth', source: 'env', value: '', passthrough: true};
 const apiKey: Credential = {kind: 'api-key', source: 'env', value: 'sk-ant-api-TESTVALUE0123456789abcdef'};
 
 const tmp = mkdtempSync(path.join(tmpdir(), 'claude-config-'));
@@ -90,8 +90,8 @@ describe('buildEnv', () => {
 		assert.ok(!('ANTHROPIC_AUTH_TOKEN' in env));
 	});
 
-	it('lets an oauth credential replace an inherited api key', () => {
-		const env = buildEnv({ANTHROPIC_API_KEY: 'other', CLAUDE_CODE_OAUTH_TOKEN: 'old'}, paths, oauth);
+	it('passes the env subscription token through untouched and drops an inherited api key', () => {
+		const env = buildEnv({ANTHROPIC_API_KEY: 'other', CLAUDE_CODE_OAUTH_TOKEN: SECRET}, paths, oauth);
 		assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, SECRET);
 		assert.ok(!('ANTHROPIC_API_KEY' in env));
 	});
@@ -145,7 +145,7 @@ describe('buildOptions', () => {
 	});
 
 	it('contains no secret outside env', () => {
-		const o = buildOptions({...base, env: undefined});
+		const o = buildOptions({...base, env: buildEnv({CLAUDE_CODE_OAUTH_TOKEN: SECRET}, paths, oauth)});
 		const {env, ...rest} = o;
 		const json = JSON.stringify(rest);
 		assert.ok(!json.includes(SECRET));
@@ -304,8 +304,9 @@ describe('buildChatOptions', () => {
 	});
 
 	it('scrubs the env but keeps the credential for the CLI', () => {
-		const o = buildChatOptions({...base, env: undefined, cred: oauth});
-		assert.equal(o.env?.CLAUDE_CODE_OAUTH_TOKEN, SECRET);
+		const o = buildChatOptions({...base, env: buildEnv({CLAUDE_CODE_OAUTH_TOKEN: SECRET, GITHUB_TOKEN: 'g'}, paths, oauth), cred: oauth});
+		assert.equal(o.env?.CLAUDE_CODE_OAUTH_TOKEN, SECRET, 'kept by name, not by value');
+		assert.ok(!('GITHUB_TOKEN' in o.env!));
 		const k = buildChatOptions({...base, env: undefined, cred: apiKey});
 		assert.equal(k.env?.ANTHROPIC_API_KEY, apiKey.value);
 		assert.equal(k.env?.CLAUDE_CODE_OAUTH_TOKEN, undefined);

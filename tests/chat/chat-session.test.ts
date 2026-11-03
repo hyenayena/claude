@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import type {Options, SDKMessage, SDKUserMessage} from '@anthropic-ai/claude-agent-sdk';
 import {AUTH_MESSAGE, RESUME_MESSAGE} from '../../src/session.js';
 import type {ChatQueryFn} from '../../src/types.js';
-import {CONTINUE_TEXT, ChatSession} from '../../src/chat/chat-session.js';
+import {ChatSession} from '../../src/chat/chat-session.js';
 import type {ChatEvent} from '../../src/chat/events.js';
 import {MAX_QUEUE, PERMISSION_IDLE_MS, type PermissionDecision, type PermissionPrompter, type PermissionRequest} from '../../src/chat/permission.js';
 import type {Clock} from '../../src/chat/limits.js';
@@ -79,7 +79,6 @@ const setup = (
 		initialResume?: string;
 		clock?: Clock;
 		idleCloseMs?: number;
-		onUsageLimit?: SessionOpts['onUsageLimit'];
 		preferAccount?: SessionOpts['preferAccount'];
 		spawnedAccount?: SessionOpts['spawnedAccount'];
 	} = {},
@@ -923,42 +922,36 @@ test('a usage limit ends the turn as limit, keeps the session and the query', as
 	session.close();
 });
 
-test('a usage limit with another account restarts Claude Code in the same session and continues the turn', async () => {
-	const asked: unknown[] = [];
-	let left = 1;
-	const {session, queries, resumes, ends, events} = setup({
-		clock,
-		onUsageLimit: p => {
-			asked.push(p);
-			return left-- > 0 ? {from: 'work', to: 'spare'} : undefined;
-		},
-	});
+test('a usage limit ends the turn: no restart, no account event, nothing resent', async () => {
+	const {session, queries, resumes, ends, events} = setup({clock, spawnedAccount: () => undefined, preferAccount: () => false});
 	session.send('one');
 	queries[0]?.emit(init());
 	queries[0]?.emit(rejected());
 	queries[0]?.emit(limitError());
 	queries[0]?.emit(errResult({result: CLI_TEXT}));
 	await tick();
-	assert.deepEqual(ends(), [], 'the turn goes on');
-	assert.equal(session.state, 'running');
-	assert.deepEqual(asked, [{reason: 'usage-limit', rateLimit: {status: 'rejected', resetsAt: NOW_S + 3600, type: 'five_hour', utilization: 1}}]);
-	assert.deepEqual(events.filter(e => e.type === 'account'), [{type: 'account', account: 'spare', previous: 'work', reason: 'usage-limit'}]);
-	assert.equal(queries.length, 2);
-	assert.equal(queries[0]?.closed, 1, 'the limited process is closed');
-	assert.deepEqual(resumes, [undefined, 'sess-1'], 'the new process resumes the session');
+	const end = ends()[0] as {outcome: string; error?: string};
+	assert.equal(end.outcome, 'limit');
+	assert.match(end.error ?? '', /resets at /);
+	assert.equal(session.state, 'idle');
+	assert.equal(queries.length, 1);
+	assert.equal(queries[0]?.closed, 0);
+	assert.deepEqual(resumes, [undefined]);
+	assert.deepEqual(events.filter(e => e.type === 'account'), []);
+	assert.equal(queries[0]?.sent.length, 1, 'no continue message is pushed');
+	session.close();
+});
+
+test('a billing failure ends the turn as a limit too', async () => {
+	const {session, queries, ends, events} = setup({clock});
+	session.send('one');
+	queries[0]?.emit(init());
+	queries[0]?.emit({type: 'assistant', error: 'billing_error', message: {content: [{type: 'text', text: 'Credit balance is too low'}]}});
+	queries[0]?.emit(errResult({result: 'Credit balance is too low'}));
 	await tick();
-	const pushed = queries[1]?.sent[0] as {message: {content: string}};
-	assert.equal(pushed.message.content, CONTINUE_TEXT);
-	assert.equal(events.filter(e => e.type === 'sent').length, 1, 'the continue message is not shown as typed');
-	queries[1]?.emit(init());
-	queries[1]?.emit(ok());
-	await tick();
-	assert.deepEqual(ends().map(e => (e as {outcome: string}).outcome), ['ok']);
-	session.send('two');
-	queries[1]?.emit(limitError());
-	queries[1]?.emit(errResult({result: CLI_TEXT}));
-	await tick();
-	assert.equal((ends()[1] as {outcome: string}).outcome, 'limit');
+	assert.equal((ends()[0] as {outcome: string}).outcome, 'limit');
+	assert.equal(queries.length, 1);
+	assert.deepEqual(events.filter(e => e.type === 'account'), []);
 	session.close();
 });
 
@@ -1287,7 +1280,7 @@ const finishTurn = async (q: FakeQuery | undefined): Promise<void> => {
 	await tick();
 };
 
-test('an idle warm process is replaced when a higher account is available again', async () => {
+test('an idle warm process is replaced when the chosen account changed', async () => {
 	let calls = 0;
 	const {session, queries, resumes, ends, log} = setup({
 		preferAccount: () => {
@@ -1307,11 +1300,11 @@ test('an idle warm process is replaced when a higher account is available again'
 	assert.equal(queries[1]?.sent.length, 1);
 	await finishTurn(queries[1]);
 	assert.deepEqual(ends().map(e => e.type === 'turn-end' && e.outcome), ['ok', 'ok']);
-	assert.ok(log.records.some(r => r.msg === 'account returning'));
+	assert.ok(log.records.some(r => r.msg === 'account changing'));
 	session.close();
 });
 
-test('the warm process is kept when no higher account is available', async () => {
+test('the warm process is kept when the chosen account is the same', async () => {
 	let calls = 0;
 	const {session, queries} = setup({
 		preferAccount: () => {
@@ -1328,7 +1321,7 @@ test('the warm process is kept when no higher account is available', async () =>
 	session.close();
 });
 
-test('a failing account return keeps the process and logs a warning', async () => {
+test('a failing account change check keeps the process and logs a warning', async () => {
 	const {session, queries, log} = setup({
 		preferAccount: () => {
 			throw new TypeError('boom');
@@ -1340,7 +1333,7 @@ test('a failing account return keeps the process and logs a warning', async () =
 	assert.equal(session.state, 'running');
 	assert.equal(queries.length, 1);
 	assert.equal(queries[0]?.closed, 0);
-	const rec = log.records.find(r => r.msg === 'account return failed');
+	const rec = log.records.find(r => r.msg === 'account change failed');
 	assert.deepEqual([rec?.level, rec?.fields], ['warn', {errClass: 'TypeError'}]);
 	session.close();
 });
@@ -1398,7 +1391,7 @@ test('the account return is never asked for mid-turn', async () => {
 test('an account change found on spawn is emitted, nothing when unchanged', async () => {
 	const answers: Array<ReturnType<NonNullable<SessionOpts['spawnedAccount']>>> = [
 		{account: 'b', previous: 'a', reason: 'changed'},
-		{account: 'a', previous: 'b', reason: 'restored'},
+		{account: 'a', previous: 'b', reason: 'pinned'},
 		undefined,
 	];
 	let returning = false;
@@ -1412,12 +1405,12 @@ test('an account change found on spawn is emitted, nothing when unchanged', asyn
 	returning = true;
 	session.send('two');
 	assert.equal(queries.length, 2);
-	assert.deepEqual(events.filter(e => e.type === 'account').at(-1), {type: 'account', account: 'a', previous: 'b', reason: 'restored'});
+	assert.deepEqual(events.filter(e => e.type === 'account').at(-1), {type: 'account', account: 'a', previous: 'b', reason: 'pinned'});
 	await finishTurn(queries[1]);
 	session.send('three');
 	assert.equal(queries.length, 3);
 	assert.equal(events.filter(e => e.type === 'account').length, 2);
-	assert.ok(log.records.some(r => r.msg === 'account changed' && r.fields['reason'] === 'restored'));
+	assert.ok(log.records.some(r => r.msg === 'account changed' && r.fields['reason'] === 'pinned'));
 	assert.ok(!JSON.stringify(log.records).includes('"b"'));
 	session.close();
 });
@@ -1433,23 +1426,5 @@ test('a failing account check on spawn is logged and the spawn goes on', async (
 	assert.equal(session.state, 'running');
 	assert.equal(events.filter(e => e.type === 'account').length, 0);
 	assert.equal(log.records.find(r => r.msg === 'account check failed')?.level, 'warn');
-	session.close();
-});
-
-test('a usage-limit switch with a spawn check emits one account event', async () => {
-	let left = 1;
-	const {session, queries, events} = setup({
-		clock,
-		onUsageLimit: () => (left-- > 0 ? {from: 'work', to: 'spare'} : undefined),
-		spawnedAccount: () => undefined,
-	});
-	session.send('one');
-	queries[0]?.emit(init());
-	queries[0]?.emit(rejected());
-	queries[0]?.emit(limitError());
-	queries[0]?.emit(errResult({result: CLI_TEXT}));
-	await tick();
-	assert.equal(queries.length, 2);
-	assert.deepEqual(events.filter(e => e.type === 'account'), [{type: 'account', account: 'spare', previous: 'work', reason: 'usage-limit'}]);
 	session.close();
 });

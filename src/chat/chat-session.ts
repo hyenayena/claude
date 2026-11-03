@@ -43,9 +43,8 @@ export type ChatSessionOptions = {
 	clock?: Clock;
 	turnLock?: {acquire(): void; release(): void};
 	idleCloseMs?: number;
-	onUsageLimit?: (p: {reason: 'usage-limit' | 'billing'; rateLimit?: RateLimitInfo}) => {from: string; to: string} | undefined;
 	preferAccount?: () => boolean;
-	spawnedAccount?: () => {account: string; previous: string; reason: 'restored' | 'changed' | 'pinned'} | undefined;
+	spawnedAccount?: () => {account: string; previous: string; reason: 'changed' | 'pinned'} | undefined;
 	route?: (p: {text: string; signal: AbortSignal; cache: CacheInfo; started: () => void}) => Promise<RouteResult | undefined>;
 	routeGuardMs?: number;
 	onReset?: () => void;
@@ -88,8 +87,6 @@ const within = <T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> 
 
 type Routing = {ac: AbortController; steers: string[]; done: Promise<void>};
 
-export const CONTINUE_TEXT = 'Continue from where you stopped; the previous attempt was cut off by a usage limit.';
-const MAX_SWITCHES = 8;
 
 export type SlashCommandInfo = {name: string; description?: string; argumentHint?: string};
 export type TaskInfo = {
@@ -188,7 +185,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private idleTimer: NodeJS.Timeout | undefined;
 	private holdEpoch = 0;
 	private permissionHold: (() => void) | undefined;
-	private switches = 0;
 	private _mode: ChatMode = 'default';
 	private _commands: SlashCommandInfo[] = [];
 	private _title: string | undefined;
@@ -345,10 +341,10 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			try {
 				back = this.opts.preferAccount();
 			} catch (err) {
-				this.log.warn('account return failed', {errClass: errClass(err)});
+				this.log.warn('account change failed', {errClass: errClass(err)});
 			}
 			if (back) {
-				this.log.info('account returning');
+				this.log.info('account changing');
 				this.dropHandle();
 			}
 		}
@@ -368,7 +364,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.turnStartedAt = Date.now();
 		this.turnUsageFrom = this.usage;
 		this.log.info('turn started', {chars: text.length});
-		this.switches = 0;
 		this.turnHandle = handle;
 		this.armTurnTimer(this.timeoutMs);
 		const command = opts.command === true;
@@ -496,36 +491,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	}
 
 	private limitTurn(kind: FailureKind): void {
-		const reason = kind === 'usage-limit' || kind === 'billing' ? kind : undefined;
-		if (reason && this.opts.onUsageLimit && this.switches < MAX_SWITCHES && this._state === 'running' && !this.pending) {
-			let next: {from: string; to: string} | undefined;
-			try {
-				next = this.opts.onUsageLimit({reason, ...(this._rateLimit !== undefined && {rateLimit: this._rateLimit})});
-			} catch (err) {
-				this.log.warn('account switch failed', {errClass: errClass(err)});
-			}
-			if (next) {
-				this.switches++;
-				this.dropHandle();
-				this.clearTimers();
-				this._rateLimit = undefined;
-				this.turnError = undefined;
-				this.authFailed = false;
-				this.log.info('account switched', {reason, switches: this.switches});
-				this.emit({type: 'account', account: next.to, previous: next.from, reason});
-				let handle: Handle;
-				try {
-					handle = this.spawn();
-				} catch (err) {
-					this.endTurn('error', this.opts.redact(err instanceof Error ? err.message : String(err)));
-					return;
-				}
-				this.turnHandle = handle;
-				this.armTurnTimer(this.timeoutMs);
-				this.pushUser(handle, CONTINUE_TEXT, false);
-				return;
-			}
-		}
 		this.endTurn(kind === 'context' ? 'context' : 'limit', this.failureText(kind), kind);
 	}
 
@@ -738,7 +703,6 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.authFailed = false;
 		this.turnError = undefined;
 		this.pending = undefined;
-		this.switches = 0;
 		this.setState('running');
 		this.turnStartedAt = Date.now();
 		this.turnUsageFrom = this.usage;

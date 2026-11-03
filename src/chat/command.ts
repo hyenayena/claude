@@ -3,7 +3,7 @@ import {tuningFromState, type ChatTuning, type LivePatch} from '../chat-prefs.js
 import type {LoginProbe} from '../claude-login.js';
 import {clockTime} from '../clock-time.js';
 import {resolvePaths, type ClaudePaths} from '../config.js';
-import {accountsCtx, liveSecrets, loginSyncOf, makeRedactor, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
+import {accountsCtx, liveSecrets, makeRedactor, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
 import type {ClaudeVault} from '../vault.js';
 import {pinnedAccount} from '../accounts.js';
 import {clip, errClass, noopLog} from '../log.js';
@@ -91,6 +91,7 @@ export type ChatOpen = {
 	resume?: string;
 	fork?: boolean;
 	resumeAt?: string;
+	apiKeyOnly?: boolean;
 	historyUntil?: string;
 	draft?: string;
 	send?: string;
@@ -199,6 +200,7 @@ const openLocal = async (open: ChatOpen, ctx: CommandContext, deps: ChatRunDeps)
 			...(chosen && {resume: chosen}),
 			...(fork && {fork}),
 			...(resumeAt && {resumeAt}),
+			...(open.apiKeyOnly && {apiKeyOnly: true}),
 		},
 		{
 			...deps,
@@ -248,7 +250,7 @@ const openRemote = async (
 	const credOpts: CredentialOpts = {env: deps.env, dataDir: deps.dataDir, log, ...(deps.vault && {vault: deps.vault})};
 	let cred: Credential;
 	try {
-		cred = await requireCredential({...credOpts, ...(deps.probeLogin && {probeLogin: deps.probeLogin})});
+		cred = await requireCredential({...credOpts, ...(deps.probeLogin && {probeLogin: deps.probeLogin})}, open.apiKeyOnly ? {apiKeyOnly: true} : {});
 	} catch (err) {
 		log.warn('no credential');
 		throw err;
@@ -301,7 +303,6 @@ const openRemote = async (
 		stateUpdate: patch => deps.store.update(patch),
 		onLost: reason => ctx.print(formatNotice(reason, scrub)),
 		credentials: vaultOf(credOpts),
-		onLoginChanged: () => void loginSyncOf(credOpts).sync(),
 		...(ctx.commandBridge && {commandBridge: ctx.commandBridge}),
 		...(spawned && {
 			open: {
@@ -311,6 +312,7 @@ const openRemote = async (
 					...(open.resume && {resume: open.resume}),
 					...(open.fork && {fork: true}),
 					...(open.resumeAt && {resumeAt: open.resumeAt}),
+					...(open.apiKeyOnly && {apiKeyOnly: true}),
 					...(open.historyUntil && {historyUntil: open.historyUntil}),
 					...(open.draft && {draft: open.draft}),
 				},

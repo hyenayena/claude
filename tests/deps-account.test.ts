@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import {mkdir, mkdtemp, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {existsSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
@@ -38,4 +41,17 @@ test('the denied account paths are in the scope and the chat settings, as files 
 	}
 	const {accountSecrets: _, ...without} = paths;
 	assert.equal(buildScope(without, '/home').shellDenied, undefined);
+});
+
+test('the retired-credentials record comes through the account module public entry, or is absent', {skip: !installed && 'account module not installed'}, async () => {
+	const {loadRetiredCredentials} = await import('../src/deps/account.js');
+	const dir = await mkdtemp(join(tmpdir(), 'claude-retired-'));
+	assert.equal(await loadRetiredCredentials(join(dir, 'claude')), undefined, 'no record, no notice');
+	const accountDir = join(dir, 'account');
+	await mkdir(accountDir, {recursive: true});
+	await writeFile(join(accountDir, 'retired.json'), JSON.stringify({v: 1, at: '2026-11-03T10:00:00.000Z', logins: 2, tokens: 1}));
+	const got = await loadRetiredCredentials(join(dir, 'claude'));
+	assert.deepEqual(got, {at: '2026-11-03T10:00:00.000Z', logins: 2, tokens: 1});
+	await writeFile(join(accountDir, 'retired.json'), 'not json');
+	assert.equal(await loadRetiredCredentials(join(dir, 'claude')), undefined);
 });

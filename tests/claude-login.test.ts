@@ -152,3 +152,9 @@ test('runLogout runs "auth logout" and reports the exit status', async () => {
 	const hang = await fakeBin('sleep 30');
 	assert.equal(await runLogout({bin: hang.bin, env: {PATH: process.env.PATH}, timeoutMs: 200}), false);
 });
+
+test('parseLoginArgs: --name is gone and the usage has no --name', () => {
+	assert.throws(() => parseLoginArgs(['--name', 'work']), {message: '"--name" is gone: there is one Claude Code login, account "login"'});
+	assert.throws(() => parseLoginArgs(['--console', '--name']), /"--name" is gone/);
+	assert.ok(!LOGIN_USAGE.includes('--name'));
+});

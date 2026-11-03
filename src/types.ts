@@ -11,7 +11,7 @@ export type CredentialInfo = {
 	readonly account?: string;
 };
 
-export type Credential = CredentialInfo & {readonly value: string};
+export type Credential = CredentialInfo & {readonly value: string; readonly passthrough?: true};
 
 export type QueryFn = (p: {
 	prompt: string;
@@ -50,7 +50,8 @@ export type ClaudeState = {
 	tierMaxModel?: TierModel;
 	tierMaxEffort?: Effort;
 	allowedCommands?: string[];
-	subscriptionNoticeShown?: boolean;
+	subscriptionNotice?: number;
+	retiredNoticeAt?: string;
 };
 
 export type ChatQueryFn = (p: {

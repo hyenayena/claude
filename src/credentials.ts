@@ -3,7 +3,7 @@ import {inspect} from 'node:util';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {Logger} from '../../../src/api.js';
-import type {LoginProbe} from './claude-login.js';
+import type {LoginProbe, LoginStatus} from './claude-login.js';
 import {
 	type Account,
 	type AccountsCtx,
@@ -11,12 +11,12 @@ import {
 	chooseAccount,
 	listAccounts,
 	prepareAccount,
-	removeAllAccounts,
 	storedEntries,
+	type ChooseOpts,
 } from './accounts.js';
-import {loginSyncFor} from './login-sync.js';
-import {migrateLegacy} from './migrate.js';
-import {noopLog} from './log.js';
+import {loginPresent} from './login-slot.js';
+import {migrateAuthState, migrateLegacy} from './migrate.js';
+import {errClass, noopLog} from './log.js';
 import type {Credential, CredentialInfo, CredentialKind, CredentialSource} from './types.js';
 import {bundleSecrets, type ClaudeVault, type CredentialBundle, degradedReason, hostVault} from './vault.js';
 
@@ -29,8 +29,8 @@ const SECRET_PATTERNS = [
 	/\bAKIA[0-9A-Z]{16}\b/g,
 ];
 
-const makeCredential = (kind: CredentialKind, source: CredentialSource, value: string, account?: string): Credential => {
-	const cred = {kind, source, ...(account !== undefined && {account})};
+const makeCredential = (kind: CredentialKind, source: CredentialSource, value: string, account?: string, passthrough?: true): Credential => {
+	const cred = {kind, source, ...(account !== undefined && {account}), ...(passthrough && {passthrough})};
 	Object.defineProperty(cred, 'value', {value, enumerable: false});
 	Object.defineProperty(cred, 'toJSON', {value: () => ({kind, source, value: '[redacted]'}), enumerable: false});
 	Object.defineProperty(cred, inspect.custom, {value: () => `Credential<${kind}, ${source}> [redacted]`, enumerable: false});
@@ -50,29 +50,61 @@ export type CredentialOpts = {
 let envOnly: ClaudeVault | undefined;
 export const vaultOf = (opts: Pick<CredentialOpts, 'vault'>): ClaudeVault => opts.vault ?? (envOnly ??= hostVault(undefined));
 
-export const accountsCtx = (opts: CredentialOpts): AccountsCtx => ({
-	dataDir: opts.dataDir,
-	configDir: join(opts.dataDir, 'config'),
-	env: opts.env,
-	...(opts.now && {now: opts.now}),
-	bundle: vaultOf(opts).current(),
-});
+const LOGIN_TTL_MS = 60_000;
+const loginInfo = new Map<string, {at: number; status: LoginStatus | undefined}>();
 
-export const loginSyncOf = (opts: CredentialOpts) =>
-	loginSyncFor({dataDir: opts.dataDir, configDir: join(opts.dataDir, 'config'), env: opts.env, vault: vaultOf(opts), ...(opts.log && {log: opts.log})});
+export const refreshLoginInfo = async (opts: CredentialOpts, force = false): Promise<void> => {
+	if (!opts.probeLogin) return;
+	const now = (opts.now ?? Date.now)();
+	const seen = loginInfo.get(opts.dataDir);
+	if (!force && seen && now - seen.at < LOGIN_TTL_MS) return;
+	let status: LoginStatus | undefined;
+	try {
+		status = await opts.probeLogin();
+	} catch {
+	}
+	loginInfo.set(opts.dataDir, {at: now, status});
+};
+
+export const accountsCtx = (opts: CredentialOpts): AccountsCtx => {
+	const configDir = join(opts.dataDir, 'config');
+	const status = loginInfo.get(opts.dataDir)?.status;
+	const signedIn = status?.loggedIn === true;
+	return {
+		dataDir: opts.dataDir,
+		configDir,
+		env: opts.env,
+		bundle: vaultOf(opts).current(),
+		login: {
+			present: loginPresent(configDir) || signedIn,
+			kind: signedIn && status.method === 'console' ? 'api-key' : 'oauth',
+			...(signedIn && status.email !== undefined && {email: status.email}),
+		},
+	};
+};
 
 const started = new WeakMap<ClaudeVault, Promise<unknown>>();
+const stateMigrated = new Set<string>();
 
 export const loadBundle = async (opts: CredentialOpts): Promise<CredentialBundle> => {
 	const vault = vaultOf(opts);
+	if (!stateMigrated.has(opts.dataDir)) {
+		stateMigrated.add(opts.dataDir);
+		try {
+			migrateAuthState(opts.dataDir, opts.log ?? noopLog);
+		} catch (err) {
+			stateMigrated.delete(opts.dataDir);
+			(opts.log ?? noopLog).warn('auth state not migrated', {errClass: errClass(err)});
+		}
+	}
+	await refreshLoginInfo(opts);
 	const bundle = await vault.load();
 	if (!vault.channel || bundle.status !== 'ok') return bundle;
 	let first = started.get(vault);
 	if (!first) {
 		first = (async () => {
-			const moved = await migrateLegacy({dataDir: opts.dataDir, configDir: join(opts.dataDir, 'config'), vault, log: opts.log ?? noopLog});
+			const moved = await migrateLegacy({dataDir: opts.dataDir, vault, log: opts.log ?? noopLog});
 			if (moved === 'deferred') started.delete(vault);
-			await loginSyncOf(opts).sync();
 		})();
 		started.set(vault, first);
 	}
@@ -82,16 +114,19 @@ export const loadBundle = async (opts: CredentialOpts): Promise<CredentialBundle
 
 const sourceOf = (a: Account): CredentialSource => (a.type === 'env' ? 'env' : a.type === 'login' ? 'claude-login' : 'stored');
 
-const secretOf = (opts: CredentialOpts, a: Account): string => {
-	if (a.type === 'login') return '';
-	try {
-		return prepareAccount(accountsCtx(opts), a.name).value;
-	} catch {
-		return '';
+const credentialOf = (opts: CredentialOpts, a: Account): Credential => {
+	let value = '';
+	let passthrough: true | undefined;
+	if (a.type !== 'login') {
+		try {
+			const p = prepareAccount(accountsCtx(opts), a.name);
+			value = p.value;
+			passthrough = p.passthrough;
+		} catch {
+		}
 	}
+	return makeCredential(a.kind, sourceOf(a), value, a.name, passthrough);
 };
-
-const credentialOf = (opts: CredentialOpts, a: Account): Credential => makeCredential(a.kind, sourceOf(a), secretOf(opts, a), a.name);
 
 export const listCredentialSources = async (opts: CredentialOpts): Promise<Credential[]> => {
 	await loadBundle(opts);
@@ -100,32 +135,35 @@ export const listCredentialSources = async (opts: CredentialOpts): Promise<Crede
 		.map(a => credentialOf(opts, a));
 };
 
-export const resolveCredential = async (opts: CredentialOpts): Promise<Credential | undefined> => {
+export const resolveCredential = async (opts: CredentialOpts, sel: ChooseOpts = {}): Promise<Credential | undefined> => {
 	await loadBundle(opts);
-	const a = chooseAccount(accountsCtx(opts));
+	const a = chooseAccount(accountsCtx(opts), sel);
 	return a ? credentialOf(opts, a) : undefined;
 };
 
 export const NO_CREDENTIALS =
-	'No credentials found. Run "claude auth login" to sign in through the browser, or "claude auth add" to paste an API key or a subscription token. See "claude auth status".';
+	'No credentials found. Run "claude auth login" to sign in with Claude Code, or "claude auth add" to paste an API key. See "claude auth status".';
+
+export const API_KEY_ONLY =
+	'A chat started by the scheduler runs only on an API key: Claude subscription plans are for your own interactive use. Add one with "claude auth add" or set ANTHROPIC_API_KEY.';
 
 export const noCredentials = (bundle: CredentialBundle): string => {
 	const reason = degradedReason(bundle.status);
 	return reason ? `No credentials found. ${reason}` : NO_CREDENTIALS;
 };
 
-export const requireCredential = async (opts: CredentialOpts): Promise<Credential> => {
-	const cred = await resolveCredential(opts);
-	if (!cred) throw new Error(noCredentials(vaultOf(opts).current()));
+export const requireCredential = async (opts: CredentialOpts, sel: ChooseOpts = {}): Promise<Credential> => {
+	const cred = await resolveCredential(opts, sel);
+	if (!cred) throw new Error(sel.apiKeyOnly ? API_KEY_ONLY : noCredentials(vaultOf(opts).current()));
 	return cred;
 };
 
-export const prepareCredential = (opts: CredentialOpts): Credential => {
+export const prepareCredential = (opts: CredentialOpts, sel: ChooseOpts = {}): Credential => {
 	const ctx = accountsCtx(opts);
-	const a = chooseAccount(ctx);
-	if (!a) throw new Error(noCredentials(ctx.bundle));
+	const a = chooseAccount(ctx, sel);
+	if (!a) throw new Error(sel.apiKeyOnly ? API_KEY_ONLY : noCredentials(ctx.bundle));
 	const p = prepareAccount(ctx, a.name);
-	return makeCredential(p.kind, sourceOf(p.account), p.value, p.account.name);
+	return makeCredential(p.kind, sourceOf(p.account), p.value, p.account.name, p.passthrough);
 };
 
 export const storeSecret = async (opts: CredentialOpts, value: string, name?: string): Promise<Account> => {
@@ -133,21 +171,13 @@ export const storeSecret = async (opts: CredentialOpts, value: string, name?: st
 	return addSecretAccount(accountsCtx(opts), vaultOf(opts), name, value);
 };
 
-export const removeStored = async (opts: CredentialOpts): Promise<boolean> => {
-	await loadBundle(opts);
-	return (await removeAllAccounts(accountsCtx(opts), vaultOf(opts))) > 0;
-};
-
 export const isSubscription = (info: CredentialInfo): boolean => info.kind === 'oauth';
 
 export const describeCredential = (info: CredentialInfo): string => {
 	const named = info.account !== undefined && info.source !== 'env' ? `account "${info.account}": ` : '';
-	if (info.source === 'claude-login') {
-		return `${named}${info.kind === 'api-key' ? 'Console API key (Claude Code login)' : 'Claude subscription (Claude Code login)'}`;
-	}
-	const what = info.kind === 'api-key' ? 'API key' : 'subscription token';
-	const where = info.source === 'env' ? 'from environment' : 'stored in the account module';
-	return `${named}${what} (${where})`;
+	if (info.source === 'claude-login') return `${named}Claude Code login (${info.kind === 'api-key' ? 'Console' : 'subscription'})`;
+	if (info.source === 'env') return info.kind === 'api-key' ? 'API key (from environment)' : 'subscription token (from environment)';
+	return `${named}API key (stored in the account module)`;
 };
 
 export const inspectFileMode = async (dataDir: string): Promise<string[]> => {
@@ -196,7 +226,7 @@ export const makeRedactor = (
 	};
 };
 
-const envSecrets = (env: NodeJS.ProcessEnv): string[] => [env.ANTHROPIC_API_KEY, env.CLAUDE_CODE_OAUTH_TOKEN].flatMap(v => (v?.trim() ? [v.trim()] : []));
+const envSecrets = (env: NodeJS.ProcessEnv): string[] => [env.ANTHROPIC_API_KEY].flatMap(v => (v?.trim() ? [v.trim()] : []));
 
 export const allSecrets = (opts: CredentialOpts): string[] => [...bundleSecrets(vaultOf(opts).current()), ...envSecrets(opts.env)];
 
@@ -237,4 +267,8 @@ export const registerLogRedaction = (log: Logger, cred: Credential): void => {
 	if (seen.has(digest)) return;
 	seen.add(digest);
 	log.addRedactor(makeRedactor(cred));
+};
+
+export const noteLoginStatus = (opts: CredentialOpts, status: LoginStatus | undefined): void => {
+	loginInfo.set(opts.dataDir, {at: (opts.now ?? Date.now)(), status});
 };

@@ -14,8 +14,8 @@ test('round trip', async () => {
 	const store = createStore(dir);
 	assert.deepEqual(await store.read(), {});
 	await store.update({lastSessionId: ID, lastModel: 'm1'});
-	await store.update({subscriptionNoticeShown: true});
-	assert.deepEqual(await store.read(), {lastSessionId: ID, lastModel: 'm1', subscriptionNoticeShown: true});
+	await store.update({subscriptionNotice: 2, retiredNoticeAt: '2026-11-03T10:00:00.000Z'});
+	assert.deepEqual(await store.read(), {lastSessionId: ID, lastModel: 'm1', subscriptionNotice: 2, retiredNoticeAt: '2026-11-03T10:00:00.000Z'});
 });
 
 test('corrupt, wrong-shape and wrong-typed files give defaults', async () => {
@@ -59,10 +59,10 @@ test('concurrent updates are serialised', async () => {
 	const store = createStore(dir);
 	await Promise.all([
 		store.update({lastModel: 'a'}),
-		store.update({subscriptionNoticeShown: true}),
+		store.update({subscriptionNotice: 2}),
 		store.update({lastSessionId: ID}),
 	]);
-	assert.deepEqual(await store.read(), {lastModel: 'a', subscriptionNoticeShown: true, lastSessionId: ID});
+	assert.deepEqual(await store.read(), {lastModel: 'a', subscriptionNotice: 2, lastSessionId: ID});
 });
 
 test('a failed state write logs the error code at warn and rethrows', async () => {

@@ -91,22 +91,35 @@ test('a runner event with a permission request is validated and rebuilt', () => 
 	assert.throws(() => createDecoder('toClient').push(line(broken)), ProtocolError);
 });
 
-test('an account switch event crosses the protocol; an unknown reason does not', () => {
-	const frame: RunnerFrame = {v: 1, type: 'event', event: {type: 'account', account: 'spare', previous: 'work', reason: 'usage-limit'}};
+test('an account change event crosses the protocol; an unknown reason does not', () => {
+	const frame: RunnerFrame = {v: 1, type: 'event', event: {type: 'account', account: 'spare', previous: 'work', reason: 'changed'}};
 	const [back] = createDecoder('toClient').push(encodeFrame(frame));
 	assert.deepEqual(back, frame);
 	const broken = {v: 1, type: 'event', event: {type: 'account', account: 'spare', previous: 'work', reason: 'other'}};
 	assert.throws(() => createDecoder('toClient').push(line(broken)), ProtocolError);
 });
 
-test('restored, changed and pinned account events cross the protocol', () => {
-	for (const reason of ['restored', 'changed', 'pinned'] as const) {
+test('changed and pinned account events cross the protocol; the retired reasons do not', () => {
+	for (const reason of ['changed', 'pinned'] as const) {
 		const frame: RunnerFrame = {v: 1, type: 'event', event: {type: 'account', account: 'work', previous: 'spare', reason}};
 		const [back] = createDecoder('toClient').push(encodeFrame(frame));
 		assert.deepEqual(back, frame);
 	}
+	for (const reason of ['usage-limit', 'billing', 'restored', 'returned']) {
+		const old = {v: 1, type: 'event', event: {type: 'account', account: 'work', previous: 'spare', reason}};
+		assert.throws(() => createDecoder('toClient').push(line(old)), ProtocolError, reason);
+	}
 	const broken = {v: 1, type: 'event', event: {type: 'account', account: 'work', previous: 'spare', reason: 'returned'}};
 	assert.throws(() => createDecoder('toClient').push(line(broken)), ProtocolError);
+});
+
+test('open.apiKeyOnly is a boolean or absent', () => {
+	const dec = () => createDecoder('toRunner');
+	const open = (extra: object) => line({v: 1, type: 'open', open: {fresh: true, ...extra}, tuning: {}, keep: false});
+	assert.deepEqual((dec().push(open({apiKeyOnly: true}))[0] as {open: object}).open, {fresh: true, apiKeyOnly: true});
+	assert.deepEqual((dec().push(open({apiKeyOnly: false}))[0] as {open: object}).open, {fresh: true, apiKeyOnly: false});
+	assert.deepEqual((dec().push(open({}))[0] as {open: object}).open, {fresh: true});
+	for (const bad of ['yes', 1, {}]) assert.throws(() => dec().push(open({apiKeyOnly: bad})), ProtocolError, JSON.stringify(bad));
 });
 
 test('open, applyLive and stateUpdate frames keep only known fields', () => {

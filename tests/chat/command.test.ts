@@ -13,9 +13,11 @@ import type {ChatQueryFn, QueryFn} from '../../src/types.js';
 import type {ChatUi} from '../../src/chat/command.js';
 import {makeFakeLog, serialized} from '../helpers/fake-log.js';
 import {fakeCredentials, seed} from '../helpers/fake-credentials.js';
+import {API_KEY_ONLY} from '../../src/credentials.js';
 import {hostVault} from '../../src/vault.js';
 
-const OAUTH = 'sk-ant-oat-TESTVALUE0123456789abcdef';
+const OAUTH = 'sk-ant-oat01-TESTVALUE0123456789abcdef';
+const KEY = 'sk-ant-api03-SCHEDVALUE0123456789abcdef';
 const SID1 = '11111111-aaaa-4bbb-8ccc-222222222222';
 const SID2 = '33333333-aaaa-4bbb-8ccc-444444444444';
 
@@ -83,6 +85,7 @@ const setup = async (opts: {mount?: boolean; failFirst?: boolean; failMessage?: 
 			return () => void unregistered++;
 		},
 		login: {probe: async () => undefined},
+		loadRetired: async () => undefined,
 		...opts.deps,
 	});
 	const command = {run: async (args: string[], c: CommandContext) => real.run(args, c)};
@@ -371,6 +374,8 @@ test('closing line carries no control bytes or secret from the model name', asyn
 		)) as unknown as ChatQueryFn;
 	const cmd = createClaudeCommand({
 		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
@@ -400,7 +405,7 @@ test('closing line carries no control bytes or secret from the model name', asyn
 test('chat logs start and close with labels only, registers the redactor first, and leaks nothing', async () => {
 	const log = makeFakeLog();
 	const s = await setup({
-		deps: {log},
+		deps: {log, env: {ANTHROPIC_API_KEY: KEY}},
 		run: async p => {
 			const done = turnDone(p);
 			p.controller.send('PROMPT-SENTINEL-1');
@@ -413,7 +418,7 @@ test('chat logs start and close with labels only, registers the redactor first, 
 	const find = (m: string) => log.records.find(r => r.msg === m)!;
 	assert.deepEqual(find('chat starting').fields, {
 		fresh: false,
-		kind: 'oauth',
+		kind: 'api-key',
 		source: 'env',
 		resuming: false,
 		model: 'default',
@@ -424,7 +429,35 @@ test('chat logs start and close with labels only, registers the redactor first, 
 	assert.equal(closed.fields.session8, SID2.slice(0, 8));
 	assert.equal(closed.fields.model, 'claude-test-1');
 	const out = serialized(log);
-	for (const secret of ['PROMPT-SENTINEL-1', OAUTH, 'sk-ant']) assert.equal(out.includes(secret), false, secret);
+	for (const secret of ['PROMPT-SENTINEL-1', KEY, 'sk-ant']) assert.equal(out.includes(secret), false, secret);
+});
+
+test('a chat on the env subscription token passes the variable through: no value, no redactor, nothing logged', async () => {
+	const log = makeFakeLog();
+	const s = await setup({
+		deps: {log, env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH, ANTHROPIC_API_KEY: KEY, PATH: '/bin'}},
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+		},
+	});
+	await s.command.run(['chat'], s.ctx);
+	const env = s.q.calls[0]!.options.env as Record<string, string | undefined>;
+	assert.equal(env.ANTHROPIC_API_KEY, KEY, 'the key comes first in the order');
+	const only = await setup({
+		deps: {log, env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH, PATH: '/bin'}},
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hello');
+			await done;
+		},
+	});
+	await only.command.run(['chat'], only.ctx);
+	const env2 = only.q.calls[0]!.options.env as Record<string, string | undefined>;
+	assert.equal(env2.CLAUDE_CODE_OAUTH_TOKEN, OAUTH, 'kept by name through the chat env scrub');
+	assert.equal(env2.ANTHROPIC_API_KEY, undefined);
+	assert.equal(only.props.at(-1)!.initialAccount, 'env-token');
 });
 
 test('chat with a missing SDK logs an error with missingModule', async () => {
@@ -545,6 +578,8 @@ const setupChat = async (opts: Parameters<typeof setup>[0] = {}, extra: Partial<
 	const [chat] = createClaudeCommands({
 		...extra,
 		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
@@ -763,6 +798,8 @@ test('claude <command> runs a Claude Code command in the open chat', async () =>
 	const s = await setupChat({run: () => gate});
 	const [chat, claude] = createClaudeCommands({
 		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
@@ -800,6 +837,8 @@ test('claude hints list Claude Code commands from the session, or from the confi
 	await writeFile(join(s.dataDir, 'config', 'skills', 'deploy', 'SKILL.md'), '---\nname: deploy\ndescription: Deploy it\n---\n');
 	const [, claude] = createClaudeCommands({
 		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
 		env: {},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
@@ -819,7 +858,7 @@ test('Claude Code commands with free-text hints and long descriptions still pass
 	await writeFile(join(s.dataDir, 'config', 'commands', 'review.md'), `---\ndescription: ${'Review the change carefully. '.repeat(6)}\nargument-hint: [--strict] pr number\n---\nbody`);
 	await writeFile(join(s.dataDir, 'config', 'commands', 'fixit.md'), '---\ndescription: Fix it.\nargument-hint: <issue> [note…]\n---\nbody');
 	await writeFile(join(s.dataDir, 'config', 'commands', 'help.md'), '---\ndescription: Not core help\n---\nbody');
-	const [, claude] = createClaudeCommands({dataDir: s.dataDir, env: {}, loadQuery: async () => (() => []) as unknown as QueryFn});
+	const [, claude] = createClaudeCommands({dataDir: s.dataDir, loadRetired: async () => undefined, login: {probe: async () => undefined}, env: {}, loadQuery: async () => (() => []) as unknown as QueryFn});
 	const subs = claude!.subcommands!;
 	const review = subs.find(x => x.name === 'review')!;
 	assert.equal(review.usage, 'claude review [args…]');
@@ -861,6 +900,8 @@ const writeTranscript = async (dataDir: string, sessionId: string, rows: unknown
 const claudeWithPicker = (s: Awaited<ReturnType<typeof setupChat>>, pick?: (p: {items: {id: string; label: string}[]; onPick: (id: string) => void; close: () => void}) => void) =>
 	createClaudeCommands({
 		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
@@ -948,6 +989,8 @@ test('model, effort, thinking, fast mode and output style apply to the open chat
 		})) as unknown as ChatQueryFn;
 	const [chat] = createClaudeCommands({
 		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
@@ -990,6 +1033,8 @@ test('a chat started in plan mode tells the SDK; saved "always" rules reach the 
 	assert.equal(s.q.calls[0]!.options.permissionMode, 'plan');
 	const [, claude] = createClaudeCommands({
 		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
@@ -1075,6 +1120,8 @@ test('claude rewind restores files and reopens the chat before the picked messag
 	const printed: string[] = [];
 	const [chat, claude] = createClaudeCommands({
 		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
@@ -1142,6 +1189,8 @@ test('claude tasks lists the chat tasks and stops the picked running one; claude
 		})) as unknown as ChatQueryFn;
 	const [chat, claude] = createClaudeCommands({
 		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
@@ -1179,13 +1228,8 @@ test('claude tasks lists the chat tasks and stops the picked running one; claude
 
 test('chat with a Claude Code login: no credentials in the child env', async () => {
 	let runs = 0;
-	const fake = fakeCredentials();
-	const login = {credentials: {claudeAiOauth: {accessToken: 'A', refreshToken: 'R'}}, oauthAccount: {emailAddress: 'a@example.com', accountUuid: 'uuid-a'}};
-	seed(fake, 'a-example-com', 'claude-login', JSON.stringify(login), {fields: {email: 'a@example.com', method: 'claude.ai'}});
-	const vault = hostVault(fake, makeFakeLog());
-	await vault.load();
 	const s = await setup({
-		deps: {env: {PATH: '/bin'}, vault, login: {probe: async () => ({loggedIn: true, method: 'claude.ai', subscriptionType: 'max'})}},
+		deps: {env: {PATH: '/bin'}, login: {probe: async () => ({loggedIn: true, method: 'claude.ai', subscriptionType: 'max'})}},
 		run: async p => {
 			runs++;
 			const done = turnDone(p);
@@ -1198,6 +1242,7 @@ test('chat with a Claude Code login: no credentials in the child env', async () 
 	const env = s.q.calls[0]!.options.env as Record<string, string | undefined>;
 	assert.equal(env.ANTHROPIC_API_KEY, undefined);
 	assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+	assert.equal(s.props.at(-1)!.initialAccount, 'login');
 });
 
 const consoleSdkFake = {
@@ -1258,7 +1303,7 @@ test('claude start opens a new chat that sends the message and returns while the
 	assert.ok(s.printed.includes('Started a new chat with the message.'));
 	const s2 = await setup();
 	const agent: CommandContext = {print: () => {}, clear: () => {}, exit: () => {}, signal: new AbortController().signal};
-	await assert.rejects(s2.command.run(['start', 'x'], agent), /No chat view is available/);
+	await assert.rejects(s2.command.run(['start', 'x'], {...agent, caller: 'yena'}), /No chat view is available/);
 	await assert.rejects(s2.command.run(['start'], s2.ctx), /Usage: claude start <message…>/);
 	release();
 });
@@ -1285,6 +1330,101 @@ test('claude send hands the message to the open chat view, or starts a chat when
 	release();
 });
 
+const schedulerSetup = async (o: {key?: boolean; env?: NodeJS.ProcessEnv; login?: boolean; log?: ReturnType<typeof makeFakeLog>} = {}) => {
+	const fake = fakeCredentials();
+	if (o.key) seed(fake, 'sched', 'anthropic-key', KEY);
+	const vault = hostVault(fake, makeFakeLog());
+	await vault.load();
+	let release!: () => void;
+	const hold = new Promise<void>(resolve => {
+		release = resolve;
+	});
+	let runs = 0;
+	const s = await setup({
+		run: () => (runs++ === 0 ? Promise.resolve() : hold),
+		deps: {
+			vault,
+			env: o.env ?? {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+			login: {probe: async () => (o.login ? {loggedIn: true, method: 'claude.ai'} : undefined)},
+			...(o.log && {log: o.log}),
+		},
+	});
+	await s.command.run(['new'], s.ctx);
+	assert.equal(s.props.length, 1);
+	const caller = (who: string | undefined): CommandContext => ({print: t => void s.printed.push(t), clear: () => {}, exit: () => {}, signal: new AbortController().signal, ...(who !== undefined && {caller: who})});
+	return {...s, release, caller};
+};
+
+test('a chat started by the scheduler runs only on an API key: no key, no chat', async () => {
+	const s = await schedulerSetup();
+	for (const who of ['scheduler', undefined, 'other']) {
+		await assert.rejects(s.command.run(['start', 'hello'], s.caller(who)), {message: API_KEY_ONLY}, String(who));
+		await assert.rejects(s.command.run(['send', 'hello'], s.caller(who)), {message: API_KEY_ONLY}, String(who));
+	}
+	assert.equal(s.props.length, 1, 'no chat was opened');
+	assert.equal(s.mounts(), 1);
+	assert.ok(!s.printed.includes('Started a new chat with the message.'));
+	s.release();
+});
+
+test('a scheduler chat uses the stored key even when the env token comes first or is pinned', async () => {
+	const log = makeFakeLog();
+	const s = await schedulerSetup({key: true, log, login: true});
+	await s.command.run(['auth', 'use', 'login'], s.ctx);
+	await s.command.run(['start', 'hello'], s.caller('scheduler'));
+	assert.equal(s.props.length, 2);
+	assert.equal(s.props.at(-1)!.initialAccount, 'sched');
+	assert.equal(s.props.at(-1)!.initialSend, 'hello');
+	assert.deepEqual(log.records.find(r => r.msg === 'chat started with a message')!.fields, {chars: 5, byCaller: true, apiKeyOnly: true});
+	assert.ok(!serialized(log).includes(KEY));
+	s.release();
+});
+
+test('a scheduler send with no open chat starts a key-only chat the same way', async () => {
+	const s = await schedulerSetup({key: true});
+	await s.command.run(['send', 'later'], s.caller('scheduler'));
+	assert.equal(s.props.length, 2);
+	assert.equal(s.props.at(-1)!.initialAccount, 'sched');
+	s.release();
+});
+
+test('the claude console tools (caller "yena") and typed lines keep the normal selection', async () => {
+	const viaTool = await schedulerSetup({key: true});
+	await viaTool.command.run(['start', 'hello'], viaTool.caller('yena'));
+	assert.equal(viaTool.props.at(-1)!.initialAccount, 'env-token');
+	viaTool.release();
+	const typed = await schedulerSetup({key: true});
+	await typed.command.run(['start', 'hello'], typed.ctx);
+	assert.equal(typed.props.at(-1)!.initialAccount, 'env-token');
+	typed.release();
+});
+
+test('a scheduler send into an open chat is refused unless that chat was started key-only; the chat is untouched', async () => {
+	const subscription = await schedulerSetup();
+	const got: string[] = [];
+	subscription.props.at(-1)!.onInbox!(text => void got.push(text));
+	await assert.rejects(subscription.command.run(['send', 'x'], subscription.caller('scheduler')), {message: API_KEY_ONLY});
+	assert.deepEqual(got, []);
+	await subscription.command.run(['send', 'typed'], subscription.ctx);
+	assert.deepEqual(got, ['typed'], 'the user keeps the subscription');
+	subscription.release();
+
+	const userKey = await schedulerSetup({key: true, env: {}});
+	const gotUser: string[] = [];
+	userKey.props.at(-1)!.onInbox!(text => void gotUser.push(text));
+	await assert.rejects(userKey.command.run(['send', 'job'], userKey.caller('scheduler')), {message: API_KEY_ONLY});
+	assert.deepEqual(gotUser, [], 'a chat the user opened is refused even on a key: it may move to the login');
+	userKey.release();
+
+	const keyOnly = await schedulerSetup({key: true});
+	await keyOnly.command.run(['start', 'first'], keyOnly.caller('scheduler'));
+	const gotKey: string[] = [];
+	keyOnly.props.at(-1)!.onInbox!(text => void gotKey.push(text));
+	await keyOnly.command.run(['send', 'job'], keyOnly.caller('scheduler'));
+	assert.deepEqual(gotKey, ['job'], 'the open chat was started key-only');
+	keyOnly.release();
+});
+
 test('auth use and auth auto refresh the pin watch of the open chat', async () => {
 	let claude: Command | undefined;
 	const seen: Array<string | undefined> = [];
@@ -1302,6 +1442,8 @@ test('auth use and auth auto refresh the pin watch of the open chat', async () =
 	});
 	const cmds = createClaudeCommands({
 		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
@@ -1332,6 +1474,8 @@ test('claude tier pins the open chat, shows the pin, returns it to the router an
 	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({chatRouter: 'on', chatClassifier: 'off'}));
 	const [chat, claude] = createClaudeCommands({
 		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
