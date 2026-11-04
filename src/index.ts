@@ -2,6 +2,7 @@ import type {Logger, ModulePlugin} from '../../../src/api.js';
 import {createClaudeCommands} from './commands.js';
 import * as kit from './kit.js';
 import {chatGallerySection, diffGallerySection, toolsGallerySection} from './ui/gallery.js';
+import {markdownGallerySection} from './ui/markdown-gallery.js';
 import type {ChatUi} from './chat/command.js';
 import type {ConsoleSdk} from './chat/console-tools.js';
 import {ensureSessionDir} from './chat/shell-tmp.js';
@@ -55,7 +56,7 @@ function registerGallery(log: Logger): void {
 			log.warn('gallery section skipped');
 			return;
 		}
-		for (const section of [chatGallerySection, diffGallerySection, toolsGallerySection]) {
+		for (const section of [chatGallerySection, diffGallerySection, toolsGallerySection, markdownGallerySection]) {
 			if (!kit.registerGallerySection(section)) log.warn('gallery section skipped', {section: section.name});
 		}
 	} catch (err) {

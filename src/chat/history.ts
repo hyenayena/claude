@@ -161,7 +161,8 @@ const capLines = (text: string, max: number): string[] => {
 };
 
 export type DetailFile = {kind: 'file'; name: string; input: unknown; patch?: ToolPatch; isError: boolean};
-export type DetailLine = string | DetailFile;
+export type DetailText = {kind: 'text'; text: string};
+export type DetailLine = string | DetailFile | DetailText;
 
 const DETAIL_FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
@@ -213,7 +214,14 @@ export async function readTranscriptDetail(file: string): Promise<DetailLine[]> 
 		}
 		if (e.type !== 'assistant' || !Array.isArray(content)) continue;
 		for (const b of content as Array<Record<string, unknown>>) {
-			if (b?.['type'] === 'text' && typeof b['text'] === 'string') push('', ...(b['text'] as string).split('\n'));
+			if (b?.['type'] === 'text' && typeof b['text'] === 'string') {
+				push('');
+				const shown = (b['text'] as string).split('\n').slice(0, Math.max(0, DETAIL_MAX_LINES - rows));
+				if (shown.length > 0) {
+					out.push({kind: 'text', text: shown.join('\n')});
+					rows += shown.length;
+				}
+			}
 			else if (b?.['type'] === 'thinking' && typeof b['thinking'] === 'string' && (b['thinking'] as string).trim()) {
 				push('', '✻ Thinking', ...(b['thinking'] as string).split('\n').map(l => `  ${l}`));
 			} else if (b?.['type'] === 'tool_use' && DETAIL_FILE_TOOLS.has(String(b['name']))) {

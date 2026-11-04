@@ -7,9 +7,10 @@ import {createPinWatch} from '../../src/chat/pin-watch.js';
 import {makeScrub} from '../../src/chat/scrub.js';
 import type {PermissionRequest} from '../../src/chat/permission.js';
 import {makeReveal} from '../../src/chat/reveal.js';
-import {armExpiry, BUSY_HINT, ChatView, clearSentHistory, MAX_QUEUED, type ChatViewProps} from '../../src/ui/ChatView.js';
+import {armExpiry, BUSY_HINT, ChatView, clearSentHistory, ESC_AGAIN_MS, ESC_CONFIRM_AFTER_MS, escapeInterrupts, MAX_QUEUED, type ChatViewProps} from '../../src/ui/ChatView.js';
 import {createChatElement} from '../../src/ui/mount.js';
 import {WORKING_VERBS} from '../../src/ui/present.js';
+import {stripStyles} from '../../src/kit.js';
 import {fakeController, mountHarness, questionReq, toolReq, type FakeController} from './testkit.js';
 
 const SECRET = 'sk-ant-oat-TESTVALUE0123456789abcdef';
@@ -1436,10 +1437,10 @@ test('an answer with a code block is printed with a copy action on its header ro
 	await t.settle();
 	t.controller.ui({kind: 'text', messageId: 'm1', text: 'Run:\n\n```sh\nnpm test\n```'});
 	await t.settle();
-	const answer = prints.find(p => p.text.includes('npm test'))!;
+	const answer = prints.find(p => stripStyles(p.text).includes('npm test'))!;
 	const action = answer.options!.actions![0]!;
 	assert.equal(action.copy, 'npm test');
-	assert.match(answer.text.split('\n')[action.line]!, /copy/);
+	assert.match(stripStyles(answer.text.split('\n')[action.line]!), /╭─ sh .* copy ─╮$/);
 	t.controller.ui({kind: 'text', messageId: 'm2', text: 'plain answer'});
 	await t.settle();
 	const plain = prints.find(p => p.text.includes('plain answer'))!.options!;
@@ -1528,4 +1529,13 @@ test('the status bar shows the pinned account at once and stars it once the chat
 	await t.settle();
 	assert.match(t.lastFrame(), /(^|\s)spare · /m);
 	assert.doesNotMatch(t.lastFrame(), /\*/);
+});
+
+test('Esc interrupts at once early in a turn, later only when pressed twice within a short time', () => {
+	const since = 1_000;
+	assert.equal(escapeInterrupts(since + ESC_CONFIRM_AFTER_MS - 1, since, undefined), true);
+	const late = since + ESC_CONFIRM_AFTER_MS + 5_000;
+	assert.equal(escapeInterrupts(late, since, undefined), false);
+	assert.equal(escapeInterrupts(late + ESC_AGAIN_MS, since, late), true);
+	assert.equal(escapeInterrupts(late + ESC_AGAIN_MS + 1, since, late), false);
 });

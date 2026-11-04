@@ -31,7 +31,7 @@ export type UiEvent =
 			parentTaskId?: string;
 			depth?: number;
 	  }
-	| {kind: 'thinking-text'; text: string}
+	| {kind: 'thinking-text'; text: string; durationMs?: number}
 	| {kind: 'tool-use'; toolUseId: string; name: string; input: unknown; at?: number}
 	| {kind: 'tool-input'; name: string}
 	| {kind: 'tool-input-delta'; chars: number}

@@ -101,3 +101,35 @@ test('a failed import leaves the highlighter off', async () => {
 	assert.equal(highlighterFor('typescript'), undefined);
 	resetHighlighterForTests();
 });
+
+test('fenceLanguage maps names, extensions and aliases, and refuses the rest', async () => {
+	const {fenceLanguage} = await import('../../src/ui/highlight.js');
+	const cases: Record<string, string | undefined> = {
+		ts: 'typescript',
+		TypeScript: 'typescript',
+		tsx: 'typescript',
+		js: 'javascript',
+		node: 'javascript',
+		py: 'python',
+		python3: 'python',
+		rs: 'rust',
+		golang: 'go',
+		sh: 'bash',
+		shell: 'bash',
+		console: 'bash',
+		zsh: 'bash',
+		yml: 'yaml',
+		html: 'xml',
+		'c++': 'cpp',
+		'c#': 'csharp',
+		jsonc: 'json',
+		dockerfile: 'dockerfile',
+		'.ts': 'typescript',
+		diff: 'diff',
+		'': undefined,
+		text: undefined,
+		nonsense: undefined,
+		['x'.repeat(100)]: undefined,
+	};
+	for (const [tag, want] of Object.entries(cases)) assert.equal(fenceLanguage(tag), want, tag.slice(0, 20));
+});

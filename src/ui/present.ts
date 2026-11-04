@@ -1,15 +1,16 @@
 import {BLOCK_DISPLAY_CAP, clampChars} from '../chat/truncate.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
-import {SGR_ATTR, sliceCells, stringCells, truncateCells, wrapRows} from '../kit.js';
+import {SGR_ATTR, formatElapsed, sliceCells, stringCells, truncateCells} from '../kit.js';
 import {sgr} from './sgr.js';
 import type {PrintAction, PrintOptions} from '../../../../src/api.js';
 import type {RouteInfo} from '../chat/events.js';
-import {openFenceLine, renderMarkdownBlocks} from './markdown.js';
+import {CODE_BLOCK_ROWS, openFenceLine, renderMarkdownRows} from './markdown.js';
 import {formatToolCard, formatToolGroup, resultLines} from './tool-card.js';
 import type {Scrub} from './tool-args.js';
 import {LIVE, ROUTE_TOOL_NAME, type Out, type Phase, type StatusLine, type Todo} from './transcript.js';
 import type {Tier} from '../chat/tiers.js';
 
+export {CODE_BLOCK_ROWS};
 export type {Scrub} from './tool-args.js';
 export {toolArgs, toolHeader, toolOneLiner, styledToolHeader} from './tool-args.js';
 
@@ -29,14 +30,21 @@ export function formatUserLine(text: string, scrub: Scrub): string {
 	return paint(sg.surface, lines.join('\n'));
 }
 
+// The text stays a parameter for callers that show the whole thought (the transcript viewer lists it itself).
+export function formatThinking(_text: string, _scrub: Scrub, durationMs?: number): string {
+	const took = durationMs !== undefined ? ` · ${formatElapsed(durationMs)}` : '';
+	return paint(sgr().muted, `✻ thinking${took} (ctrl+o)`);
+}
+
 const THINKING_LINES = 6;
 
-export function formatThinking(text: string, scrub: Scrub): string {
+// The thought itself, cut to a few lines: the subagent view has no transcript viewer to open.
+export function formatThinkingText(text: string, scrub: Scrub): string {
 	const sg = sgr();
 	const lines = scrub(clampChars(text, BLOCK_DISPLAY_CAP)).trim().split('\n');
 	const shown = lines.slice(0, THINKING_LINES);
 	const more = lines.length - shown.length;
-	const body = [`✻ Thinking…`, ...shown.map(l => `  ${l}`), ...(more > 0 ? [`  … +${more} line${more === 1 ? '' : 's'} (ctrl+o to expand)`] : [])];
+	const body = [`✻ Thinking…`, ...shown.map(l => `  ${l}`), ...(more > 0 ? [`  … +${more} line${more === 1 ? '' : 's'}`] : [])];
 	return paint(sg.muted + sg.italic, body.join('\n'));
 }
 
@@ -70,21 +78,16 @@ export function assistantPrint(
 
 function assistantBlock(text: string, scrub: Scrub, interrupted: boolean, width: number | undefined, copyLabel: boolean): {text: string; actions: PrintAction[]} {
 	const inner = width === undefined ? undefined : Math.max(10, width - BLOCK_INDENT);
-	const rendered = renderMarkdownBlocks(scrub(clampChars(text, BLOCK_DISPLAY_CAP)), {width: inner, copyLabel});
-	const lead = /^\n*/.exec(rendered.text)![0].length;
-	const source = rendered.text.slice(lead).split('\n');
-	const lines: string[] = [];
-	const firstRow: number[] = [];
-	for (const l of source) {
-		firstRow.push(lines.length);
-		if (inner === undefined) lines.push(l);
-		else lines.push(...wrapRows(l, inner, {mode: 'word'}));
-	}
+	const rendered = renderMarkdownRows(scrub(clampChars(text, BLOCK_DISPLAY_CAP)), {...(inner !== undefined && {width: inner}), copyLabel});
+	const lines = [...rendered.rows];
 	if (interrupted) lines.push(paint(sgr().muted, '(interrupted)'));
-	const actions = rendered.codeBlocks
-		.map(b => ({line: firstRow[b.header - lead], copy: b.code}))
-		.filter((a): a is PrintAction => a.line !== undefined);
+	const actions = rendered.codeBlocks.map((b): PrintAction => ({line: b.row, copy: b.code}));
 	return {text: hang('●', lines), actions};
+}
+
+// The rows of an assistant message without the leading marker, for the transcript viewer (code blocks in full).
+export function assistantRows(text: string, scrub: Scrub, width: number, opts: {full?: boolean} = {}): string[] {
+	return renderMarkdownRows(scrub(clampChars(text, BLOCK_DISPLAY_CAP)), {width: Math.max(10, width - 1), full: opts.full === true}).rows;
 }
 
 const MODEL_NAME = /^claude-(opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/;
@@ -255,7 +258,7 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 		case 'route':
 			return formatNotice(routeNoticeText(out.pinned), scrub);
 		case 'thinking':
-			return formatThinking(out.text, scrub);
+			return formatThinking(out.text, scrub, out.durationMs);
 		case 'task':
 			return paint(sgr().muted, `⚙ Background task ${out.status}: ${scrub(out.description)}${out.summary ? ` — ${scrub(out.summary)}` : ''}`);
 		case 'assistant':

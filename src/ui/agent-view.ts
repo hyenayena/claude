@@ -1,6 +1,6 @@
 import {wrapLines} from '../kit.js';
 import type {AgentBox, AgentEntry} from './agents.js';
-import {formatNotice, formatOut, formatUserLine, sgr, type Scrub} from './present.js';
+import {formatNotice, formatOut, formatThinkingText, formatUserLine, sgr, type Scrub} from './present.js';
 import {formatToolGroup, runningToolRow} from './tool-card.js';
 import {isFoldable} from './tool-kind.js';
 import {glyph} from '../kit.js';
@@ -11,7 +11,7 @@ const blockOf = (e: AgentEntry, scrub: Scrub, reveal: Scrub, width: number): str
 		case 'text':
 			return formatOut({kind: 'assistant', text: e.text, interrupted: false}, scrub, reveal, width);
 		case 'thinking':
-			return formatOut({kind: 'thinking', text: e.text}, scrub, reveal, width);
+			return formatThinkingText(e.text, scrub);
 		case 'notice':
 			return formatNotice(e.text, scrub);
 		case 'tool':

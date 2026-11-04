@@ -345,3 +345,13 @@ test('tool timing fields round-trip, frames without them stay valid, bad values 
 	assert.deepEqual(createDecoder('toClient').push(resultWith(604_800_000)).length, 1);
 	assert.deepEqual(createDecoder('toClient').push(resultWith(0)).length, 1);
 });
+
+test('thinking-text duration round-trips, older frames stay valid, bad values are rejected', () => {
+	const withMs: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'thinking-text', text: 'hmm', durationMs: 12_000}}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(withMs)), [withMs]);
+	const older: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'thinking-text', text: 'hmm'}}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(older)), [older]);
+	const frame = (durationMs: unknown) => line({v: 1, type: 'event', event: {type: 'ui', event: {kind: 'thinking-text', text: 'hmm', durationMs}}});
+	for (const ms of ['1', -1, 86_400_001, {}, [1]]) assert.throws(() => createDecoder('toClient').push(frame(ms)), ProtocolError, String(ms));
+	assert.equal(createDecoder('toClient').push(frame(86_400_000)).length, 1);
+});

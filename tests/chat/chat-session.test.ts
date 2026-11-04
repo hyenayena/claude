@@ -1512,3 +1512,46 @@ test('reset forgets the open tool starts', async () => {
 	const res = t.uis().find(e => e.kind === 'tool-result');
 	assert.ok(res && !('durationMs' in res));
 });
+
+const thinkingStart = () => ({type: 'stream_event', parent_tool_use_id: null, event: {type: 'content_block_start', index: 0, content_block: {type: 'thinking'}}});
+const textDelta = (text: string) => ({type: 'stream_event', parent_tool_use_id: null, event: {type: 'content_block_delta', index: 1, delta: {type: 'text_delta', text}}});
+const thought = (text: string) => ({type: 'assistant', message: {id: 'th1', content: [{type: 'thinking', thinking: text}]}});
+
+test('thinking-text carries the time from the thinking start to the first text', async () => {
+	const t = timed();
+	t.session.send('go');
+	t.queries[0]?.emit(init());
+	t.queries[0]?.emit(thinkingStart());
+	await tick();
+	t.advance(12_000);
+	t.queries[0]?.emit(textDelta('hi'));
+	await tick();
+	t.advance(30_000);
+	t.queries[0]?.emit(thought('hmm'));
+	await tick();
+	const ev = t.uis().find(e => e.kind === 'thinking-text');
+	assert.equal(ev?.kind === 'thinking-text' && ev.durationMs, 12_000);
+});
+
+test('thinking-text without a thinking start carries no duration, and a reset forgets a start', async () => {
+	const t = timed();
+	t.session.send('go');
+	t.queries[0]?.emit(init());
+	t.queries[0]?.emit(thought('hmm'));
+	await tick();
+	const ev = t.uis().find(e => e.kind === 'thinking-text');
+	assert.ok(ev && !('durationMs' in ev));
+});
+
+test('a thought that ends with the thinking-text itself is timed up to it', async () => {
+	const t = timed();
+	t.session.send('go');
+	t.queries[0]?.emit(init());
+	t.queries[0]?.emit(thinkingStart());
+	await tick();
+	t.advance(4000);
+	t.queries[0]?.emit(thought('hmm'));
+	await tick();
+	const ev = t.uis().find(e => e.kind === 'thinking-text');
+	assert.equal(ev?.kind === 'thinking-text' && ev.durationMs, 4000);
+});

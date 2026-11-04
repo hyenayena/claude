@@ -14,7 +14,7 @@ import type {ClaudeState, ChatQueryFn, Credential, CredentialInfo} from '../type
 import type {ChatViewProps, ListPickerProps, WaitingViewProps} from '../ui/mount.js';
 import {formatBanner} from '../ui/banner.js';
 import {formatFileCard} from '../ui/file-card.js';
-import {assistantPrint, formatNotice, formatUserLine} from '../ui/present.js';
+import {assistantPrint, assistantRows, formatNotice, formatUserLine} from '../ui/present.js';
 import {readHistory, readTranscriptDetail} from './history.js';
 import {listProjectFiles} from './files.js';
 import {editInEditor} from '../terminal.js';
@@ -462,7 +462,11 @@ const runLocked = async (
 					const id = session.sessionId;
 					if (!id) return [];
 					const detail = await readTranscriptDetail(transcriptFile(paths.configDir, paths.projectDir, id));
-					return detail.map(item => (typeof item === 'string' ? item : {render: (width: number) => formatFileCard(item, scrub, width, {full: true}).split('\n')}));
+					return detail.map(item => {
+						if (typeof item === 'string') return item;
+						if (item.kind === 'text') return {render: (width: number) => assistantRows(item.text, scrub, width, {full: true})};
+						return {render: (width: number) => formatFileCard(item, scrub, width, {full: true}).split('\n')};
+					});
 				},
 				...(deps.inputMode && {inputMode: deps.inputMode}),
 				...(ctx.suspend && {
@@ -480,7 +484,7 @@ const runLocked = async (
 					continue;
 				}
 				const columns = chatHost?.columns() ?? 0;
-				const block = assistantPrint(m.text, scrub, {width: columns > 1 ? columns - 1 : undefined});
+				const block = assistantPrint(m.text, scrub, {width: columns > 1 ? columns - 1 : undefined, copyLabel: true});
 				print(block.text, block.options);
 			}
 			if (earlier.length > 0) print(formatNotice('Resumed — earlier messages above.', scrub));

@@ -21,7 +21,7 @@ test('the rows hold only SGR escapes and the sample pieces', async () => {
 	const rows = withColorDepth('256', () => render({width: 79, depth: '256', ascii: false}));
 	const rest = rows.join('\n').replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '');
 	assert.ok(!rest.includes(ESC));
-	for (const part of ['Fix the failing test', 'Thinking', 'Edit', '$ npm test', 'Patching parse()', 'Error: ']) assert.ok(rest.includes(part), part);
+	for (const part of ['Fix the failing test', 'thinking', 'Edit', '$ npm test', 'Patching parse()', 'Error: ']) assert.ok(rest.includes(part), part);
 });
 
 test('registering the section is accepted once', () => {
@@ -64,6 +64,22 @@ test('the tools section renders at 39, 79, 159 and 200 columns within the width'
 			for (const part of ['Read 3 files, searched 2 patterns', 'exit 1', 'earlier lines', 'denied', '+2 lines', 'github:search_issues']) {
 				if (width >= 79) assert.ok(text.includes(part), `${width} ${part}`);
 			}
+		}
+	}
+});
+
+test('the markdown section renders at 39, 79 and 159 columns within the width', async () => {
+	const {markdownGallerySection} = await import('../../src/ui/markdown-gallery.js');
+	assert.equal(markdownGallerySection.name, 'markdown');
+	const render = await markdownGallerySection.load();
+	for (const width of [39, 79, 159]) {
+		for (const depth of ['truecolor', '256', '16', 'none'] as ColorDepth[]) {
+			const rows = withColorDepth(depth, () => render({width, depth, ascii: false}));
+			const text = rows.map(stripStyles).join('\n');
+			for (const row of rows) assert.ok(styledCells(row) <= width, `${width} ${depth}: ${stripStyles(row)}`);
+			for (const part of ['Heading one', 'nested item', '╭─ typescript', '╭─ bash', '┬', '⋯ +10 lines', '✻ thinking · 12s (ctrl+o)']) assert.ok(text.includes(part), `${width} ${depth}: ${part}`);
+			assert.ok(!text.includes('copy'));
+			assert.ok(!rows.join('\n').replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '').includes(ESC));
 		}
 	}
 });

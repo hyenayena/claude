@@ -4,6 +4,8 @@ import {test} from 'node:test';
 import {makeScrub} from '../../src/chat/scrub.js';
 import {stringCells, stripStyles, styledCells, withColorDepth, type ColorDepth} from '../../src/kit.js';
 import {
+	assistantPrint,
+	formatThinking,
 	formatAssistantBlock,
 	formatError,
 	formatNotice,
@@ -78,7 +80,7 @@ test('liveTail renders Markdown while it streams, like the finished block', () =
 	const raw = '# Title\n\nSome **bold** text\n- item\n```ts\nconst x = 1;';
 	const tail = liveTail(raw, scrub, 30, 80);
 	assert.ok(tail.join('\n').includes(`${SGR.bold}bold`));
-	assert.deepEqual(tail.map(plain), ['● Title', '', '  Some bold text', '  • item', '  ╭─ ts', '  │ const x = 1;', '  ╰─']);
+	assert.deepEqual(tail.map(plain), ['● Title', '', '  Some bold text', '  • item', `  ╭─ ts ${'─'.repeat(77 - 7)}╮`, '  │ const x = 1;']);
 	assert.deepEqual(tail.map(plain).slice(0, 4), formatAssistantBlock(raw, scrub, false, 79).split('\n').map(plain).slice(0, 4));
 });
 
@@ -91,7 +93,7 @@ test('liveTail keeps rows off the last column', () => {
 test('liveTail keeps framing code whose fence opened before the window', () => {
 	const raw = `intro\n\`\`\`py\n${'x = 1\n'.repeat(4000)}tail_line`;
 	const tail = liveTail(raw, scrub, 3, 80).map(plain);
-	assert.deepEqual(tail, ['  │ x = 1', '  │ tail_line', '  ╰─']);
+	assert.deepEqual(tail, ['  │ x = 1', '  │ x = 1', '  │ tail_line']);
 	assert.ok(!liveTail(raw, scrub, 200, 80).some(r => r.startsWith('●')));
 });
 
@@ -269,7 +271,7 @@ const plainCells = (s: string) => [...s.replace(new RegExp(`${String.fromCharCod
 
 test('formatOut lays assistant tables out to the given width', () => {
 	const out = formatOut({kind: 'assistant', text: TABLE, interrupted: false}, scrub, scrub, 40);
-	for (const line of out.split('\n')) assert.ok(plainCells(line) <= 39, line);
+	for (const line of out.split('\n')) assert.ok(plainCells(line) <= 40, line);
 });
 
 test('the status bar counts running agents and background work', () => {
@@ -297,7 +299,7 @@ test('yena console tools are shown as Yena with the command line', async () => {
 });
 
 test('assistantPrint points each action at its header row after wrapping and indent', async () => {
-	const {assistantPrint, formatAssistantBlock} = await import('../../src/ui/present.js');
+	const {formatAssistantBlock} = await import('../../src/ui/present.js');
 	const id = (s: string) => s;
 	const strip = (s: string) => s.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '');
 	const md = `${'word '.repeat(30)}\n\n\`\`\`js\nlet x = 1;\n\`\`\``;
@@ -305,14 +307,14 @@ test('assistantPrint points each action at its header row after wrapping and ind
 	const rows = block.text.split('\n').map(strip);
 	const actions = block.options.actions ?? [];
 	assert.equal(actions.length, 1);
-	assert.equal(rows[actions[0]!.line]!.trim(), '╭─ js · copy');
+	assert.match(rows[actions[0]!.line]!.trim(), /^╭─ js .* copy ─╮$/);
 	assert.equal(actions[0]!.copy, 'let x = 1;');
 	assert.equal(strip(formatAssistantBlock(md, id, false, 40)).includes('copy'), false);
 	assert.equal(assistantPrint('no code here', id, {copyLabel: true}).options.actions, undefined);
 });
 
 test('assistantPrint lays the block out again for each width, with actions for that layout', async () => {
-	const {assistantPrint} = await import('../../src/ui/present.js');
+	
 	const id = (s: string) => s;
 	const strip = (s: string) => s.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '');
 	const md = `${'word '.repeat(30)}\n\n\`\`\`js\nlet x = 1;\n\`\`\``;
@@ -325,7 +327,7 @@ test('assistantPrint lays the block out again for each width, with actions for t
 		const rows = text.split('\n').map(strip);
 		for (const row of rows) assert.ok(row.length <= width, `${width}: ${row}`);
 		assert.equal(actions?.length, 1);
-		assert.equal(rows[actions![0]!.line]!.trim(), '╭─ js · copy');
+		assert.match(rows[actions![0]!.line]!.trim(), /^╭─ js .* copy ─╮$/);
 	}
 	assert.ok(strip((render(120) as {text: string}).text).split('\n')[0]!.length > 40);
 	assert.deepEqual(assistantPrint('plain', id).options.render!(50), {text: '● plain'});
@@ -440,4 +442,34 @@ test('shortModel shortens Claude model ids and keeps aliases', () => {
 	assert.ok(stringCells(odd) <= 20, odd);
 	assert.ok(!odd.includes('\u001b'));
 	assert.equal(shortModel(`${SECRET}`, scrub), '[redacted]');
+});
+
+test('the thinking row is one muted line with the duration when the engine sent one', () => {
+	const sg = (s: string) => s.replace(/\u001b\[[\d;]*m/g, '');
+	assert.equal(sg(formatThinking('a long thought\nover lines', scrub, 12_000)), '✻ thinking · 12s (ctrl+o)');
+	assert.equal(sg(formatThinking('hmm', scrub)), '✻ thinking (ctrl+o)');
+	assert.equal(sg(formatThinking('hmm', scrub, 500)), '✻ thinking · 0.5s (ctrl+o)');
+	assert.equal(sg(formatOut({kind: 'thinking', text: 'x', durationMs: 65_000}, scrub)), '✻ thinking · 1m 05s (ctrl+o)');
+	assert.ok(!formatThinking('x', scrub).includes('\n'));
+});
+
+test('the tail draws an open fence without a bottom border and keeps the partial line plain', () => {
+	const withNl = liveTail('```ts\nconst a = 1;\nconst b', scrub, 30, 60).map(plain);
+	assert.deepEqual(withNl.slice(1), ['  │ const a = 1;', '  │ const b']);
+	assert.ok(withNl[0]!.startsWith('● ╭─ ts '));
+	assert.ok(!withNl.some(r => r.includes('╰')));
+	const closed = liveTail('```ts\nconst a = 1;\n```', scrub, 30, 60).map(plain);
+	assert.ok(closed.at(-1)!.startsWith('  ╰'));
+	const halfTable = liveTail('| a | b |', scrub, 30, 60).map(plain);
+	assert.deepEqual(halfTable, ['● | a | b |']);
+});
+
+test('a long code block is capped in the chat and complete in the viewer rows', async () => {
+	const {assistantRows, CODE_BLOCK_ROWS} = await import('../../src/ui/present.js');
+	const md = ['```', ...Array.from({length: 200}, (_, i) => `l${i}`), '```'].join('\n');
+	const printed = assistantPrint(md, scrub, {width: 40, copyLabel: true});
+	assert.equal(printed.text.split('\n').length, CODE_BLOCK_ROWS + 2);
+	assert.equal(printed.options.actions![0]!.copy.split('\n').length, 200);
+	assert.equal(assistantRows(md, scrub, 40, {full: true}).length, 202);
+	assert.ok(assistantRows(md, scrub, 40).length < 202);
 });

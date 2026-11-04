@@ -97,6 +97,16 @@ const promptSig = (p: PromptEntry, tier: string): string =>
 		: `${p.id}:${(p.state as QuestionPromptState).index}:${(p.state as QuestionPromptState).view}:${tier}`;
 
 export const BUSY_HINT = 'Wait for the answer or press Esc to interrupt';
+export const ESC_AGAIN_HINT = 'Press Esc again to interrupt';
+export const ESC_CONFIRM_AFTER_MS = 10_000;
+export const ESC_AGAIN_MS = 2_000;
+
+// A stray Esc (for example a mouse report split by the terminal) must not end a long turn: after the
+// first seconds of a turn an interrupt needs a second Esc (TASK-30).
+export function escapeInterrupts(now: number, turnSince: number, armedAt: number | undefined): boolean {
+	if (now - turnSince < ESC_CONFIRM_AFTER_MS) return true;
+	return armedAt !== undefined && now - armedAt <= ESC_AGAIN_MS;
+}
 export const NEW_CHAT_TITLE = 'New chat';
 export const MAX_QUEUED = 20;
 const MAX_UNDO = 100;
@@ -162,6 +172,7 @@ export function ChatView(props: ChatViewProps) {
 		[printRaw],
 	);
 	const sinceRef = useRef(Date.now());
+	const escArmedRef = useRef<number | undefined>(undefined);
 	const lastEventRef = useRef(Date.now());
 	const beatRef = useRef(0);
 	const reveal = props.reveal ?? scrub;
@@ -514,12 +525,20 @@ export function ChatView(props: ChatViewProps) {
 
 	const escape = useCallback(() => {
 		const phase = tRef.current.phase;
-		if (phase === 'running') interrupt();
-		else if (phase === 'interrupting') {
+		if (phase === 'running') {
+			const now = Date.now();
+			if (!escapeInterrupts(now, sinceRef.current, escArmedRef.current)) {
+				escArmedRef.current = now;
+				setT(setNotice(tRef.current, ESC_AGAIN_HINT));
+				return;
+			}
+			escArmedRef.current = undefined;
+			interrupt();
+		} else if (phase === 'interrupting') {
 			if (!host) leave();
 		} else if (edRef.current.text !== '') edit({type: 'clear'});
 		else if (!host) leave();
-	}, [edit, host, interrupt, leave]);
+	}, [edit, host, interrupt, leave, setT]);
 
 	const ctrlC = useCallback(() => {
 		const phase = tRef.current.phase;

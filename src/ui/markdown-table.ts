@@ -1,11 +1,12 @@
-import {styledCells, wrapRows} from '../kit.js';
+import {SGR_ATTR, SGR_RESET, colorDepth, glyph, paintTone, styledCells, wrapRows, type ColorDepth} from '../kit.js';
 
 export type Align = 'left' | 'right' | 'center';
-export type Table = {header: string[]; align: Align[]; rows: string[][]; end: number};
-export type TableStyle = {dim: string; bold: string; boldOff: string; reset: string};
-export type TableOptions = {width: number; inline: (s: string) => string; style: TableStyle};
+export type Table = {header: string[]; align: Align[]; rows: string[][]; more: number; end: number};
+export type TableOptions = {width: number; inline: (s: string, base?: string) => string; depth?: ColorDepth; ascii?: boolean};
 
+export const MAX_TABLE_ROWS = 200;
 const MAX_COLUMNS = 64;
+const JOINTS = {top: ['┬', '+'], bottom: ['┴', '+'], cross: ['┼', '+'], right: ['┤', '+']} as const;
 const MIN_COLUMN = 3;
 const DELIMITER_CELL = /^\s*:?-+:?\s*$/;
 const FENCE_OPEN = /^\s*(```+|~~~+)\s*([\w+#.-]*)\s*$/;
@@ -58,15 +59,20 @@ export function matchTable(lines: string[], start: number): Table | undefined {
 		return left && right ? 'center' : right ? 'right' : 'left';
 	});
 	const rows: string[][] = [];
+	let more = 0;
 	let i = start + 2;
 	for (; i < lines.length; i++) {
 		const line = lines[i]!;
 		if (line.trim() === '' || FENCE_OPEN.test(line) || HEADING.test(line) || QUOTE.test(line)) break;
+		if (rows.length >= MAX_TABLE_ROWS) {
+			more++;
+			continue;
+		}
 		const cells = splitRow(line).slice(0, header.length);
 		while (cells.length < header.length) cells.push('');
 		rows.push(cells);
 	}
-	return {header, align, rows, end: i};
+	return {header, align, rows, more, end: i};
 }
 
 function layoutWidths(natural: number[], avail: number): number[] | undefined {
@@ -102,14 +108,14 @@ function pad(text: string, width: number, align: Align): string {
 	return text + ' '.repeat(gap);
 }
 
-function renderRecords(budget: number, headers: string[], bodies: string[][], style: TableStyle): string[] {
+function renderRecords(budget: number, headers: string[], bodies: string[][], depth: ColorDepth, ascii: boolean): string[] {
 	const out: string[] = [];
 	if (bodies.length === 0) {
 		for (const h of headers) out.push(...wrapRows(h, budget));
 		return out;
 	}
 	bodies.forEach((row, r) => {
-		if (r > 0) out.push(`${style.dim}${'─'.repeat(Math.min(budget, 40))}${style.reset}`);
+		if (r > 0) out.push(paintTone(glyph('hRule', {ascii}).repeat(Math.min(budget, 40)), 'frame', depth));
 		row.forEach((cell, c) => {
 			out.push(...wrapRows(`${headers[c]}: ${cell}`, budget));
 		});
@@ -118,30 +124,36 @@ function renderRecords(budget: number, headers: string[], bodies: string[][], st
 }
 
 export function renderTable(table: Table, options: TableOptions): string[] {
-	const {style} = options;
+	const depth = options.depth ?? colorDepth();
+	const ascii = options.ascii === true;
+	const g = (name: 'hRule' | 'vRule' | 'cornerTl' | 'cornerTr' | 'cornerBl' | 'cornerBr' | 'tee'): string => glyph(name, {ascii});
+	const joint = (k: keyof typeof JOINTS): string => JOINTS[k][ascii ? 1 : 0];
 	const budget = Number.isFinite(options.width) ? Math.max(1, Math.floor(options.width)) : 1;
 	const n = table.header.length;
-	const headers = table.header.map(h => `${style.bold}${options.inline(h).split(style.boldOff).join('')}${style.reset}`);
+	const headers = table.header.map(h => options.inline(h, SGR_ATTR.bold));
 	const bodies = table.rows.map(row => row.map(c => options.inline(c)));
 	const natural = headers.map((h, c) => Math.max(1, styledCells(h), ...bodies.map(row => styledCells(row[c]!))));
 	const widths = layoutWidths(natural, budget - (3 * n + 1));
-	if (!widths) return renderRecords(budget, headers, bodies, style);
+	const more =
+		table.more > 0 ? [paintTone(`${glyph('fold', {ascii})} +${table.more} ${table.more === 1 ? 'row' : 'rows'}`, 'muted', depth)] : [];
+	if (!widths) return [...renderRecords(budget, headers, bodies, depth, ascii), ...more];
 
-	const sep = `${style.dim}│${style.reset}`;
-	const border = (l: string, m: string, r: string) => `${style.dim}${l}${widths.map(w => '─'.repeat(w + 2)).join(m)}${r}${style.reset}`;
+	const sep = paintTone(g('vRule'), 'frame', depth);
+	const border = (l: string, m: string, r: string) => paintTone(`${l}${widths.map(w => g('hRule').repeat(w + 2)).join(m)}${r}`, 'frame', depth);
 	const rowLines = (cells: string[]): string[] => {
 		const wrapped = cells.map((c, i) => wrapRows(c, widths[i]!));
 		const height = Math.max(...wrapped.map(w => w.length));
 		const lines: string[] = [];
 		for (let k = 0; k < height; k++) {
-			const parts = wrapped.map((w, i) => ` ${pad(w[k] ?? '', widths[i]!, table.align[i]!)}${style.reset} `);
+			const parts = wrapped.map((w, i) => ` ${pad(w[k] ?? '', widths[i]!, table.align[i]!)}${SGR_RESET} `);
 			lines.push(`${sep}${parts.join(sep)}${sep}`);
 		}
 		return lines;
 	};
-	const out = [border('╭', '┬', '╮'), ...rowLines(headers)];
-	out.push(border('├', '┼', '┤'));
+	const out = [border(g('cornerTl'), joint('top'), g('cornerTr')), ...rowLines(headers)];
+	out.push(border(g('tee'), joint('cross'), joint('right')));
 	for (const row of bodies) out.push(...rowLines(row));
-	out.push(border('╰', '┴', '╯'));
+	out.push(border(g('cornerBl'), joint('bottom'), g('cornerBr')));
+	out.push(...more);
 	return out;
 }

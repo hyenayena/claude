@@ -289,3 +289,10 @@ test('durationMs comes from the event, then from the last progress; startedAt fr
 	assert.ok(none.out[0]!.kind === 'tool' && !('durationMs' in none.out[0]) && !('startedAt' in none.out[0]));
 	assert.equal(run([use('a', 'Bash', {command: 'x'}, 42)]).state.tools.get('a')!.startedAt, 42);
 });
+
+test('thinking-text keeps its duration on the printed thought, and none when the engine sent none', () => {
+	const timed = run([ui({kind: 'thinking-text', text: 'hmm', durationMs: 3000})]);
+	assert.deepEqual(timed.out, [{kind: 'thinking', text: 'hmm', durationMs: 3000}]);
+	const plain = run([ui({kind: 'thinking-text', text: 'hmm'})]);
+	assert.deepEqual(plain.out, [{kind: 'thinking', text: 'hmm'}]);
+});

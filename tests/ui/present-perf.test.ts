@@ -51,3 +51,26 @@ test('resizing over file cards highlights each card once', async () => {
 	assert.equal(calls, cards.length * 2);
 	resetHighlighterForTests();
 });
+
+test('streaming a long message renders each closed block once', async () => {
+	const {liveTail} = await import('../../src/ui/present.js');
+	const {markdownCacheStats, resetMarkdownCacheForTests} = await import('../../src/ui/markdown.js');
+	resetMarkdownCacheForTests();
+	const scrub = (s: string) => s;
+	const blocks = Array.from({length: 60}, (_, i) => `## Part ${i}\n\nParagraph ${i} with **bold** text.\n\n- item a\n- item b\n\n\`\`\`ts\nconst v${i} = ${i};\n\`\`\`\n\n`).join('');
+	let raw = blocks.slice(0, 200);
+	const deltas = 2000;
+	const step = Math.ceil((blocks.length - raw.length) / deltas);
+	let n = 0;
+	while (raw.length < blocks.length && n < deltas) {
+		raw = blocks.slice(0, raw.length + step);
+		liveTail(raw, scrub, 30, 80);
+		n++;
+	}
+	const stats = markdownCacheStats();
+	const total = stats.hits + stats.misses;
+	assert.ok(n >= 100);
+	assert.ok(total > n * 10, `blocks seen ${total}`);
+	assert.ok(stats.misses < n * 4 + 400, `misses ${stats.misses} for ${n} deltas`);
+	assert.ok(stats.hits > stats.misses * 3, `hits ${stats.hits}, misses ${stats.misses}`);
+});

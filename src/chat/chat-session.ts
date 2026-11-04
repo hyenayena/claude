@@ -172,6 +172,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private _rateLimit: RateLimitInfo | undefined;
 	private readonly clock: Clock;
 	private readonly toolStarts = new Map<string, number>();
+	private thinkingStart: number | undefined;
+	private thinkingEnd: number | undefined;
 	private pending: Pending | undefined;
 	private turnTimer: NodeJS.Timeout | undefined;
 	private graceTimer: NodeJS.Timeout | undefined;
@@ -607,6 +609,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.dropHandle();
 		this.approved.clear();
 		this.toolStarts.clear();
+		this.thinkingStart = undefined;
+		this.thinkingEnd = undefined;
 		if (this._mode !== 'default') {
 			this._mode = 'default';
 			this.emit({type: 'mode', mode: 'default'});
@@ -790,6 +794,17 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			if (start !== undefined) {
 				this.toolStarts.delete(ev.toolUseId);
 				ev = {...ev, durationMs: Math.max(0, this.clock.now() - start)};
+			}
+		}
+		if (ev.kind === 'thinking') {
+			this.thinkingStart ??= this.clock.now();
+			this.thinkingEnd = undefined;
+		} else if (this.thinkingStart !== undefined && (ev.kind === 'text-delta' || ev.kind === 'tool-input' || ev.kind === 'thinking-text')) {
+			this.thinkingEnd ??= this.clock.now();
+			if (ev.kind === 'thinking-text') {
+				ev = {...ev, durationMs: Math.max(0, this.thinkingEnd - this.thinkingStart)};
+				this.thinkingStart = undefined;
+				this.thinkingEnd = undefined;
 			}
 		}
 		if (ev.kind === 'result' && ev.sessionId) this._sessionId = ev.sessionId;

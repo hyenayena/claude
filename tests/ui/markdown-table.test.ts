@@ -54,7 +54,7 @@ test('short rows are padded, extra cells dropped, header-only table renders', ()
 
 test('inline styling in cells keeps every line the same width', () => {
 	const out = renderMarkdown('| **h** | x |\n|---|---|\n| **bold** `code` | y |');
-	assert.ok(out.includes(`${ESC}[1m`) && out.includes(`${ESC}[36mcode`));
+	assert.ok(out.includes(`${ESC}[1m`) && out.includes(`${ESC}[33mcode`));
 	const widths = out.split('\n').map(styledCells);
 	assert.equal(new Set(widths).size, 1);
 });
@@ -68,7 +68,7 @@ test('narrow width wraps cells, keeps words and the line bound', () => {
 	const md = '| name | description |\n|---|---:|\n| ab | one two three four five six seven eight |\n| cd | nine ten eleven twelve |';
 	const out = lines(md, 40);
 	assert.ok(out.length > 6);
-	for (const l of out) assert.ok(styledCells(l) <= 39, l);
+	for (const l of out) assert.ok(styledCells(l) <= 40, l);
 	assert.equal(new Set(renderMarkdown(md, {width: 40}).split('\n').map(styledCells)).size, 1);
 	const text = out.join(' ');
 	for (const w of 'one two three four five six seven eight nine ten eleven twelve ab cd'.split(' ')) assert.ok(text.includes(w), w);
@@ -80,12 +80,12 @@ test('too narrow for a box falls back to records; default width is 100', () => {
 	assert.ok(!rec.join('').includes('╭'));
 	assert.ok(rec.includes('k: a') && rec.includes('v: 2'));
 	const long = `| h |\n|---|\n| ${'word '.repeat(60)} |`;
-	for (const l of lines(long)) assert.ok(styledCells(l) <= 99, l);
+	for (const l of lines(long)) assert.ok(styledCells(l) <= 100, l);
 });
 
 test('a blank line, heading or quote ends the table', () => {
 	const out = renderMarkdown('| a |\n|---|\n| 1 |\n\n**after**');
-	assert.ok(out.endsWith(`${ESC}[1mafter${ESC}[22m`));
+	assert.ok(plain(out).endsWith('after') && out.includes(`${ESC}[1mafter`));
 	const h = lines('| a |\n|---|\n| 1 |\n# Title');
 	assert.deepEqual(h.slice(-2), ['╰───╯', 'Title']);
 });
@@ -94,7 +94,9 @@ test('65 columns is not a table; a large table stays bounded', () => {
 	const row = (c: string) => `|${Array.from({length: 65}, () => c).join('|')}|`;
 	assert.ok(!renderMarkdown(`${row('a')}\n${row('-')}\n${row('1')}`).includes('╭'));
 	const big = ['| a | b |', '|---|---|', ...Array.from({length: 500}, (_, i) => `| ${i} | x |`)].join('\n');
-	assert.equal(renderMarkdown(big).split('\n').length, 504);
+	const rows = renderMarkdown(big).split('\n');
+	assert.equal(rows.length, 205);
+	assert.equal(plain(rows.at(-1)!), '⋯ +300 rows');
 });
 
 test('escape sequences in cells are scrubbed before rendering', () => {
@@ -109,7 +111,7 @@ test('every width keeps lines within the budget, boxes uniform, records included
 	const md = '| name | note `some long code span here` |\n|---|---|\n| alpha | **bold** [link](http://x.y/zzzzzzzzzz) text |\n| 日本語日本語 | 😀 smile |';
 	for (const w of [5, 8, 12, 20, 30, 40, 100]) {
 		const out = renderMarkdown(md, {width: w}).split('\n');
-		for (const l of out) assert.ok(styledCells(l) <= w - 1, `${w}: ${plain(l)}`);
+		for (const l of out) assert.ok(styledCells(l) <= w, `${w}: ${plain(l)}`);
 		if (out[0]!.includes('╭')) assert.equal(new Set(out.map(styledCells)).size, 1, String(w));
 	}
 });
@@ -119,7 +121,7 @@ test('ASCII records stay within a one-cell budget and never throw', () => {
 	for (const w of [0, 1, 2, 3]) {
 		const out = lines(md, w);
 		assert.ok(out.length > 0);
-		for (const l of out) assert.ok(styledCells(l) <= Math.max(1, w - 1), `${w}: ${l}`);
+		for (const l of out) assert.ok(styledCells(l) <= Math.max(1, w), `${w}: ${l}`);
 	}
 	assert.doesNotThrow(() => renderMarkdown(md, {width: NaN}));
 });

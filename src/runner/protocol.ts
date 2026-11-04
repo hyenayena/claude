@@ -144,6 +144,7 @@ const arr = (v: unknown, what: string, max: number): unknown[] =>
 const has = (o: Rec, key: string): boolean => o[key] !== undefined && o[key] !== null;
 
 const MAX_TOOL_DURATION_MS = 604_800_000;
+const MAX_THINKING_MS = 86_400_000;
 const MODES = ['default', 'acceptEdits', 'plan', 'auto'] as const;
 const STATES = ['idle', 'running', 'closed'] as const;
 const OUTCOMES = ['ok', 'error', 'interrupted', 'timeout', 'max-turns', 'limit', 'context'] as const;
@@ -457,7 +458,11 @@ const readUiEvent = (v: unknown): UiEvent => {
 		case 'thinking':
 			return {kind: 'thinking'};
 		case 'thinking-text':
-			return {kind: 'thinking-text', text: str(o.text, 'text')};
+			return {
+				kind: 'thinking-text',
+				text: str(o.text, 'text'),
+				...(has(o, 'durationMs') && {durationMs: nonNeg(o.durationMs, 'durationMs', MAX_THINKING_MS)}),
+			};
 		case 'task':
 			return {
 				kind: 'task',

@@ -91,7 +91,7 @@ export type Out =
 	| {kind: 'audit'; entry: AuditEntry}
 	| {kind: 'mode'; mode: ChatMode; error?: string}
 	| {kind: 'account'; account: string; previous: string; reason: AccountReason}
-	| {kind: 'thinking'; text: string}
+	| {kind: 'thinking'; text: string; durationMs?: number}
 	| {kind: 'task'; status: string; description: string; summary?: string}
 	| {kind: 'route-block'; route: RouteInfo; previous?: Tier}
 	| {kind: 'route'; pinned?: Tier}
@@ -183,7 +183,7 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 			if (e.status === 'running' || !e.background) return {state: {...state}, out: []};
 			return {state: {...state}, out: [{kind: 'task', status: e.status, description: e.description ?? 'task', ...(e.summary !== undefined && {summary: e.summary})}]};
 		case 'thinking-text':
-			return {state, out: [{kind: 'thinking', text: e.text}]};
+			return {state, out: [{kind: 'thinking', text: e.text, ...(e.durationMs !== undefined && {durationMs: e.durationMs})}]};
 		case 'tool-use': {
 			const tools = new Map(state.tools);
 			tools.set(e.toolUseId, {id: e.toolUseId, name: e.name, input: e.input, elapsedSeconds: 0, ...(e.at !== undefined && {startedAt: e.at})});

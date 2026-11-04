@@ -221,6 +221,28 @@ let hljs: Hljs | undefined;
 const registered = new Set<string>();
 
 const CORE = 'highlight.js/lib/core';
+const FENCE_ALIASES: Readonly<Record<string, HighlightLanguage>> = {
+	shell: 'bash',
+	console: 'bash',
+	'shell-session': 'bash',
+	golang: 'go',
+	node: 'javascript',
+	'c++': 'cpp',
+	'c#': 'csharp',
+	'objective-c': 'c',
+	make: 'makefile',
+	python3: 'python',
+	typescript: 'typescript',
+};
+
+// Maps the info string of a code fence (```ts, ```c++, ```sh) to a highlighter language.
+export function fenceLanguage(tag: string): HighlightLanguage | undefined {
+	const name = tag.trim().toLowerCase().replace(/^\./, '');
+	if (name === '' || name.length > 24) return undefined;
+	if ((HIGHLIGHT_LANGUAGES as readonly string[]).includes(name)) return name as HighlightLanguage;
+	return FENCE_ALIASES[name] ?? EXTENSIONS[name] ?? BASENAMES[name];
+}
+
 const languageModule = (name: string): string => `highlight.js/lib/languages/${name}`;
 
 const defaultOf = (mod: unknown): unknown => (mod as {default?: unknown} | null)?.default;
