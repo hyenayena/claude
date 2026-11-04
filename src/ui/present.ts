@@ -6,7 +6,8 @@ import {
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
 import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
 import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
-import {sliceCells, stringCells, truncateCells, wrapRows} from '../kit.js';
+import {SGR_ATTR, sliceCells, stringCells, truncateCells, wrapRows} from '../kit.js';
+import {sgr, type Sgr} from './sgr.js';
 import type {PrintAction, PrintOptions} from '../../../../src/api.js';
 import type {RouteInfo, ToolPatch} from '../chat/events.js';
 import type {PreviewRow} from '../chat/permission.js';
@@ -17,48 +18,34 @@ import type {Tier} from '../chat/tiers.js';
 
 export type Scrub = (s: string) => string;
 
-export const SGR = {
-	reset: '\u001b[0m',
-	dim: '\u001b[2m',
-	red: '\u001b[31m',
-	green: '\u001b[32m',
-	cyan: '\u001b[36m',
-	bold: '\u001b[1m',
-	italic: '\u001b[3m',
-	underline: '\u001b[4m',
-	yellow: '\u001b[33m',
-	magenta: '\u001b[35m',
-	blue: '\u001b[34m',
-	boldOff: '\u001b[22m',
-	italicOff: '\u001b[23m',
-	underlineOff: '\u001b[24m',
-	fgOff: '\u001b[39m',
-	userBg: '\u001b[48;5;237m',
-	strike: '\u001b[9m',
-} as const;
+export {sgr, type Sgr} from './sgr.js';
 
 const paint = (style: string, text: string): string =>
-	text
-		.split('\n')
-		.map(line => `${style}${line}${SGR.reset}`)
-		.join('\n');
+	style === ''
+		? text
+		: text
+				.split('\n')
+				.map(line => `${style}${line}${SGR_ATTR.reset}`)
+				.join('\n');
 
 const RESULT_INPUT_CAP = 64 * 1024;
 const ARGS_PRE_CAP = 4096;
 
 export function formatUserLine(text: string, scrub: Scrub): string {
+	const sg = sgr();
 	const lines = scrub(text).split('\n').map((line, i) => ` ${i === 0 ? '>' : ' '} ${line} `);
-	return paint(SGR.userBg, lines.join('\n'));
+	return paint(sg.surface, lines.join('\n'));
 }
 
 const THINKING_LINES = 6;
 
 export function formatThinking(text: string, scrub: Scrub): string {
+	const sg = sgr();
 	const lines = scrub(clampChars(text, BLOCK_DISPLAY_CAP)).trim().split('\n');
 	const shown = lines.slice(0, THINKING_LINES);
 	const more = lines.length - shown.length;
 	const body = [`✻ Thinking…`, ...shown.map(l => `  ${l}`), ...(more > 0 ? [`  … +${more} line${more === 1 ? '' : 's'} (ctrl+o to expand)`] : [])];
-	return paint(SGR.dim + SGR.italic, body.join('\n'));
+	return paint(sg.muted + sg.italic, body.join('\n'));
 }
 
 const hang = (marker: string, lines: string[]): string =>
@@ -101,7 +88,7 @@ function assistantBlock(text: string, scrub: Scrub, interrupted: boolean, width:
 		if (inner === undefined) lines.push(l);
 		else lines.push(...wrapRows(l, inner, {mode: 'word'}));
 	}
-	if (interrupted) lines.push(paint(SGR.dim, '(interrupted)'));
+	if (interrupted) lines.push(paint(sgr().muted, '(interrupted)'));
 	const actions = rendered.codeBlocks
 		.map(b => ({line: firstRow[b.header - lead], copy: b.code}))
 		.filter((a): a is PrintAction => a.line !== undefined);
@@ -187,8 +174,9 @@ export function shortModel(model: string, scrub: Scrub): string {
 }
 
 export function styledToolHeader(name: string, input: unknown, scrub: Scrub): string {
+	const sg = sgr();
 	const args = toolArgs(name, input, scrub);
-	return `${SGR.bold}${scrub(displayName(name))}${SGR.boldOff}${args ? `(${args})` : ''}`;
+	return `${sg.bold}${scrub(displayName(name))}${sg.boldOff}${args ? `(${args})` : ''}`;
 }
 
 type ToolResult = {name: string; input: unknown; isError: boolean; text: string; patch?: ToolPatch};
@@ -253,17 +241,18 @@ export function queuedLines(queue: string[], scrub: Scrub, max: number): string[
 const TODO_MARK: Record<Todo['status'], string> = {completed: '☒', in_progress: '☐', pending: '☐'};
 
 export function todoLines(todos: Todo[], scrub: Scrub, max: number): string[] {
+	const sg = sgr();
 	if (max <= 0 || !todos.some(t => t.status !== 'completed')) return [];
 	const line = (t: Todo) => {
 		const text = `${TODO_MARK[t.status]} ${scrub(t.status === 'in_progress' ? (t.activeForm ?? t.content) : t.content)}`;
-		if (t.status === 'completed') return paint(SGR.dim + SGR.strike, text);
-		return t.status === 'in_progress' ? paint(SGR.bold, text) : text;
+		if (t.status === 'completed') return paint(sg.muted + sg.strike, text);
+		return t.status === 'in_progress' ? paint(sg.bold, text) : text;
 	};
 	if (todos.length <= max) return resultLines(todos.map(line));
 	const current = Math.max(0, todos.findIndex(t => t.status !== 'completed'));
 	const start = Math.min(current, todos.length - (max - 1));
 	const shown = todos.slice(start, start + max - 1).map(line);
-	return resultLines([...shown, paint(SGR.dim, `… +${todos.length - shown.length} more`)]);
+	return resultLines([...shown, paint(sg.muted, `… +${todos.length - shown.length} more`)]);
 }
 
 export const RESULT_PREFIX = '  ⎿  ';
@@ -273,9 +262,10 @@ export const resultLines = (lines: string[]): string[] => lines.map((l, i) => `$
 
 export const TOOL_RESULT_ROWS = 5;
 
-const DIFF_TONE: Record<PreviewRow['kind'], string> = {del: SGR.red, add: SGR.green, ctx: SGR.dim, gap: SGR.dim, meta: SGR.dim};
+const diffTone = (sg: Sgr): Record<PreviewRow['kind'], string> => ({del: sg.removed, add: sg.added, ctx: sg.muted, gap: sg.muted, meta: sg.muted});
 
-function diffRowLines(rows: PreviewRow[], scrub: Scrub, inner?: number): string[] {
+function diffRowLines(rows: PreviewRow[], scrub: Scrub, sg: Sgr, inner?: number): string[] {
+	const tone = diffTone(sg);
 	const wrap = (text: string, max: number): string[] => (inner === undefined ? [text] : wrapRows(text, Math.max(1, max), {mode: 'char'}));
 	let digits = 0;
 	for (const r of rows) if (r.no !== undefined) digits = Math.max(digits, String(r.no).length);
@@ -283,50 +273,51 @@ function diffRowLines(rows: PreviewRow[], scrub: Scrub, inner?: number): string[
 	for (const row of rows) {
 		const text = scrub(row.text).split('\n').join(' ');
 		if (row.kind === 'gap' || row.kind === 'meta') {
-			for (const part of wrap(row.kind === 'gap' && text === '' ? '…' : text, inner ?? 0)) out.push(paint(SGR.dim, part));
+			for (const part of wrap(row.kind === 'gap' && text === '' ? '…' : text, inner ?? 0)) out.push(paint(sg.muted, part));
 			continue;
 		}
 		const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' ';
 		const no = digits === 0 ? '' : `${(row.no === undefined ? '' : String(row.no)).padStart(digits)} `;
 		const gutter = `${no}${sign} `;
 		wrap(text, (inner ?? 0) - gutter.length).forEach((part, i) =>
-			out.push(paint(DIFF_TONE[row.kind], `${i === 0 ? gutter : ' '.repeat(gutter.length)}${part}`)),
+			out.push(paint(tone[row.kind], `${i === 0 ? gutter : ' '.repeat(gutter.length)}${part}`)),
 		);
 	}
 	return out;
 }
 
-function fileChangeRows(t: ToolResult, summary: string, scrub: Scrub, inner?: number): string[] {
+function fileChangeRows(t: ToolResult, summary: string, scrub: Scrub, sg: Sgr, inner?: number): string[] {
 	const head = summary.split('\n').flatMap(l => (inner === undefined ? [l] : wrapRows(l, inner, {mode: 'char'})));
 	let rows: string[];
-	if (t.name === 'Edit') rows = diffRowLines(editRows(t.input, t.patch).rows, scrub, inner);
+	if (t.name === 'Edit') rows = diffRowLines(editRows(t.input, t.patch).rows, scrub, sg, inner);
 	else {
 		const w = writeRows(t.input, t.patch);
-		rows = diffRowLines(w.rows, scrub, inner);
+		rows = diffRowLines(w.rows, scrub, sg, inner);
 		if (w.mode === 'head' && w.total > WRITE_HEAD_LINES) {
 			const more = `… +${w.total - WRITE_HEAD_LINES} lines (ctrl+o to expand)`;
-			rows.push(paint(SGR.dim, inner === undefined ? more : truncateCells(more, inner)));
+			rows.push(paint(sg.muted, inner === undefined ? more : truncateCells(more, inner)));
 		}
 	}
-	return [...resultLines(head).map(r => paint(SGR.dim, r)), ...rows.map(r => `${RESULT_INDENT}${r}`)];
+	return [...resultLines(head).map(r => paint(sg.muted, r)), ...rows.map(r => `${RESULT_INDENT}${r}`)];
 }
 
 export function formatToolBlock(t: ToolResult, scrub: Scrub, width?: number): string {
-	const dot = `${t.isError ? SGR.red : SGR.green}●${SGR.reset}`;
+	const sg = sgr();
+	const dot = `${t.isError ? sg.error : sg.ok}●${sg.reset}`;
 	const name = scrub(displayName(t.name));
 	let args = toolArgs(t.name, t.input, scrub);
 	if (width !== undefined && args !== '') {
 		args = truncateCells(args, Math.max(1, width - 2 - stringCells(name) - 2));
 	}
-	const header = `${dot} ${SGR.bold}${name}${SGR.boldOff}${args ? `(${args})` : ''}${SGR.reset}`;
+	const header = `${dot} ${sg.bold}${name}${sg.boldOff}${args ? `(${args})` : ''}${sg.reset}`;
 	const refusal = refusalSummary(t);
 	const custom = refusal ?? RESULT_REGISTRY[t.name]?.(t, scrub);
 	const inner = width === undefined ? undefined : Math.max(1, width - RESULT_PREFIX.length);
 	if (refusal === undefined && custom !== undefined && (t.name === 'Edit' || t.name === 'Write')) {
-		return `${header}\n${fileChangeRows(t, custom, scrub, inner).join('\n')}`;
+		return `${header}\n${fileChangeRows(t, custom, scrub, sg, inner).join('\n')}`;
 	}
 	const body = custom ?? scrub(t.text.slice(0, RESULT_INPUT_CAP)).replace(/\n+$/, '');
-	if (body.trim() === '') return t.isError ? `${header}\n${paint(SGR.dim, `${RESULT_PREFIX}Error`)}` : header;
+	if (body.trim() === '') return t.isError ? `${header}\n${paint(sg.muted, `${RESULT_PREFIX}Error`)}` : header;
 	const lines = body.split('\n');
 	const rows = inner === undefined ? lines : lines.flatMap(l => wrapRows(l, inner, {mode: 'char'}));
 	let shown = rows;
@@ -335,7 +326,7 @@ export function formatToolBlock(t: ToolResult, scrub: Scrub, width?: number): st
 		const more = `… +${rows.length - kept} lines (ctrl+o to expand)`;
 		shown = [...rows.slice(0, kept), inner === undefined ? more : truncateCells(more, inner)];
 	}
-	return `${header}\n${paint(SGR.dim, resultLines(shown).join('\n'))}`;
+	return `${header}\n${paint(sg.muted, resultLines(shown).join('\n'))}`;
 }
 
 export type RouteBlock = {tier?: Tier; detail?: string; tone: 'ok' | 'dim'};
@@ -357,12 +348,13 @@ export function routeBlockOf(route: RouteInfo, previous?: Tier): RouteBlock {
 }
 
 export function formatRouteBlock(block: RouteBlock, scrub: Scrub, width?: number): string {
-	const dot = `${block.tone === 'ok' ? SGR.green : SGR.dim}●${SGR.reset}`;
+	const sg = sgr();
+	const dot = `${block.tone === 'ok' ? sg.ok : sg.muted}●${sg.reset}`;
 	const tier = block.tier !== undefined ? `(${scrub(block.tier)})` : '';
 	const detail = block.detail !== undefined ? ` · ${scrub(block.detail)}` : '';
 	let rest = `${tier}${detail}`;
 	if (width !== undefined) rest = truncateCells(rest, Math.max(1, width - 2 - ROUTE_TOOL_NAME.length));
-	return `${dot} ${SGR.bold}${ROUTE_TOOL_NAME}${SGR.boldOff}${rest}${SGR.reset}`;
+	return `${dot} ${sg.bold}${ROUTE_TOOL_NAME}${sg.boldOff}${rest}${sg.reset}`;
 }
 
 export function routeNoticeText(pinned: Tier | undefined): string {
@@ -380,15 +372,15 @@ export function routeBarText(route: RouteInfo | undefined): string {
 }
 
 export function formatError(message: string, scrub: Scrub): string {
-	return paint(SGR.red, `Error: ${scrub(message)}`);
+	return paint(sgr().error, `Error: ${scrub(message)}`);
 }
 
 export function formatWarning(message: string, scrub: Scrub): string {
-	return paint(SGR.yellow, scrub(message));
+	return paint(sgr().warn, scrub(message));
 }
 
 export function formatNotice(message: string, scrub: Scrub): string {
-	return paint(SGR.dim, scrub(message));
+	return paint(sgr().muted, scrub(message));
 }
 
 const auditText = (raw: string, show: Scrub): string => show(raw).split('\n')[0] ?? '';
@@ -422,7 +414,7 @@ export function formatAudit(entry: AuditEntry, scrub: Scrub, reveal: Scrub = scr
 				return `Dismissed ${pluralQuestions(summary)}`;
 		}
 	})();
-	return paint(SGR.dim, width === undefined ? line : cutMiddle(line, Math.max(1, width)));
+	return paint(sgr().muted, width === undefined ? line : cutMiddle(line, Math.max(1, width)));
 }
 
 function cutMiddle(text: string, max: number): string {
@@ -443,7 +435,7 @@ const MODE_LINE: Record<ChatMode, string> = {
 
 export function formatModeLine(mode: ChatMode, error?: string, scrub: Scrub = s => s): string {
 	const line = error === undefined ? MODE_LINE[mode] : `Auto mode is unavailable: ${scrub(error)}. ${MODE_LINE[mode]}`;
-	return paint(SGR.dim, line);
+	return paint(sgr().muted, line);
 }
 
 export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?: number): string {
@@ -466,7 +458,7 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 		case 'thinking':
 			return formatThinking(out.text, scrub);
 		case 'task':
-			return paint(SGR.dim, `⚙ Background task ${out.status}: ${scrub(out.description)}${out.summary ? ` — ${scrub(out.summary)}` : ''}`);
+			return paint(sgr().muted, `⚙ Background task ${out.status}: ${scrub(out.description)}${out.summary ? ` — ${scrub(out.summary)}` : ''}`);
 		case 'assistant':
 			return formatAssistantBlock(out.text, scrub, out.interrupted, width);
 		case 'tool':

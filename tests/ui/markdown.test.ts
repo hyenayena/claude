@@ -1,8 +1,9 @@
+import {SGR} from '../helpers/sgr16.js';
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {makeScrub} from '../../src/chat/scrub.js';
 import {renderMarkdown} from '../../src/ui/markdown.js';
-import {formatAssistantBlock, formatThinking, SGR} from '../../src/ui/present.js';
+import {formatAssistantBlock, formatThinking} from '../../src/ui/present.js';
 
 const ESC = String.fromCharCode(27);
 const plain = (s: string) => s.replace(new RegExp(ESC + '\\[[0-9;]*m', 'g'), '');

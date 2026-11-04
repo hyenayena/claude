@@ -136,6 +136,11 @@ Chat settings "Model router" (Off by default: nothing below happens, `claude tie
 - Runner: `route-start` and `route` events and the `setTier` frame cross the runner like other events (`runner/protocol.ts` validates tiers and outcomes).
 - Residual risks: the programmatic definition's precedence over a same-named file is unverified live (the hook rewrites the model anyway); the classifier is a second Claude Code process on the same login; per-message effort for the main chat is not done.
 
+## Colours
+The chat takes its colours from core's kit theme (`src/ui/sgr.ts`): each formatting call reads the table for the active depth once and uses its semantic keys (`error`, `ok`, `warn`, `accent`, `muted`, `added`, `removed`, `surface`, the `code.*` keys for Markdown code, and the attribute codes), so the module writes no SGR codes. The roles: user line on `surface`; thinking, `(interrupted)`, completed todos, the todo overflow line and the diff's context, gap and metadata lines on `muted`; diff additions and removals on `added` and `removed`; tool errors on `error`; warnings on `warn`; Markdown inline code and list markers on `accent`, strings, numbers, keywords and comments on the `code.*` tones. The depth is core's `colorDepth()`: `NO_COLOR` (non-empty), the Colours setting off (Appearance tab, `colors` in `appearance.json`) or `YENA_COLOR` / `COLORTERM` / `TERM` decide it, and it is detected once per process. Dark theme only.
+
+Gallery: `ui gallery chat [--width <n>] [--depth <depth>]` (core's command) shows the chat's pieces (user line, assistant Markdown, thinking, Edit diff, a failed Bash call, todos, notice, warning, error) at a width, with the depth shown. The `chat` section is registered when the plugin loads; if registration fails a `gallery section skipped` warning is logged and the plugin keeps working.
+
 ## Background chat
 Setting `Keep working after exit` (Chat tab, `chatKeepRunning`, default Off). It is read when a chat opens; changing it switches the open chat at once.
 - On: a chat opens in a detached runner process (`src/runner/main.ts`, started by `src/runner/spawn.ts`); yena shows it through a `RemoteChatSession`. Leaving yena (exit, closed terminal) detaches: the runner finishes the current turn, sends the queued messages only after an ok turn and exits when done. The next `chat`/`resume` start reattaches to a running runner with a notice and replays the transcript plus new events (text streamed while you were away is not shown).
@@ -225,7 +230,7 @@ Process lifetime (also for `chat`): a normal exit, timeout or cancel stops the `
 The module logs through the host logger (`host.log`, scope `claude`) into `<YENA_DATA>/host/logs/yena.log` (`<YENA_HOME or cwd>/logs/yena.log` without `YENA_DATA`) (JSON lines; format, levels, rotation and redaction are described in the host `CLAUDE.md`). On a host without `host.log` it uses a local noop logger (`src/log.ts`) and nothing is written.
 
 Records (level, message, fields):
-- info `plugin loaded`.
+- info `plugin loaded`; warn `gallery section skipped` {err?} (the chat section did not register).
 - info `auth status` {kind, source, accounts}; info `auth order` {count}; info `auth use` {count}; info `auth auto` {cleared}; info `auth remove`; info `claude login started` {method, sso, email (boolean)}; info `claude login finished` {exitOk, loggedIn, method, subscriptionType}; info `claude logout` {ok, stillLoggedIn}; info `credential stored` {type: key}; info `credentials migrated` {moved, skipped, dropped}; warn `credential migration failed` {errClass, step}; info `auth state migrated`; warn `auth state not migrated` {errClass}; warn `retired credentials record unavailable` {errClass}; warn `credential store unavailable` {errClass}.
 - warn `no credential` (ask and chat); info `credential resolved` {kind, source} (ask).
 - info `ask started` {fresh, promptChars}; info `ask finished` {outcome, ms, model, numTurns, session8}; warn `ask failed` {outcome (`timeout`|`error`), ms, errClass, reason}; warn `ask timed out` {timeoutMs}; error `sdk load failed` {missingModule, err}.

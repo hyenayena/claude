@@ -1,6 +1,6 @@
 import {wrapLines} from '../kit.js';
 import type {AgentBox, AgentEntry} from './agents.js';
-import {formatNotice, formatOut, formatUserLine, SGR, styledToolHeader, type Scrub} from './present.js';
+import {formatNotice, formatOut, formatUserLine, sgr, styledToolHeader, type Scrub} from './present.js';
 
 const blockOf = (e: AgentEntry, scrub: Scrub, reveal: Scrub, width: number): string => {
 	switch (e.kind) {
@@ -31,9 +31,10 @@ const lastText = (box: AgentBox): string | undefined => {
 };
 
 export function agentViewBlocks(box: AgentBox, scrub: Scrub, reveal: Scrub, width: number): string[] {
+	const sg = sgr();
 	const blocks: string[] = [];
 	if (box.prompt.trim() !== '') blocks.push(formatUserLine(box.prompt, scrub));
-	if (box.dropped > 0) blocks.push(`${SGR.dim}… ${box.dropped} earlier message${box.dropped === 1 ? '' : 's'}${SGR.reset}`);
+	if (box.dropped > 0) blocks.push(`${sg.muted}… ${box.dropped} earlier message${box.dropped === 1 ? '' : 's'}${sg.reset}`);
 	for (const e of box.history) blocks.push(blockOf(e, scrub, reveal, width));
 	if (box.report !== undefined && box.report.trim() !== lastText(box)?.trim()) {
 		blocks.push(formatOut({kind: 'assistant', text: box.report, interrupted: false}, scrub, reveal, width));

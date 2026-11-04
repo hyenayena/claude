@@ -63,5 +63,6 @@ test('a host without log falls back to a noop logger', async () => {
 test('plugin load logs info', async () => {
 	const log = makeFakeLog();
 	await plugin({dataDir: '/tmp/claude-test', events: {emit: () => {}, on: () => () => {}}, log});
-	assert.deepEqual(log.records.map(r => [r.level, r.msg]), [['info', 'plugin loaded']]);
+	// A second load in one process finds the gallery section registered already and warns.
+	assert.deepEqual(log.records.filter(r => r.level === 'info').map(r => [r.level, r.msg]), [['info', 'plugin loaded']]);
 });

@@ -1,6 +1,7 @@
 import type {BuildInfo} from '../../../../src/api.js';
 import {stringCells, truncateCells} from '../kit.js';
-import {SGR, type Scrub} from './present.js';
+import {sgr, type Sgr} from './sgr.js';
+import type {Scrub} from './present.js';
 
 export const MASCOT = [
 	'     ███╗ ███╗',
@@ -66,26 +67,26 @@ function wrapItems(label: string, items: string[], width: number): string[] {
 	return lines;
 }
 
-function infoLines(info: BannerInfo, scrub: Scrub, width: number): {rows: Row[]; complete: boolean} {
+function infoLines(info: BannerInfo, scrub: Scrub, width: number, sg: Sgr): {rows: Row[]; complete: boolean} {
 	const version = `yena ${scrub(info.build?.version ?? 'unknown')}`;
 	const model = `model ${scrub(info.model ?? 'default')}`;
 	const head = `${version} · ${model}`;
 	const rows: Row[] =
-		stringCells(head) <= width ? [[{text: head, style: SGR.bold}]] : [[{text: version, style: SGR.bold}], [{text: model, style: SGR.bold}]];
-	if (info.build?.root?.mode === 'dev') rows.push([{text: DEV_LABEL, style: SGR.dim}, {text: scrub(info.build.root.path), style: SGR.yellow}]);
+		stringCells(head) <= width ? [[{text: head, style: sg.bold}]] : [[{text: version, style: sg.bold}], [{text: model, style: sg.bold}]];
+	if (info.build?.root?.mode === 'dev') rows.push([{text: DEV_LABEL, style: sg.muted}, {text: scrub(info.build.root.path), style: sg.warn}]);
 	const modules = (info.build?.modules ?? []).map(m => `${scrub(m.name)} ${scrub(m.version)}`);
 	if (modules.length === 0) return {rows, complete: true};
 	const fits = (lines: string[]): boolean => lines.every(l => stringCells(l) <= width);
 	const beside = wrapItems(MODULES_LABEL, modules, width);
 	if (fits(beside)) {
 		const list = beside.map((line, i): Row =>
-			i === 0 ? [{text: MODULES_LABEL, style: SGR.dim}, {text: line.slice(MODULES_LABEL.length)}] : [{text: line}],
+			i === 0 ? [{text: MODULES_LABEL, style: sg.muted}, {text: line.slice(MODULES_LABEL.length)}] : [{text: line}],
 		);
 		return {rows: [...rows, ...list], complete: true};
 	}
 	const under = wrapItems('', modules, width);
 	if (!fits(under)) return {rows, complete: false};
-	return {rows: [...rows, [{text: MODULES_LABEL.trimEnd(), style: SGR.dim}], ...under.map((line): Row => [{text: line}])], complete: true};
+	return {rows: [...rows, [{text: MODULES_LABEL.trimEnd(), style: sg.muted}], ...under.map((line): Row => [{text: line}])], complete: true};
 }
 
 const truncateRow = (row: Row, width: number): Row => {
@@ -98,15 +99,16 @@ const truncateRow = (row: Row, width: number): Row => {
 };
 
 export function formatBanner(info: BannerInfo, scrub: Scrub): string {
+	const sg = sgr();
 	const width = Math.min(Math.max(info.columns, 0), MAX_WIDTH);
 	const inner = width - 4;
 	if (inner < PLAIN_LOGO.length) return '';
 	const logo = LOGOS.find(l => blockWidth(l) <= inner)!;
 	const logoWidth = blockWidth(logo);
-	const logoStyle = logo.length === 1 ? SGR.bold + SGR.yellow : SGR.yellow;
+	const logoStyle = logo.length === 1 ? sg.bold + sg.warn : sg.warn;
 
 	const rightWidth = inner - logoWidth - INFO_GAP.length;
-	const side = rightWidth > 0 ? infoLines(info, scrub, rightWidth) : {rows: [], complete: false};
+	const side = rightWidth > 0 ? infoLines(info, scrub, rightWidth, sg) : {rows: [], complete: false};
 	const right = side.rows;
 	const fitsRight = side.complete && right.length > 0 && right.length <= logo.length && right.every(r => rowCells(r) <= rightWidth);
 
@@ -118,11 +120,11 @@ export function formatBanner(info: BannerInfo, scrub: Scrub): string {
 			return side ? [{text: padTo(l, logoWidth), style: logoStyle}, {text: INFO_GAP}, ...side] : [{text: l, style: logoStyle}];
 		});
 	} else {
-		rows = [...logo.map(l => [{text: l, style: logoStyle}]), [], ...infoLines(info, scrub, inner).rows.map(r => truncateRow(r, inner))];
+		rows = [...logo.map(l => [{text: l, style: logoStyle}]), [], ...infoLines(info, scrub, inner, sg).rows.map(r => truncateRow(r, inner))];
 	}
 
-	const border = (s: string): string => `${SGR.dim}${s}${SGR.reset}`;
-	const paint = (s: Segment): string => (s.style && s.text ? `${s.style}${s.text}${SGR.reset}` : s.text);
+	const border = (s: string): string => `${sg.muted}${s}${sg.reset}`;
+	const paint = (s: Segment): string => (s.style && s.text ? `${s.style}${s.text}${sg.reset}` : s.text);
 	const body = rows.map(r => `${border('│')} ${r.map(paint).join('')}${' '.repeat(inner - rowCells(r))} ${border('│')}`);
 	return [border(`╭${'─'.repeat(inner + 2)}╮`), ...body, border(`╰${'─'.repeat(inner + 2)}╯`)].join('\n');
 }
