@@ -43,7 +43,7 @@ test('the subagent view shows the prompt, every entry and the final report', () 
 	assert.match(out, /Edit +\S+ \/x\.ts/);
 	assert.match(out, /old/);
 	assert.match(out, /\bnew\b/);
-	assert.match(out, /Read\(\/y\.ts\)/);
+	assert.match(out, /Read \/y\.ts/);
 	assert.match(out, /Final report \[redacted\]/);
 	assert.ok(!out.includes(SECRET));
 	for (const l of lines) assert.ok(stringCells(l) <= 80, l);
@@ -70,4 +70,16 @@ test('dropped entries are counted and control characters never reach the view', 
 	assert.ok(!out.includes('\u0007'));
 	assert.ok(!out.includes(`${ESC}]`));
 	assert.equal(agentViewLines(s.boxes.get('a')!, scrub, scrub, 40), lines, 'cached per width and history length');
+});
+
+test('runs of finished Read, Grep, Glob and LS entries fold into one row', () => {
+	const done = (id: string, name: string, input: unknown): ChatEvent[] => [
+		{type: 'ui', event: {kind: 'agent-message', agentId: 'a', items: [{type: 'tool-use', toolUseId: id, name, input}]}},
+		{type: 'ui', event: {kind: 'agent-message', agentId: 'a', items: [{type: 'tool-result', toolUseId: id, isError: false, text: 'x'}]}},
+	];
+	const box = boxOf([spawn, ...done('r1', 'Read', {file_path: '/a.ts'}), ...done('r2', 'Read', {file_path: '/b.ts'}), ...done('g1', 'Grep', {pattern: 'TODO'}), ...done('e1', 'Bash', {command: 'ls'}), ...done('r3', 'Read', {file_path: '/c.ts'})]);
+	const out = agentViewLines(box, scrub, scrub, 80).map(plain).join('\n');
+	assert.match(out, /Read 2 files, searched 1 pattern/);
+	assert.match(out, /\$ ls/);
+	assert.match(out, /Read \/c\.ts/, 'a run of one stays a single row');
 });

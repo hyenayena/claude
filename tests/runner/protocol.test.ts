@@ -325,3 +325,23 @@ test('preview rows carry oldNo, newNo and count; old frames with only no are sti
 	assert.throws(() => createDecoder('toClient').push(line(withRows([{kind: 'add', text: 'x', newNo: 'one'}]))), ProtocolError);
 	assert.throws(() => createDecoder('toClient').push(line(withRows([{kind: 'gap', text: '', count: 'x'}]))), ProtocolError);
 });
+
+test('tool timing fields round-trip, frames without them stay valid, bad values are rejected', () => {
+	const use: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'tool-use', toolUseId: 't', name: 'Bash', input: {}, at: 1_700_000_000_000}}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(use)), [use]);
+	const result: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'tool-result', toolUseId: 't', isError: false, text: 'ok', durationMs: 1500}}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(result)), [result]);
+	const older: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'tool-use', toolUseId: 't', name: 'Bash', input: {}}}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(older)), [older]);
+	const frame = (event: unknown) => line({v: 1, type: 'event', event: {type: 'ui', event}});
+	const useWith = (at: unknown) => frame({kind: 'tool-use', toolUseId: 't', name: 'Bash', input: {}, at});
+	const resultWith = (durationMs: unknown) => frame({kind: 'tool-result', toolUseId: 't', isError: false, text: 'ok', durationMs});
+	for (const at of ['1', -1, {}, true]) {
+		assert.throws(() => createDecoder('toClient').push(useWith(at)), ProtocolError, String(at));
+	}
+	for (const ms of ['1', -1, 604_800_001, {}, [1]]) {
+		assert.throws(() => createDecoder('toClient').push(resultWith(ms)), ProtocolError, String(ms));
+	}
+	assert.deepEqual(createDecoder('toClient').push(resultWith(604_800_000)).length, 1);
+	assert.deepEqual(createDecoder('toClient').push(resultWith(0)).length, 1);
+});

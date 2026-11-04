@@ -33,7 +33,7 @@ await show('ListPicker', React.createElement(ListPicker, {title: 'picker-title',
 await show('Frame', React.createElement(Frame, {rows: [{text: 'frame-ok', tone: 'plain'}], width: 40}));
 await show('Spinner', React.createElement(Spinner, {frames: SPINNERS.squareCorners, intervalMs: 180}));
 await show('InputLine', React.createElement(InputLine, {text: 'input-ok', cursor: 2, columns: 80, running: false, maxRows: 5}));
-await show('LiveTools', React.createElement(LiveTools, {tools: [{id: 't', name: 'Bash', input: {command: 'tools-ok'}, elapsedSeconds: 0}], scrub: s => s, maxRows: 4}));
+await show('LiveTools', React.createElement(LiveTools, {tools: [{id: 't', name: 'Bash', input: {command: 'tools-ok'}, elapsedSeconds: 0}], fold: [], scrub: s => s, maxRows: 4, width: 79}));
 await show('ChatView', React.createElement(ChatView, {controller: fakeController(), print() {}, close() {}, scrub: s => s}));
 const agentStore = createAgentStore(reduceAgents(initialAgents(), {type: 'ui', event: {kind: 'tool-use', toolUseId: 'a', name: 'Agent', input: {subagent_type: 'panel-ok'}}}));
 await show('AgentPanel', React.createElement(AgentPanel, {store: agentStore, scrub: s => s}));
@@ -64,7 +64,7 @@ test('ui components render under tsx run from the host root', () => {
 	assert.match(frames['Frame'] as string, /frame-ok/);
 	assert.match(frames['Spinner'] as string, /[◰◳◲◱]/);
 	assert.match(frames['InputLine'] as string, /input-ok/);
-	assert.match(frames['LiveTools'] as string, /Bash\(tools-ok\)/);
+	assert.match(frames['LiveTools'] as string, /tools-ok/);
 	assert.match(frames['ChatView'] as string, /idle$/);
 	assert.match(frames['AgentPanel'] as string, /panel-ok/);
 	assert.match(frames['PermissionPrompt'] as string, /perm-ok/);

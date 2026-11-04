@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {gallerySections, registerGallerySection, styledCells, stripStyles, withColorDepth, type ColorDepth} from '../../src/kit.js';
-import {chatGallerySection, diffGallerySection} from '../../src/ui/gallery.js';
+import {chatGallerySection, diffGallerySection, toolsGallerySection} from '../../src/ui/gallery.js';
 
 const ESC = String.fromCharCode(27);
 
@@ -21,7 +21,7 @@ test('the rows hold only SGR escapes and the sample pieces', async () => {
 	const rows = withColorDepth('256', () => render({width: 79, depth: '256', ascii: false}));
 	const rest = rows.join('\n').replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '');
 	assert.ok(!rest.includes(ESC));
-	for (const part of ['Fix the failing test', 'Thinking', 'Edit', 'Bash(', 'Patching parse()', 'Error: ']) assert.ok(rest.includes(part), part);
+	for (const part of ['Fix the failing test', 'Thinking', 'Edit', '$ npm test', 'Patching parse()', 'Error: ']) assert.ok(rest.includes(part), part);
 });
 
 test('registering the section is accepted once', () => {
@@ -52,4 +52,18 @@ test('the diff section is registered next to the chat one', () => {
 	assert.equal(registerGallerySection(diffGallerySection), true);
 	assert.equal(registerGallerySection(diffGallerySection), false);
 	assert.ok(gallerySections().some(s => s.name === 'diff'));
+});
+
+test('the tools section renders at 39, 79, 159 and 200 columns within the width', async () => {
+	const render = await toolsGallerySection.load();
+	for (const width of [39, 79, 159, 200]) {
+		for (const depth of ['truecolor', '256', '16', 'none'] as ColorDepth[]) {
+			const rows = withColorDepth(depth, () => render({width, depth, ascii: false}));
+			for (const row of rows) assert.ok(styledCells(row) <= width, `${width} ${depth}: ${stripStyles(row)}`);
+			const text = rows.map(stripStyles).join('\n');
+			for (const part of ['Read 3 files, searched 2 patterns', 'exit 1', 'earlier lines', 'denied', '+2 lines', 'github:search_issues']) {
+				if (width >= 79) assert.ok(text.includes(part), `${width} ${part}`);
+			}
+		}
+	}
 });

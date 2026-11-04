@@ -46,5 +46,5 @@ test('a long checklist keeps the current item and counts the rest', () => {
 test('the TodoWrite tool block is one short line', () => {
 	assert.equal(toolHeader('TodoWrite', {todos}, id), 'TodoWrite(3 items)');
 	const block = plain(formatToolBlock({name: 'TodoWrite', input: {todos}, isError: false, text: 'Todos have been modified'}, id));
-	assert.match(block, /checklist: 1\/3 done/);
+	assert.match(block, /TodoWrite 3 items  · 1\/3 done/);
 });

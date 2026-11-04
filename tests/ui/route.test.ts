@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {ChatEvent, RouteInfo} from '../../src/chat/events.js';
 import type {Tier} from '../../src/chat/tiers.js';
-import {formatOut, formatRouteBlock, routeBarText, routeBlockOf, statusBarText, toolHeader, toolRunningText} from '../../src/ui/present.js';
+import {formatOut, formatRouteBlock, routeBarText, routeBlockOf, statusBarText, toolHeader} from '../../src/ui/present.js';
+import {runningToolRow} from '../../src/ui/tool-card.js';
 import {initialTranscript, reduceTranscript, ROUTE_TOOL_ID, type Out, type TranscriptState} from '../../src/ui/transcript.js';
-import {stringCells} from '../../src/kit.js';
+import {stringCells, stripStyles} from '../../src/kit.js';
 
 const ESC = String.fromCharCode(27);
 const plain = (s: string): string => s.replace(new RegExp(`${ESC}\\[[\\d;]*m`, 'g'), '');
@@ -28,7 +29,7 @@ test('route-start shows a running Routing tool that the route event removes', ()
 	const started = run([{type: 'state', state: 'running'}, {type: 'route-start'}]);
 	const tool = started.state.tools.get(ROUTE_TOOL_ID);
 	assert.deepEqual(tool, {id: ROUTE_TOOL_ID, name: 'Routing', input: undefined, elapsedSeconds: 0});
-	assert.equal(toolRunningText(tool!, scrub), 'Routing…');
+	assert.equal(stripStyles(runningToolRow(tool!, scrub, 80, '⠋', 0)), '⠋ ◦ Routing…');
 	assert.equal(toolHeader('Routing', undefined, scrub), 'Routing…');
 	const routed = run([{type: 'route', route: {outcome: 'rated', main: 'standard', rated: 'standard'}, source: 'message'}], started.state);
 	assert.equal(routed.state.tools.has(ROUTE_TOOL_ID), false);

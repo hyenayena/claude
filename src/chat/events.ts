@@ -32,10 +32,10 @@ export type UiEvent =
 			depth?: number;
 	  }
 	| {kind: 'thinking-text'; text: string}
-	| {kind: 'tool-use'; toolUseId: string; name: string; input: unknown}
+	| {kind: 'tool-use'; toolUseId: string; name: string; input: unknown; at?: number}
 	| {kind: 'tool-input'; name: string}
 	| {kind: 'tool-input-delta'; chars: number}
-	| {kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; patch?: ToolPatch}
+	| {kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; patch?: ToolPatch; durationMs?: number}
 	| {kind: 'tool-progress'; toolUseId: string; name: string; elapsedSeconds: number}
 	| {kind: 'agent-activity'; toolUseId: string; name: string; input: unknown}
 	| {kind: 'agent-message'; agentId: string; model?: string; items: AgentItem[]}

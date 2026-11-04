@@ -77,3 +77,48 @@ export const diffGallerySection: GallerySection = {
 		};
 	},
 };
+
+const testTail = ['> yena@1.0.0 test', '> node --test', ...Array.from({length: 9}, (_, i) => `ok ${i + 1} - case ${i + 1}`), 'not ok 10 - parses an empty file', '  AssertionError: expected 1 to equal 0'].join('\n');
+const lsOutput = Array.from({length: 12}, (_, i) => `line ${i + 1} of the output`).join('\n');
+const read = (file: string, lines: number, at: number) => ({
+	kind: 'tool' as const,
+	name: 'Read',
+	input: {file_path: `src/${file}`},
+	isError: false,
+	text: Array.from({length: lines}, (_, i) => `${i + 1}\tcode`).join('\n'),
+	startedAt: at,
+	durationMs: 300,
+});
+const grep = (pattern: string, at: number) => ({kind: 'tool' as const, name: 'Grep', input: {pattern}, isError: false, text: 'src/a.ts\nsrc/b.ts\nsrc/c.ts', startedAt: at, durationMs: 400});
+
+export const toolsGallerySection: GallerySection = {
+	name: 'tools',
+	title: 'Tool calls',
+	description: 'Tool call rows: kind glyph, status mark, duration, folded runs, Bash output, errors',
+	load: async () => {
+		const [card, hl] = await Promise.all([import('./tool-card.js'), import('./highlight.js')]);
+		await hl.preloadHighlighter();
+		const ok = (name: string, input: unknown, text = '', extra: object = {}) => ({kind: 'tool' as const, name, input, isError: false, text, ...extra});
+		const fail = (name: string, input: unknown, text: string, extra: object = {}) => ({kind: 'tool' as const, name, input, isError: true, text, ...extra});
+		const fold = [read('present.ts', 120, 1000), read('wrap.ts', 40, 1400), read('tool-card.ts', 80, 1800), grep('TODO', 2000), grep('fixme', 2200)];
+		const items = [
+			ok('Glob', {pattern: 'src/**/*.ts'}, 'src/a.ts\nsrc/b.ts\nsrc/c.ts'),
+			ok('Bash', {command: 'ls src'}, lsOutput, {durationMs: 1800}),
+			fail('Bash', {command: 'npm test'}, `Exit code 1\n${testTail}`, {durationMs: 12_000}),
+			ok('Bash', {command: 'cd packages/app\nnpm run build\nnpm run lint'}, 'built', {durationMs: 4300}),
+			ok('Edit', {file_path: 'src/parse.ts'}, '', {patch, durationMs: 2100}),
+			fail('Edit', {file_path: 'src/parse.ts'}, '<tool_use_error>String to replace not found in file.</tool_use_error>'),
+			fail('Bash', {command: 'rm -rf build'}, "The user doesn't want to proceed with this tool use."),
+			ok('WebFetch', {url: 'https://example.com/docs'}, 'page', {durationMs: 900}),
+			ok('Agent', {subagent_type: 'coder', description: 'Fix the parser'}, 'done', {durationMs: 95_000}),
+			ok('mcp__yena__run_command', {command: 'mod list'}, 'core 0.19.0\nclaude 0.24.0'),
+			ok('mcp__github__search_issues', {query: 'tool cards'}, '3 results'),
+			ok('TodoWrite', {todos}, ''),
+		];
+		return ({width}) => {
+			const running = card.runningToolRow({id: 'r1', name: 'Agent', input: {subagent_type: 'coder', description: 'Fix the parser'}, elapsedSeconds: 0, startedAt: 1000, activity: {name: 'Read', input: {file_path: 'src/parse.ts'}}}, scrub, width, '⠋', 15_000);
+			const blocks = [running, card.formatToolCard(read('present.ts', 120, 1000), scrub, width), card.formatToolGroup(fold, scrub, width), ...items.map(t => card.formatToolCard(t, scrub, width))];
+			return blocks.flatMap(b => b.split('\n'));
+		};
+	},
+};

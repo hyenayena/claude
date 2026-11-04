@@ -97,14 +97,14 @@ test('liveTail keeps framing code whose fence opened before the window', () => {
 
 test('tool block keeps at most five result rows, the footer included', () => {
 	const plainBlock = (text: string, width?: number) =>
-		formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: false, text}, scrub, width).replace(/\u001b\[\d+m/g, '');
-	assert.equal(plainBlock('1\n2\n3\n4\n5'), ['● Bash(ls)', '  ⎿  1', '     2', '     3', '     4', '     5'].join('\n'));
-	assert.equal(plainBlock('1\n2\n3\n4\n5\n6\n7\n'), ['● Bash(ls)', '  ⎿  1', '     2', '     3', '     4', '     … +3 lines (ctrl+o to expand)'].join('\n'));
+		stripStyles(formatToolBlock({name: 'WebFetch', input: {url: 'u'}, isError: false, text}, scrub, width));
+	assert.equal(plainBlock('1\n2\n3\n4\n5'), ['✓ ⊕ WebFetch u', '  ⎿  1', '     2', '     3', '     4', '     5'].join('\n'));
+	assert.equal(plainBlock('1\n2\n3\n4\n5\n6\n7\n'), ['✓ ⊕ WebFetch u', '  ⎿  1', '     2', '     3', '     4', '     … +3 lines (ctrl+o to expand)'].join('\n'));
 });
 
 test('tool block rows are counted as the chat shows them, not as source lines', () => {
 	const width = 40;
-	const block = formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: false, text: `${'y'.repeat(200)}\nz`}, scrub, width).replace(/\u001b\[\d+m/g, '');
+	const block = stripStyles(formatToolBlock({name: 'WebFetch', input: {url: 'u'}, isError: false, text: `${'y'.repeat(200)}\nz`}, scrub, width));
 	const rows = block.split('\n');
 	assert.equal(rows.length, 1 + 5);
 	assert.match(rows.at(-1)!, /… \+3 lines \(ctrl\+o to expand\)$/);
@@ -123,21 +123,21 @@ test('an audit line fits one row by losing its middle, so the resolved target st
 test('tool block puts the call on one row however long or multi-line the command is', () => {
 	const command = `cd /workplace/yena && ${'echo long; '.repeat(30)}\ncat <<'EOF'\nbody\nEOF`;
 	const width = 60;
-	const block = formatToolBlock({name: 'Bash', input: {command}, isError: false, text: 'ok'}, scrub, width).replace(/\u001b\[\d+m/g, '');
+	const block = stripStyles(formatToolBlock({name: 'Bash', input: {command}, isError: false, text: 'ok'}, scrub, width));
 	const [header, ...rest] = block.split('\n');
-	assert.ok(header!.length <= width, header);
-	assert.match(header!, /^● Bash\(cd \/workplace\/yena && echo long;.*…\)$/);
-	assert.deepEqual(rest, ['  ⎿  ok']);
+	assert.ok(stringCells(header!) <= width, header);
+	assert.match(header!, /^✓ \$ cd \/workplace\/yena && echo long;.*…$/);
+	assert.deepEqual(rest, ['  │ ok']);
 });
 
-test('tool blocks look like Claude Code: green or red dot, bold name, plain arguments', () => {
-	const ok = formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: false, text: 'x'}, scrub);
-	const failed = formatToolBlock({name: 'Bash', input: {command: 'ls'}, isError: true, text: 'boom'}, scrub);
-	assert.ok(ok.startsWith(`${SGR.green}●${SGR.reset} ${SGR.bold}Bash${SGR.boldOff}(ls)`));
-	assert.ok(failed.startsWith(`${SGR.red}●${SGR.reset}`));
-	assert.match(failed, /⎿ {2}boom/);
-	assert.equal(failed.split(SGR.red).length, 2, 'only the dot is red');
-	assert.match(formatToolBlock({name: 'Read', input: {file_path: '/a'}, isError: true, text: ''}, scrub), /⎿ {2}Error/);
+test('tool rows: a status mark, a family glyph, the bold name and plain arguments', () => {
+	const ok = withColorDepth('16', () => formatToolBlock({name: 'WebFetch', input: {url: 'u'}, isError: false, text: 'x'}, scrub));
+	const failed = withColorDepth('16', () => formatToolBlock({name: 'WebFetch', input: {url: 'u'}, isError: true, text: 'boom'}, scrub));
+	assert.ok(ok.startsWith(`${SGR.green}✓${SGR.reset} `), JSON.stringify(ok));
+	assert.ok(ok.includes(`${SGR.bold}WebFetch${SGR.boldOff} u`));
+	assert.ok(failed.startsWith(`${SGR.red}✗${SGR.reset} `), JSON.stringify(failed));
+	assert.match(stripStyles(failed), /\n {2}⎿ {2}boom$/);
+	assert.equal(stripStyles(formatToolBlock({name: 'Read', input: {file_path: '/a'}, isError: true, text: ''}, scrub)).split('\n')[1], '  ⎿  failed');
 });
 
 test('assistant blocks start with a dot and hang under it', () => {
@@ -215,15 +215,15 @@ test('tool results: Edit and Write summarise, refusals show denied, Bash keeps t
 	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
 	const block = (name: string, input: unknown, isError: boolean, text: string) =>
 		strip(formatToolBlock({name, input, isError, text}, scrub));
-	assert.match(block('Edit', {file_path: '/app/a.ts', old_string: 'a', new_string: 'b\nc'}, false, 'The file has been updated'), /^● Edit {2}▫? ?.*\/app\/a\.ts {2}\+2 −1/m);
-	assert.match(block('Write', {file_path: '/app/b.ts', content: 'x\ny\n'}, false, 'File created'), /^● Write {2}◇ \/app\/b\.ts {2}\+2 −0 {2}new file$/m);
-	assert.match(block('Read', {file_path: '/app/b.ts'}, false, '1\tx\n2\ty\n'), /⎿ {2}Read 2 lines$/);
-	assert.match(block('Glob', {pattern: '*.ts'}, false, '/a.ts\n/b.ts'), /⎿ {2}Found 2 files$/);
-	assert.match(block('Glob', {pattern: '*.ts'}, false, 'No files found'), /⎿ {2}Found 0 files$/);
-	assert.match(block('Bash', {command: 'x'}, true, "The user doesn't want to proceed with this tool use."), /⎿ {2}denied/);
-	assert.match(block('Edit', {file_path: '/app/a.ts'}, true, 'The user denied this tool call. Do not retry'), /⎿ {2}denied/);
-	assert.match(block('Bash', {command: 'x'}, false, 'a\nb\nc\nd\ne\nf\ng'), /… \+3 lines \(ctrl\+o to expand\)/);
-	assert.match(block('AskUserQuestion', {questions: [{question: 'Which?'}, {}]}, false, 'User answered: secret-answer'), /AskUserQuestion\(Which\? \(\+1 more\)\)/);
+	assert.match(block('Edit', {file_path: '/app/a.ts', old_string: 'a', new_string: 'b\nc'}, false, 'The file has been updated'), /^✓ ✎ Edit {2}▫? ?.*\/app\/a\.ts {2}\+2 −1/m);
+	assert.match(block('Write', {file_path: '/app/b.ts', content: 'x\ny\n'}, false, 'File created'), /^✓ ✎ Write {2}◇ \/app\/b\.ts {2}\+2 −0 {2}new file$/m);
+	assert.match(block('Read', {file_path: '/app/b.ts'}, false, '1\tx\n2\ty\n'), /^✓ ▤ Read \/app\/b\.ts {2}· 2 lines$/);
+	assert.match(block('Glob', {pattern: '*.ts'}, false, '/a.ts\n/b.ts'), /· 2 files$/);
+	assert.match(block('Glob', {pattern: '*.ts'}, false, 'No files found'), /· 0 files$/);
+	assert.match(block('Bash', {command: 'x'}, true, "The user doesn't want to proceed with this tool use."), /^✗ \$ x {2}· denied$/);
+	assert.match(block('Edit', {file_path: '/app/a.ts'}, true, 'The user denied this tool call. Do not retry'), /· denied$/);
+	assert.match(block('Bash', {command: 'x'}, false, 'a\nb\nc\nd\ne\nf\ng'), /│ … \+3 earlier lines \(ctrl\+o to expand\)/);
+	assert.match(block('AskUserQuestion', {questions: [{question: 'Which?'}, {}]}, false, 'User answered: secret-answer'), /AskUserQuestion Which\? \(\+1 more\)  · answered/);
 	assert.ok(!block('AskUserQuestion', {questions: [{question: 'Which?'}]}, false, 'secret-answer').includes('secret-answer'));
 });
 
@@ -293,7 +293,7 @@ test('yena console tools are shown as Yena with the command line', async () => {
 	assert.equal(toolHeader('mcp__yena__run_command', {command: 'http get https://x.test'}, id), 'Yena(http get https://x.test)');
 	assert.equal(toolHeader('mcp__yena__list_commands', {}, id), 'Yena(list commands)');
 	assert.equal(styledToolHeader('mcp__yena__run_command', {command: 'mod list'}, id), `${SGR.bold}Yena${SGR.boldOff}(mod list)`);
-	assert.equal(toolHeader('mcp__other__run_command', {command: 'x'}, id), 'mcp__other__run_command(command)');
+	assert.equal(toolHeader('mcp__other__run_command', {command: 'x'}, id), 'other:run_command(command)');
 });
 
 test('assistantPrint points each action at its header row after wrapping and indent', async () => {
@@ -340,7 +340,7 @@ test('an Edit is a file card: header with counts, then numbered rows in red and 
 	const patch = {hunks: [{oldStart: 9, newStart: 9, lines: [' keep', '-old', '+new1', '+new2']}]};
 	const raw = cardOf({name: 'Edit', input: {file_path: '/a.ts'}, isError: false, text: 'ok', patch}, 80);
 	assert.deepEqual(stripStyles(raw).split('\n'), [
-		'● Edit  ◇ /a.ts  +2 −1',
+		'✓ ✎ Edit  ◇ /a.ts  +2 −1',
 		'  │  9  9   keep',
 		'  │ 10    - old',
 		'  │    10 + new1',
@@ -365,17 +365,17 @@ test('an Edit is a file card: header with counts, then numbered rows in red and 
 test('a Write shows the head of a new file, an overwrite as a diff, and the same content twice is a bare header', () => {
 	const content = Array.from({length: 13}, (_, i) => `l${i + 1}`).join('\n');
 	const created = stripStyles(cardOf({name: 'Write', input: {file_path: '/n.ts', content}, isError: false, text: 'ok', patch: {hunks: [], created: true}}, 80)).split('\n');
-	assert.equal(created[0], '● Write  ◇ /n.ts  +13 −0  new file');
+	assert.equal(created[0], '✓ ✎ Write  ◇ /n.ts  +13 −0  new file');
 	assert.equal(created[1], '  │  1 l1');
 	assert.equal(created.length, 1 + 10 + 1);
 	assert.equal(created.at(-1), '  │ … +3 lines (ctrl+o to expand)');
 
 	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: ['-a', '-b', '+c']}]};
 	const over = stripStyles(cardOf({name: 'Write', input: {file_path: '/n.ts', content: 'c'}, isError: false, text: 'ok', patch}, 80)).split('\n');
-	assert.deepEqual(over, ['● Write  ◇ /n.ts  +1 −2', '  │ 1   - a', '  │ 2   - b', '  │   1 + c']);
+	assert.deepEqual(over, ['✓ ✎ Write  ◇ /n.ts  +1 −2', '  │ 1   - a', '  │ 2   - b', '  │   1 + c']);
 
 	const same = stripStyles(cardOf({name: 'Write', input: {file_path: '/n.ts', content: 'c'}, isError: false, text: 'ok', patch: {hunks: []}}, 80));
-	assert.equal(same, '● Write  ◇ /n.ts  +0 −0');
+	assert.equal(same, '✓ ✎ Write  ◇ /n.ts  +0 −0');
 });
 
 test('card rows stay inside the width and their lines are scrubbed', () => {
@@ -401,7 +401,7 @@ test('errors and refusals of Edit and Write keep the old result, without a card'
 		const out = strip(formatToolBlock({name, input: {file_path: '/a.ts', content: 'b'}, isError: true, text: 'boom', patch}, scrub));
 		assert.ok(!out.includes('+ b') && !out.includes('- a'), out);
 		assert.ok(out.split('\n').length <= 3, out);
-		assert.ok(out.startsWith(`● ${name}(/a.ts)`), out);
+		assert.ok(out.startsWith(`✗ ✎ ${name} /a.ts`), out);
 	}
 });
 

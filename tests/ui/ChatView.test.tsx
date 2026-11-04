@@ -1256,7 +1256,7 @@ test('blocks are separated by one empty line; a notice line belongs to the block
 	await t.settle();
 	const plain = (s: string) => s.replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '');
 	const shape = t.raw.map(s => (s === ' ' ? 'gap' : plain(s).split('\n')[0]!.slice(0, 12)));
-	assert.deepEqual(shape, ['gap', ' > hi ', 'gap', '● hello', 'gap', 'Allowed Bash', '● Bash(ls)']);
+	assert.deepEqual(shape, ['gap', ' > hi ', 'gap', '● hello', 'gap', 'Allowed Bash', '✓ $ ls']);
 });
 
 test('the input sits between two rules, with the mode hint under it', async () => {

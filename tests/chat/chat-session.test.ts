@@ -1428,3 +1428,87 @@ test('a failing account check on spawn is logged and the spawn goes on', async (
 	assert.equal(log.records.find(r => r.msg === 'account check failed')?.level, 'warn');
 	session.close();
 });
+
+const toolUse = (id: string, name = 'Bash') => ({type: 'assistant', message: {id: `m-${id}`, content: [{type: 'tool_use', id, name, input: {command: 'ls'}}]}});
+const toolResult = (id: string) => ({type: 'user', message: {content: [{type: 'tool_result', tool_use_id: id, content: 'ok', is_error: false}]}});
+
+function timed() {
+	let now = 1_000_000;
+	const clock: Clock = {now: () => now, timeZone: 'UTC'};
+	const t = setup({clock});
+	const uis = () => t.events.flatMap(e => (e.type === 'ui' ? [e.event] : []));
+	return {...t, advance: (ms: number) => (now += ms), uis, now: () => now};
+}
+
+test('tool-use is stamped with the clock and tool-result carries the duration', async () => {
+	const t = timed();
+	t.session.send('go');
+	t.queries[0]?.emit(init());
+	t.queries[0]?.emit(toolUse('t1'));
+	await tick();
+	t.advance(2500);
+	t.queries[0]?.emit(toolResult('t1'));
+	await tick();
+	const use = t.uis().find(e => e.kind === 'tool-use');
+	const res = t.uis().find(e => e.kind === 'tool-result');
+	assert.equal(use?.kind === 'tool-use' && use.at, 1_000_000);
+	assert.equal(res?.kind === 'tool-result' && res.durationMs, 2500);
+});
+
+test('a result without a known start carries no duration', async () => {
+	const t = timed();
+	t.session.send('go');
+	t.queries[0]?.emit(init());
+	t.queries[0]?.emit(toolResult('ghost'));
+	await tick();
+	const res = t.uis().find(e => e.kind === 'tool-result');
+	assert.ok(res && !('durationMs' in res));
+});
+
+test('resolving the permission of a tool restarts its clock, so the approval wait is not counted', async () => {
+	const t = timed();
+	t.session.send('go');
+	t.queries[0]?.emit(init());
+	t.queries[0]?.emit(toolUse('t1'));
+	await tick();
+	const p = t.session as unknown as PermissionPrompter;
+	const decided = p.request(toolReq('t1'), never());
+	t.advance(60_000);
+	t.session.answerPermission('t1', {kind: 'allow'});
+	await decided;
+	t.advance(1500);
+	t.queries[0]?.emit(toolResult('t1'));
+	await tick();
+	const res = t.uis().find(e => e.kind === 'tool-result');
+	assert.equal(res?.kind === 'tool-result' && res.durationMs, 1500);
+});
+
+test('the start table is capped and reset clears it', async () => {
+	const t = timed();
+	t.session.send('go');
+	t.queries[0]?.emit(init());
+	for (let i = 0; i < 300; i++) t.queries[0]?.emit(toolUse(`t${i}`));
+	await tick();
+	t.advance(10);
+	t.queries[0]?.emit(toolResult('t0'));
+	t.queries[0]?.emit(toolResult('t299'));
+	await tick();
+	const results = t.uis().filter(e => e.kind === 'tool-result');
+	assert.ok(!('durationMs' in results[0]!), 'the oldest start was evicted');
+	assert.equal(results[1]?.kind === 'tool-result' && results[1].durationMs, 10);
+});
+
+test('reset forgets the open tool starts', async () => {
+	const t = timed();
+	t.session.send('go');
+	t.queries[0]?.emit(init());
+	t.queries[0]?.emit(toolUse('t1'));
+	t.queries[0]?.emit(ok());
+	await tick();
+	t.session.reset();
+	t.session.send('again');
+	t.queries[t.queries.length - 1]?.emit(toolResult('t1'));
+	await tick();
+	const res = t.uis().find(e => e.kind === 'tool-result');
+	assert.ok(res && !('durationMs' in res));
+});

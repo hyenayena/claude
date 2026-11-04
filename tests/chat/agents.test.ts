@@ -5,10 +5,13 @@ import type {AgentItem, UiEvent} from '../../src/chat/events.js';
 import {AGENT_ITEMS_CAP, AGENT_RESULT_CAP, AGENT_TEXT_CAP, AGENT_TOTAL_CAP, normalize} from '../../src/chat/normalize.js';
 import {POLICY_DENY} from '../../src/chat/permission.js';
 import {DISALLOWED_TOOLS} from '../../src/policy.js';
-import {toolHeader, toolRunningText} from '../../src/ui/present.js';
+import {stripStyles} from '../../src/kit.js';
+import {toolHeader} from '../../src/ui/present.js';
+import {runningToolRow} from '../../src/ui/tool-card.js';
 import {initialTranscript, reduceTranscript} from '../../src/ui/transcript.js';
 
 const id = (s: string) => s;
+const running = (tool: Parameters<typeof runningToolRow>[0]): string => stripStyles(runningToolRow(tool, id, 200, '⠋', 0));
 
 test('agents run in place (foreground or background); other tools are not judged here', () => {
 	assert.equal(agentDenial('Agent', {subagent_type: 'coder', prompt: 'x'}), undefined);
@@ -130,13 +133,13 @@ test('the running Agent line names the subagent and shows what it is doing', () 
 	s = reduceTranscript(s, {type: 'ui', event: {kind: 'agent-activity', toolUseId: 'a1', name: 'Edit', input: {file_path: '/app/src/x.ts'}}}).state;
 	s = reduceTranscript(s, {type: 'ui', event: {kind: 'agent-activity', toolUseId: 'nope', name: 'Read', input: {}}}).state;
 	const tool = s.tools.get('a1')!;
-	assert.equal(toolRunningText(tool, id), 'Agent(coder: Fix build) → Edit(/app/src/x.ts)');
+	assert.equal(running(tool), '⠋ ✦ Agent coder: Fix build  → Edit /app/src/x.ts');
 	s = reduceTranscript(s, {
 		type: 'ui',
 		event: {kind: 'agent-message', agentId: 'a1', items: [{type: 'tool-use', toolUseId: 'r', name: 'Read', input: {file_path: '/app/y.ts'}}, {type: 'text', text: 'x'}]},
 	}).state;
-	assert.equal(toolRunningText(s.tools.get('a1')!, id), 'Agent(coder: Fix build) → Read(/app/y.ts)', 'agent-message moves the activity too');
+	assert.equal(running(s.tools.get('a1')!), '⠋ ✦ Agent coder: Fix build  → Read /app/y.ts', 'agent-message moves the activity too');
 	s = reduceTranscript(s, {type: 'ui', event: {kind: 'agent-message', agentId: 'a1', items: [{type: 'text', text: 'only text'}]}}).state;
-	assert.equal(toolRunningText(s.tools.get('a1')!, id), 'Agent(coder: Fix build) → Read(/app/y.ts)', 'text keeps the last tool');
+	assert.equal(running(s.tools.get('a1')!), '⠋ ✦ Agent coder: Fix build  → Read /app/y.ts', 'text keeps the last tool');
 	assert.equal(toolHeader('SendMessage', {to: 'a1', message: 'continue'}, id), 'SendMessage(a1)');
 });

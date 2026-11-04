@@ -134,6 +134,8 @@ const ident = (v: unknown, what: string): string => {
 };
 const bool = (v: unknown, what: string): boolean => (typeof v === 'boolean' ? v : fail(`${what} must be a boolean`));
 const num = (v: unknown, what: string): number => (typeof v === 'number' && Number.isFinite(v) ? v : fail(`${what} must be a number`));
+const nonNeg = (v: unknown, what: string, max = Number.MAX_SAFE_INTEGER): number =>
+	typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= max ? v : fail(`${what} must be a number from 0 to ${max}`);
 const int = (v: unknown, what: string): number => (Number.isSafeInteger(v) ? (v as number) : fail(`${what} must be an integer`));
 const oneOf = <T extends string>(v: unknown, set: readonly T[], what: string): T =>
 	typeof v === 'string' && (set as readonly string[]).includes(v) ? (v as T) : fail(`${what} is not valid`);
@@ -141,6 +143,7 @@ const arr = (v: unknown, what: string, max: number): unknown[] =>
 	Array.isArray(v) && v.length <= max ? v : fail(`${what} must be a list of at most ${max}`);
 const has = (o: Rec, key: string): boolean => o[key] !== undefined && o[key] !== null;
 
+const MAX_TOOL_DURATION_MS = 604_800_000;
 const MODES = ['default', 'acceptEdits', 'plan', 'auto'] as const;
 const STATES = ['idle', 'running', 'closed'] as const;
 const OUTCOMES = ['ok', 'error', 'interrupted', 'timeout', 'max-turns', 'limit', 'context'] as const;
@@ -471,7 +474,13 @@ const readUiEvent = (v: unknown): UiEvent => {
 				...(has(o, 'depth') && {depth: int(o.depth, 'depth')}),
 			};
 		case 'tool-use':
-			return {kind: 'tool-use', toolUseId: str(o.toolUseId, 'toolUseId', 256), name: str(o.name, 'name', 256), input: o.input};
+			return {
+				kind: 'tool-use',
+				toolUseId: str(o.toolUseId, 'toolUseId', 256),
+				name: str(o.name, 'name', 256),
+				input: o.input,
+				...(has(o, 'at') && {at: nonNeg(o.at, 'at')}),
+			};
 		case 'tool-result':
 			return {
 				kind: 'tool-result',
@@ -479,6 +488,7 @@ const readUiEvent = (v: unknown): UiEvent => {
 				isError: bool(o.isError, 'isError'),
 				text: str(o.text, 'text'),
 				...(has(o, 'patch') && {patch: readToolPatch(o.patch)}),
+				...(has(o, 'durationMs') && {durationMs: nonNeg(o.durationMs, 'durationMs', MAX_TOOL_DURATION_MS)}),
 			};
 		case 'tool-progress':
 			return {

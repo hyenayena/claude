@@ -1,21 +1,17 @@
-import {
-	BLOCK_DISPLAY_CAP,
-	clampChars,
-	summarizeArgs,
-} from '../chat/truncate.js';
+import {BLOCK_DISPLAY_CAP, clampChars} from '../chat/truncate.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
-import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
-import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
 import {SGR_ATTR, sliceCells, stringCells, truncateCells, wrapRows} from '../kit.js';
-import {sgr, type Sgr} from './sgr.js';
+import {sgr} from './sgr.js';
 import type {PrintAction, PrintOptions} from '../../../../src/api.js';
-import type {RouteInfo, ToolPatch} from '../chat/events.js';
+import type {RouteInfo} from '../chat/events.js';
 import {openFenceLine, renderMarkdownBlocks} from './markdown.js';
-import {FILE_TOOLS, formatFileCard} from './file-card.js';
-import {LIVE, parseTodos, ROUTE_TOOL_NAME, type Out, type Phase, type RunningTool, type StatusLine, type Todo} from './transcript.js';
+import {formatToolCard, formatToolGroup, resultLines} from './tool-card.js';
+import type {Scrub} from './tool-args.js';
+import {LIVE, ROUTE_TOOL_NAME, type Out, type Phase, type StatusLine, type Todo} from './transcript.js';
 import type {Tier} from '../chat/tiers.js';
 
-export type Scrub = (s: string) => string;
+export type {Scrub} from './tool-args.js';
+export {toolArgs, toolHeader, toolOneLiner, styledToolHeader} from './tool-args.js';
 
 export {sgr, type Sgr} from './sgr.js';
 
@@ -26,9 +22,6 @@ const paint = (style: string, text: string): string =>
 				.split('\n')
 				.map(line => `${style}${line}${SGR_ATTR.reset}`)
 				.join('\n');
-
-const RESULT_INPUT_CAP = 64 * 1024;
-const ARGS_PRE_CAP = 4096;
 
 export function formatUserLine(text: string, scrub: Scrub): string {
 	const sg = sgr();
@@ -94,71 +87,6 @@ function assistantBlock(text: string, scrub: Scrub, interrupted: boolean, width:
 	return {text: hang('●', lines), actions};
 }
 
-type ArgsSummary = (input: unknown) => string;
-
-const field =
-	(key: string): ArgsSummary =>
-	input => {
-		const v = typeof input === 'object' && input !== null ? (input as Record<string, unknown>)[key] : undefined;
-		return typeof v === 'string' ? v : '';
-	};
-
-const questionArgs: ArgsSummary = input => {
-	const qs = typeof input === 'object' && input !== null ? (input as Record<string, unknown>)['questions'] : undefined;
-	if (!Array.isArray(qs) || qs.length === 0) return '';
-	const first = (qs[0] as Record<string, unknown> | null)?.['question'];
-	const text = typeof first === 'string' ? first : '';
-	return qs.length > 1 ? `${text} (+${qs.length - 1} more)` : text;
-};
-
-function agentArgs(input: unknown): string {
-	if (typeof input !== 'object' || input === null) return '';
-	const r = input as Record<string, unknown>;
-	const type = typeof r['subagent_type'] === 'string' ? r['subagent_type'] : undefined;
-	const what = typeof r['description'] === 'string' ? r['description'] : undefined;
-	return type && what ? `${type}: ${what}` : (type ?? what ?? '');
-}
-
-const ARGS_REGISTRY: Record<string, ArgsSummary> = {
-	AskUserQuestion: questionArgs,
-	Bash: field('command'),
-	Write: field('file_path'),
-	Edit: field('file_path'),
-	NotebookEdit: field('notebook_path'),
-	WebFetch: field('url'),
-	WebSearch: field('query'),
-	TodoWrite: input => {
-		const n = parseTodos(input).length;
-		return `${n} item${n === 1 ? '' : 's'}`;
-	},
-	Agent: agentArgs,
-	Task: agentArgs,
-	SendMessage: field('to'),
-	[RUN_COMMAND_TOOL]: field('command'),
-	[LIST_COMMANDS_TOOL]: () => 'list commands',
-};
-
-const DISPLAY_NAMES: Record<string, string> = {[RUN_COMMAND_TOOL]: 'Yena', [LIST_COMMANDS_TOOL]: 'Yena'};
-
-const displayName = (name: string): string => DISPLAY_NAMES[name] ?? name;
-
-export function toolArgs(name: string, input: unknown, scrub: Scrub): string {
-	const custom = ARGS_REGISTRY[name]?.(input);
-	const raw = custom ? custom.replace(/\s+/g, ' ').slice(0, ARGS_PRE_CAP) : summarizeArgs(name, input, ARGS_PRE_CAP);
-	return scrub(raw);
-}
-
-export function toolHeader(name: string, input: unknown, scrub: Scrub): string {
-	if (name === ROUTE_TOOL_NAME && input === undefined) return `${ROUTE_TOOL_NAME}…`;
-	const args = toolArgs(name, input, scrub);
-	return `${scrub(displayName(name))}${args ? `(${args})` : ''}`;
-}
-
-export function toolOneLiner(name: string, input: unknown, scrub: Scrub): string {
-	const args = toolArgs(name, input, scrub);
-	return `${scrub(displayName(name))}${args ? ` ${args}` : ''}`;
-}
-
 const MODEL_NAME = /^claude-(opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/;
 const OLD_MODEL_NAME = /^claude-(\d{1,2})(?:-(\d{1,2}))?-(opus|sonnet|haiku)(?:-\d{8})?$/;
 const MODEL_CAP = 20;
@@ -171,46 +99,6 @@ export function shortModel(model: string, scrub: Scrub): string {
 	const shown = scrub(model).replace(/\s+/g, ' ');
 	return shown.length > MODEL_CAP ? `${shown.slice(0, MODEL_CAP - 1)}…` : shown;
 }
-
-export function styledToolHeader(name: string, input: unknown, scrub: Scrub): string {
-	const sg = sgr();
-	const args = toolArgs(name, input, scrub);
-	return `${sg.bold}${scrub(displayName(name))}${sg.boldOff}${args ? `(${args})` : ''}`;
-}
-
-type ToolResult = {name: string; input: unknown; isError: boolean; text: string; patch?: ToolPatch};
-type ResultSummary = (t: ToolResult, scrub: Scrub) => string | undefined;
-
-const REFUSAL_MARKERS = ["The user doesn't want to proceed", DENY_MESSAGE.slice(0, DENY_MESSAGE.indexOf('.'))];
-
-const refusalSummary = (t: ToolResult): string | undefined => {
-	if (!t.isError) return undefined;
-	if (REFUSAL_MARKERS.some(m => t.text.includes(m))) return 'denied';
-	if (t.text.includes(CANCEL_MESSAGE)) return 'cancelled';
-	if (t.text.includes(DISMISS_MESSAGE)) return 'dismissed';
-	return undefined;
-};
-
-const countLines = (s: string): number => {
-	if (s === '') return 0;
-	const n = s.split('\n').length;
-	return s.endsWith('\n') ? n - 1 : n;
-};
-const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
-const RESULT_REGISTRY: Record<string, ResultSummary> = {
-	Read: t => (t.isError ? undefined : `Read ${plural(countLines(t.text.replace(/\n+$/, '')), 'line')}`),
-	Glob: t => {
-		if (t.isError) return undefined;
-		const files = t.text.split('\n').filter(l => l.trim() !== '' && !/^No files found/.test(l));
-		return `Found ${plural(files.length, 'file')}`;
-	},
-	AskUserQuestion: t => (t.isError ? undefined : 'answered'),
-	TodoWrite: t => {
-		if (t.isError) return undefined;
-		const todos = parseTodos(t.input);
-		return `checklist: ${todos.filter(x => x.status === 'completed').length}/${todos.length} done`;
-	},
-};
 
 export function queuedLines(queue: string[], scrub: Scrub, max: number): string[] {
 	if (max <= 0 || queue.length === 0) return [];
@@ -236,41 +124,9 @@ export function todoLines(todos: Todo[], scrub: Scrub, max: number): string[] {
 	return resultLines([...shown, paint(sg.muted, `… +${todos.length - shown.length} more`)]);
 }
 
-export const RESULT_PREFIX = '  ⎿  ';
-const RESULT_INDENT = '     ';
+export {RESULT_PREFIX, resultLines, TOOL_RESULT_ROWS} from './tool-card.js';
 
-export const resultLines = (lines: string[]): string[] => lines.map((l, i) => `${i === 0 ? RESULT_PREFIX : RESULT_INDENT}${l}`);
-
-export const TOOL_RESULT_ROWS = 5;
-
-export function formatToolBlock(t: ToolResult, scrub: Scrub, width?: number): string {
-	const sg = sgr();
-	const dot = `${t.isError ? sg.error : sg.ok}●${sg.reset}`;
-	const name = scrub(displayName(t.name));
-	let args = toolArgs(t.name, t.input, scrub);
-	if (width !== undefined && args !== '') {
-		args = truncateCells(args, Math.max(1, width - 2 - stringCells(name) - 2));
-	}
-	const header = `${dot} ${sg.bold}${name}${sg.boldOff}${args ? `(${args})` : ''}${sg.reset}`;
-	const refusal = refusalSummary(t);
-	const custom = refusal ?? RESULT_REGISTRY[t.name]?.(t, scrub);
-	const inner = width === undefined ? undefined : Math.max(1, width - RESULT_PREFIX.length);
-	if (refusal === undefined && !t.isError && (FILE_TOOLS as readonly string[]).includes(t.name)) {
-		const card = formatFileCard(t, scrub, width);
-		if (card !== '') return card;
-	}
-	const body = custom ?? scrub(t.text.slice(0, RESULT_INPUT_CAP)).replace(/\n+$/, '');
-	if (body.trim() === '') return t.isError ? `${header}\n${paint(sg.muted, `${RESULT_PREFIX}Error`)}` : header;
-	const lines = body.split('\n');
-	const rows = inner === undefined ? lines : lines.flatMap(l => wrapRows(l, inner, {mode: 'char'}));
-	let shown = rows;
-	if (rows.length > TOOL_RESULT_ROWS) {
-		const kept = TOOL_RESULT_ROWS - 1;
-		const more = `… +${rows.length - kept} lines (ctrl+o to expand)`;
-		shown = [...rows.slice(0, kept), inner === undefined ? more : truncateCells(more, inner)];
-	}
-	return `${header}\n${paint(sg.muted, resultLines(shown).join('\n'))}`;
-}
+export const formatToolBlock = formatToolCard;
 
 export type RouteBlock = {tier?: Tier; detail?: string; tone: 'ok' | 'dim'};
 
@@ -405,7 +261,9 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 		case 'assistant':
 			return formatAssistantBlock(out.text, scrub, out.interrupted, width);
 		case 'tool':
-			return formatToolBlock(out, scrub, width);
+			return formatToolCard(out, scrub, width);
+		case 'tool-group':
+			return formatToolGroup(out.items, scrub, width);
 		case 'error':
 			return formatError(out.message, scrub);
 		case 'api-error':
@@ -556,12 +414,6 @@ const MODE_HINT: Record<ChatMode, string> = {
 };
 
 export const modeHint = (mode: ChatMode): string => MODE_HINT[mode];
-
-export function toolRunningText(tool: RunningTool, scrub: Scrub): string {
-	const secs = Math.floor(tool.elapsedSeconds);
-	const activity = tool.activity ? ` → ${toolHeader(tool.activity.name, tool.activity.input, scrub)}` : '';
-	return `${toolHeader(tool.name, tool.input, scrub)}${secs > 0 ? ` ${secs}s` : ''}${activity}`;
-}
 
 export function tasksBarText(tasks: readonly {status: string; background: boolean; taskType?: string}[]): string {
 	const running = tasks.filter(t => t.status === 'running');

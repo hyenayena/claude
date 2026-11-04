@@ -2,6 +2,7 @@ import type {AccountReason, ChatEvent, RouteInfo, ToolPatch, TurnOutcome, UiEven
 import type {RateLimitInfo} from '../chat/limits.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
 import type {Tier} from '../chat/tiers.js';
+import {isFoldable} from './tool-kind.js';
 
 export const LIVE = {
 	maxRawChars: 2_000_000,
@@ -21,6 +22,7 @@ export interface RunningTool {
 	name: string;
 	input: unknown;
 	elapsedSeconds: number;
+	startedAt?: number;
 	activity?: {name: string; input: unknown};
 }
 
@@ -53,6 +55,7 @@ export interface TranscriptState {
 	phase: Phase;
 	liveRaw: string;
 	tools: Map<string, RunningTool>;
+	fold: ToolOut[];
 	status: StatusLine;
 	model: string | undefined;
 	sessionId: string | undefined;
@@ -67,9 +70,21 @@ export interface TranscriptState {
 	account?: string;
 }
 
+export type ToolOut = {
+	kind: 'tool';
+	name: string;
+	input: unknown;
+	isError: boolean;
+	text: string;
+	patch?: ToolPatch;
+	durationMs?: number;
+	startedAt?: number;
+};
+
 export type Out =
 	| {kind: 'assistant'; text: string; interrupted: boolean}
-	| {kind: 'tool'; name: string; input: unknown; isError: boolean; text: string; patch?: ToolPatch}
+	| ToolOut
+	| {kind: 'tool-group'; items: ToolOut[]}
 	| {kind: 'error'; message: string}
 	| {kind: 'api-error'; code: string}
 	| {kind: 'outcome'; outcome: Exclude<TurnOutcome, 'ok'>; error?: string}
@@ -99,6 +114,7 @@ export function initialTranscript(
 		phase: 'idle',
 		liveRaw: '',
 		tools: new Map(),
+		fold: [],
 		status: null,
 		model: init.model,
 		sessionId: init.sessionId,
@@ -170,7 +186,7 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 			return {state, out: [{kind: 'thinking', text: e.text}]};
 		case 'tool-use': {
 			const tools = new Map(state.tools);
-			tools.set(e.toolUseId, {id: e.toolUseId, name: e.name, input: e.input, elapsedSeconds: 0});
+			tools.set(e.toolUseId, {id: e.toolUseId, name: e.name, input: e.input, elapsedSeconds: 0, ...(e.at !== undefined && {startedAt: e.at})});
 			const todos = e.name === 'TodoWrite' ? parseTodos(e.input) : state.todos;
 			return {state: {...state, tools, todos, status: null}, out: []};
 		}
@@ -200,6 +216,7 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 			const tool = state.tools.get(e.toolUseId);
 			const tools = new Map(state.tools);
 			tools.delete(e.toolUseId);
+			const durationMs = e.durationMs ?? (tool !== undefined && tool.elapsedSeconds > 0 ? tool.elapsedSeconds * 1000 : undefined);
 			return {
 				state: {...state, tools},
 				out: [
@@ -210,6 +227,8 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 						isError: e.isError,
 						text: e.text,
 						...(e.patch !== undefined && {patch: e.patch}),
+						...(durationMs !== undefined && {durationMs}),
+						...(tool?.startedAt !== undefined && {startedAt: tool.startedAt}),
 					},
 				],
 			};
@@ -238,7 +257,38 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 	}
 }
 
+const FOLD_MAX = 100;
+
+const foldable = (o: Out): o is ToolOut => o.kind === 'tool' && !o.isError && isFoldable(o.name);
+
+const foldGroup = (items: ToolOut[]): Out => (items.length === 1 ? items[0]! : {kind: 'tool-group', items});
+
+// A run of finished Read/Grep/Glob/LS calls prints as one row, so it waits in state.fold until another Out arrives.
 export function reduceTranscript(state: TranscriptState, event: ChatEvent): Step {
+	const step = reduceEvent(state, event);
+	let fold = step.state.fold;
+	const out: Out[] = [];
+	const flush = () => {
+		if (fold.length === 0) return;
+		out.push(foldGroup(fold));
+		fold = [];
+	};
+	for (const o of step.out) {
+		if (foldable(o)) {
+			fold = [...fold, o];
+			if (fold.length >= FOLD_MAX) flush();
+			continue;
+		}
+		flush();
+		out.push(o);
+	}
+	const ends = event.type === 'turn-end' || event.type === 'permission-requested' || (event.type === 'state' && event.state === 'idle');
+	if (ends) flush();
+	if (fold === step.state.fold && out.length === step.out.length && out.every((o, i) => o === step.out[i])) return step;
+	return {state: {...step.state, fold}, out};
+}
+
+function reduceEvent(state: TranscriptState, event: ChatEvent): Step {
 	switch (event.type) {
 		case 'ui':
 			return reduceUi(state, event.event);

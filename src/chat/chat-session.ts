@@ -101,6 +101,7 @@ export type TaskInfo = {
 	subagentType?: string;
 };
 const MAX_TASKS = 100;
+const MAX_TOOL_STARTS = 256;
 
 const MAX_COMMANDS = 300;
 export const isCommandName = (name: string): boolean => /^[A-Za-z0-9][A-Za-z0-9:._-]{0,63}$/.test(name);
@@ -170,6 +171,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private turnError: TurnError | undefined;
 	private _rateLimit: RateLimitInfo | undefined;
 	private readonly clock: Clock;
+	private readonly toolStarts = new Map<string, number>();
 	private pending: Pending | undefined;
 	private turnTimer: NodeJS.Timeout | undefined;
 	private graceTimer: NodeJS.Timeout | undefined;
@@ -604,6 +606,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		if (this._state === 'running') throw new Error('Cannot start a new session while a request is running');
 		this.dropHandle();
 		this.approved.clear();
+		this.toolStarts.clear();
 		if (this._mode !== 'default') {
 			this._mode = 'default';
 			this.emit({type: 'mode', mode: 'default'});
@@ -776,6 +779,18 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			const t = this._tasks.get(ev.id)!;
 			if (ev.status !== 'running') queueMicrotask(() => this.settleIdle());
 			ev = {...ev, background: t.background, description: t.description};
+		}
+		if (ev.kind === 'tool-use') {
+			const at = this.clock.now();
+			this.toolStarts.set(ev.toolUseId, at);
+			if (this.toolStarts.size > MAX_TOOL_STARTS) this.toolStarts.delete(this.toolStarts.keys().next().value!);
+			ev = {...ev, at};
+		} else if (ev.kind === 'tool-result') {
+			const start = this.toolStarts.get(ev.toolUseId);
+			if (start !== undefined) {
+				this.toolStarts.delete(ev.toolUseId);
+				ev = {...ev, durationMs: Math.max(0, this.clock.now() - start)};
+			}
 		}
 		if (ev.kind === 'result' && ev.sessionId) this._sessionId = ev.sessionId;
 		if (ev.kind === 'result' && ev.costUsd !== undefined) this._costUsd = ev.costUsd;
@@ -1029,6 +1044,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			...(decision.kind === 'cancel' && {cause: decision.cause}),
 			ms: Date.now() - entry.at,
 		});
+		if (entry.req.kind === 'tool' && this.toolStarts.has(entry.req.id)) this.toolStarts.set(entry.req.id, this.clock.now());
 		this.emit({type: 'permission-resolved', id: entry.req.id, pending: this.queue.length});
 		this.audit({outcome: outcomeOf(entry.req, decision), toolName: tool, summary: summaryOf(entry.req)});
 		if (this.queue.length === 0) {

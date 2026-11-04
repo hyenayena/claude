@@ -283,8 +283,8 @@ export function ChatView(props: ChatViewProps) {
 					print(block.text, block.options);
 					continue;
 				}
-				if (out.kind === 'tool' || out.kind === 'audit' || out.kind === 'route-block') {
-					if (out.kind === 'tool') beatRef.current++;
+				if (out.kind === 'tool' || out.kind === 'tool-group' || out.kind === 'audit' || out.kind === 'route-block') {
+					if (out.kind === 'tool' || out.kind === 'tool-group') beatRef.current++;
 					const width = lastWidthRef.current > 1 ? lastWidthRef.current - 1 : undefined;
 					const text = formatOut(out, scrub, reveal, width);
 					const options: PrintOptions = {render: w => formatOut(out, scrub, reveal, w)};
@@ -1169,7 +1169,7 @@ export function ChatView(props: ChatViewProps) {
 	rem -= queued.length;
 	const todos = todoLines(t.todos, scrub, Math.min(LIVE.maxTodoRows, Math.floor(rem / 2)));
 	rem -= todos.length;
-	const toolRows = toolLayout(tools.length, t.liveRaw ? Math.floor(rem / 2) : rem).rows;
+	const toolRows = toolLayout(tools.length + (t.fold.length > 0 ? 1 : 0), t.liveRaw ? Math.floor(rem / 2) : rem).rows;
 	rem -= toolRows;
 	const tail = liveTail(t.liveRaw, scrub, Math.min(LIVE.maxTailRows, Math.max(0, rem)), columns);
 	shownRef.current = {...shownRef.current, inputRows, vimNormal, waiting: running && ed.text === '', belowInput: ruleRows / 2 + hintRows};
@@ -1182,7 +1182,7 @@ export function ChatView(props: ChatViewProps) {
 					{line === '' ? ' ' : line}
 				</Text>
 			))}
-			<LiveTools tools={tools} scrub={scrub} maxRows={toolRows} />
+			<LiveTools tools={tools} fold={t.fold} scrub={scrub} maxRows={toolRows} width={Math.max(1, columns - 1)} />
 			{workingRows > 0 && <WorkingLine phase={t.phase} status={t.status} since={sinceRef.current} beat={beatRef.current} lastEventAt={t.pending > 0 ? undefined : lastEventRef.current} />}
 			{todos.map((line, i) => (
 				<Text key={`todo-${i}`} wrap="truncate">

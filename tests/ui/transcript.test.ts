@@ -71,7 +71,7 @@ test('tool lifecycle: running, progress, result prints once', () => {
 	assert.equal(mid.state.tools.get('t1')?.elapsedSeconds, 4);
 	const end = run([...events, ui({kind: 'tool-result', toolUseId: 't1', isError: false, text: 'a\nb'})]);
 	assert.equal(end.state.tools.size, 0);
-	assert.deepEqual(end.out, [{kind: 'tool', name: 'Bash', input: {command: 'ls'}, isError: false, text: 'a\nb'}]);
+	assert.deepEqual(end.out, [{kind: 'tool', name: 'Bash', input: {command: 'ls'}, isError: false, text: 'a\nb', durationMs: 4000}]);
 });
 
 test('non-ok outcomes print an error; ok prints none', () => {
@@ -212,4 +212,80 @@ test('a tool result passes its patch on to the printed tool', () => {
 		ui({kind: 'tool-result', toolUseId: 't1', isError: false, text: 'ok', patch}),
 	]);
 	assert.deepEqual(out, [{kind: 'tool', name: 'Edit', input: {file_path: '/a'}, isError: false, text: 'ok', patch}]);
+});
+
+const use = (toolUseId: string, name: string, input: unknown, at?: number): ChatEvent => ui({kind: 'tool-use', toolUseId, name, input, ...(at !== undefined && {at})});
+const result = (toolUseId: string, text = 'ok', extra: {isError?: boolean; durationMs?: number} = {}): ChatEvent =>
+	ui({kind: 'tool-result', toolUseId, isError: extra.isError ?? false, text, ...(extra.durationMs !== undefined && {durationMs: extra.durationMs})});
+const kinds = (out: Out[]): string[] => out.map(o => (o.kind === 'tool-group' ? `group:${o.items.length}` : o.kind === 'tool' ? `tool:${o.name}` : o.kind));
+
+test('a run of one finished read prints as a single tool; two or more as one group', () => {
+	const one = run([use('a', 'Read', {file_path: '/a'}), result('a'), {type: 'turn-end', outcome: 'ok'}]);
+	assert.deepEqual(kinds(one.out).slice(0, 1), ['tool:Read']);
+	const two = run([use('a', 'Read', {file_path: '/a'}), result('a'), use('b', 'Grep', {pattern: 'x'}), result('b'), {type: 'turn-end', outcome: 'ok'}]);
+	const group = two.out.find(o => o.kind === 'tool-group');
+	assert.ok(group && group.kind === 'tool-group' && group.items.length === 2);
+	assert.equal(two.out.filter(o => o.kind === 'tool').length, 0);
+});
+
+test('finished foldable results wait in state.fold and print nothing', () => {
+	const r = run([use('a', 'Read', {file_path: '/a'}), result('a'), use('b', 'Read', {file_path: '/b'}), result('b')]);
+	assert.deepEqual(r.out, []);
+	assert.equal(r.state.fold.length, 2);
+});
+
+test('any other Out flushes the run first, in order', () => {
+	const events: ChatEvent[][] = [
+		[ui({kind: 'text', messageId: 'm', text: 'hello'})],
+		[ui({kind: 'thinking-text', text: 'hmm'})],
+		[use('c', 'Bash', {command: 'ls'}), result('c')],
+		[{type: 'audit', entry: {outcome: 'allowed', toolName: 'Bash', summary: 'ls'}}],
+	];
+	for (const tail of events) {
+		const r = run([use('a', 'Read', {file_path: '/a'}), result('a'), use('b', 'Read', {file_path: '/b'}), result('b'), ...tail]);
+		assert.equal(r.out[0]!.kind, 'tool-group', kinds(r.out).join());
+		assert.equal(r.state.fold.length, 0);
+	}
+});
+
+test('an error ends the run and prints on its own; the run before it is flushed', () => {
+	const r = run([use('a', 'Read', {file_path: '/a'}), result('a'), use('b', 'Read', {file_path: '/b'}), result('b'), use('c', 'Read', {file_path: '/c'}), result('c', 'nope', {isError: true})]);
+	assert.deepEqual(kinds(r.out), ['group:2', 'tool:Read']);
+	assert.equal(r.out[1]!.kind === 'tool' && r.out[1].isError, true);
+	assert.equal(r.state.fold.length, 0);
+});
+
+test('turn-end, idle and a permission request flush the run', () => {
+	const base = [use('a', 'Read', {file_path: '/a'}), result('a'), use('b', 'Read', {file_path: '/b'}), result('b')];
+	const request: ToolRequest = {kind: 'tool', id: 'p1', seq: 1, toolName: 'Bash', input: {command: 'x'}, cwd: '/app', highlights: [], defaultToNo: false, always: false, oversize: false};
+	for (const e of [{type: 'turn-end', outcome: 'ok'}, {type: 'state', state: 'idle'}, {type: 'permission-requested', request, pending: 1}] as ChatEvent[]) {
+		const r = run([...base, e]);
+		assert.equal(r.out.filter(o => o.kind === 'tool-group').length, 1, e.type);
+		assert.equal(r.state.fold.length, 0, e.type);
+	}
+});
+
+test('the run is flushed at 100 items', () => {
+	const events: ChatEvent[] = [];
+	for (let i = 0; i < 100; i++) events.push(use(`r${i}`, 'Read', {file_path: `/f${i}`}), result(`r${i}`));
+	const r = run(events);
+	assert.deepEqual(kinds(r.out), ['group:100']);
+	assert.equal(r.state.fold.length, 0);
+});
+
+test('a tool-use of another tool running in parallel does not flush the run', () => {
+	const r = run([use('a', 'Read', {file_path: '/a'}), result('a'), use('b', 'Bash', {command: 'sleep 1'}), use('c', 'Read', {file_path: '/c'}), result('c')]);
+	assert.deepEqual(r.out, []);
+	assert.equal(r.state.fold.length, 2);
+	assert.equal(r.state.tools.size, 1);
+});
+
+test('durationMs comes from the event, then from the last progress; startedAt from at', () => {
+	const timed = run([use('a', 'Bash', {command: 'x'}, 5000), result('a', 'ok', {durationMs: 1234})]);
+	assert.deepEqual(timed.out[0], {kind: 'tool', name: 'Bash', input: {command: 'x'}, isError: false, text: 'ok', durationMs: 1234, startedAt: 5000});
+	const progress = run([use('a', 'Bash', {command: 'x'}), ui({kind: 'tool-progress', toolUseId: 'a', name: 'Bash', elapsedSeconds: 7}), result('a')]);
+	assert.equal(progress.out[0]!.kind === 'tool' && progress.out[0].durationMs, 7000);
+	const none = run([use('a', 'Bash', {command: 'x'}), result('a')]);
+	assert.ok(none.out[0]!.kind === 'tool' && !('durationMs' in none.out[0]) && !('startedAt' in none.out[0]));
+	assert.equal(run([use('a', 'Bash', {command: 'x'}, 42)]).state.tools.get('a')!.startedAt, 42);
 });

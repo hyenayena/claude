@@ -1,9 +1,10 @@
 import {diffLines} from '../chat/diff.js';
 import type {ToolPatch} from '../chat/events.js';
 import type {Preview} from '../chat/permission.js';
-import {prepareDiffCard, renderDiffCard, colorDepth, type DiffCard, type DiffCardRow, type PreparedDiffCard} from '../kit.js';
+import {prepareDiffCard, renderDiffCard, colorDepth, formatElapsed, glyph, type DiffCard, type DiffCardRow, type PreparedDiffCard} from '../kit.js';
 import {highlighterFor, highlighterReady, languageFor} from './highlight.js';
 import {sgr} from './sgr.js';
+import {DURATION_MIN_MS, FAMILY_GLYPH} from './tool-kind.js';
 
 export const FILE_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] as const;
 export const FILE_CARD_ROWS = 40;
@@ -140,7 +141,7 @@ type Entry = {
 	prepared: PreparedDiffCard;
 	highlighted: boolean;
 	lead: string;
-	layout?: {width: number; depth: string; text: string};
+	layout?: {width: number; depth: string; durationMs: number | undefined; text: string};
 };
 
 const cache = new WeakMap<object, {chat?: Entry; full?: Entry}>();
@@ -163,23 +164,25 @@ function entryFor(t: FileToolInput, scrub: Scrub, full: boolean): Entry | undefi
 	return entry;
 }
 
-export function formatFileCard(t: FileToolInput, scrub: Scrub, width = 100, options: {full?: boolean} = {}): string {
+export function formatFileCard(t: FileToolInput, scrub: Scrub, width = 100, options: {full?: boolean; durationMs?: number} = {}): string {
 	const full = options.full === true;
+	const durationMs = options.durationMs;
 	const entry = entryFor(t, scrub, full);
 	if (entry === undefined) return '';
 	const depth = colorDepth();
-	if (entry.layout !== undefined && entry.layout.width === width && entry.layout.depth === depth) return entry.layout.text;
+	if (entry.layout !== undefined && entry.layout.width === width && entry.layout.depth === depth && entry.layout.durationMs === durationMs) return entry.layout.text;
 	const sg = sgr();
 	const name = scrub(t.name);
-	const lead = `${sg.ok}●${sg.reset} ${sg.bold}${name}${sg.boldOff}`;
+	const lead = `${sg.ok}${glyph('check')}${sg.reset} ${sg.muted}${glyph(FAMILY_GLYPH.edit)}${sg.reset} ${sg.bold}${name}${sg.boldOff}`;
 	const rows = renderDiffCard(entry.prepared, {
 		width: Math.max(1, width),
 		depth,
 		lead,
+		...(durationMs !== undefined && durationMs >= DURATION_MIN_MS && {right: formatElapsed(durationMs)}),
 		...(full ? {} : {maxRows: FILE_CARD_ROWS, tailRows: FILE_CARD_TAIL}),
 	});
 	const text = rows.join('\n');
-	entry.layout = {width, depth, text};
+	entry.layout = {width, depth, durationMs, text};
 	return text;
 }
 
