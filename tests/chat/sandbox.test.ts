@@ -93,6 +93,13 @@ test('the sandbox hides the secrets from Bash', () => {
 	}
 });
 
+test('every sandboxed Bash command runs without the Claude credentials in its environment', () => {
+	const envVars = buildSandbox(paths, undefined, list, '/root').credentials.envVars;
+	for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_REFRESH_TOKEN']) {
+		assert.ok(envVars.some(v => v.name === name && v.mode === 'deny'), name);
+	}
+});
+
 test('the sandbox cannot be skipped and keeps the prompts', () => {
 	const box = buildSandbox(paths, undefined, list, '/root');
 	assert.equal(box.enabled, true);

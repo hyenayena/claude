@@ -15,7 +15,11 @@ export type SandboxSettings = {
 	enableWeakerNestedSandbox: true;
 	filesystem: {allowWrite: string[]; denyWrite: string[]; denyRead: string[]};
 	network: {allowedDomains: string[]; allowAllUnixSockets?: true};
+	credentials: {envVars: Array<{name: string; mode: 'deny'}>};
 };
+
+// Claude Code keeps these for its own API calls; each sandboxed Bash command runs without them.
+export const SANDBOX_DENIED_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_REFRESH_TOKEN'];
 
 export type SandboxExtras = {
 	socketDirs?: string[];
@@ -81,6 +85,7 @@ export function buildSandbox(paths: PolicyPaths, access: ProjectAccess | undefin
 		enableWeakerNestedSandbox: true,
 		filesystem: {allowWrite: ['/tmp'], denyWrite: [...new Set(denyWrite)], denyRead: [...new Set(denyRead)]},
 		network: {allowedDomains: [...SANDBOX_DOMAINS], ...(unixSockets && {allowAllUnixSockets: true as const})},
+		credentials: {envVars: SANDBOX_DENIED_ENV.map(name => ({name, mode: 'deny' as const}))},
 	};
 }
 
