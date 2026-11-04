@@ -1,3 +1,4 @@
+import {sessionSubscription} from '../session-accounts.js';
 import type {BuildInfo, CommandContext, Logger, PrintOptions, UiElement, ViewHost} from '../../../../src/api.js';
 import {tuningFromState, type ChatTuning, type LivePatch} from '../chat-prefs.js';
 import type {LoginProbe} from '../claude-login.js';
@@ -250,7 +251,11 @@ const openRemote = async (
 	const credOpts: CredentialOpts = {env: deps.env, dataDir: deps.dataDir, log, ...(deps.vault && {vault: deps.vault})};
 	let cred: Credential;
 	try {
-		cred = await requireCredential({...credOpts, ...(deps.probeLogin && {probeLogin: deps.probeLogin})}, open.apiKeyOnly ? {apiKeyOnly: true} : {});
+		cred = await requireCredential(
+			{...credOpts, ...(deps.probeLogin && {probeLogin: deps.probeLogin})},
+			open.apiKeyOnly ? {apiKeyOnly: true} : {},
+			sessionSubscription(deps.dataDir, open.resume),
+		);
 	} catch (err) {
 		log.warn('no credential');
 		throw err;

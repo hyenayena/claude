@@ -15,6 +15,7 @@ import {
 	type ChooseOpts,
 } from './accounts.js';
 import {loginPresent} from './login-slot.js';
+import {chooseForSession, type SessionSub} from './session-accounts.js';
 import {migrateAuthState, migrateLegacy} from './migrate.js';
 import {errClass, noopLog} from './log.js';
 import type {Credential, CredentialInfo, CredentialKind, CredentialSource} from './types.js';
@@ -135,9 +136,9 @@ export const listCredentialSources = async (opts: CredentialOpts): Promise<Crede
 		.map(a => credentialOf(opts, a));
 };
 
-export const resolveCredential = async (opts: CredentialOpts, sel: ChooseOpts = {}): Promise<Credential | undefined> => {
+export const resolveCredential = async (opts: CredentialOpts, sel: ChooseOpts = {}, sub?: SessionSub): Promise<Credential | undefined> => {
 	await loadBundle(opts);
-	const a = chooseAccount(accountsCtx(opts), sel);
+	const a = sub ? chooseForSession(accountsCtx(opts), sub, sel)?.account : chooseAccount(accountsCtx(opts), sel);
 	return a ? credentialOf(opts, a) : undefined;
 };
 
@@ -152,19 +153,22 @@ export const noCredentials = (bundle: CredentialBundle): string => {
 	return reason ? `No credentials found. ${reason}` : NO_CREDENTIALS;
 };
 
-export const requireCredential = async (opts: CredentialOpts, sel: ChooseOpts = {}): Promise<Credential> => {
-	const cred = await resolveCredential(opts, sel);
+export const requireCredential = async (opts: CredentialOpts, sel: ChooseOpts = {}, sub?: SessionSub): Promise<Credential> => {
+	const cred = await resolveCredential(opts, sel, sub);
 	if (!cred) throw new Error(sel.apiKeyOnly ? API_KEY_ONLY : noCredentials(vaultOf(opts).current()));
 	return cred;
 };
 
-export const prepareCredential = (opts: CredentialOpts, sel: ChooseOpts = {}): Credential => {
+export const prepareCredential = (opts: CredentialOpts, sel: ChooseOpts = {}, sub?: SessionSub): Credential => {
 	const ctx = accountsCtx(opts);
-	const a = chooseAccount(ctx, sel);
+	const a = sub ? chooseForSession(ctx, sub, sel)?.account : chooseAccount(ctx, sel);
 	if (!a) throw new Error(sel.apiKeyOnly ? API_KEY_ONLY : noCredentials(ctx.bundle));
 	const p = prepareAccount(ctx, a.name);
 	return makeCredential(p.kind, sourceOf(p.account), p.value, p.account.name, p.passthrough);
 };
+
+export const accountOfCredential = (opts: CredentialOpts, cred: Credential): Account | undefined =>
+	cred.account === undefined ? undefined : listAccounts(accountsCtx(opts)).find(a => a.name === cred.account);
 
 export const storeSecret = async (opts: CredentialOpts, value: string, name?: string): Promise<Account> => {
 	await loadBundle(opts);

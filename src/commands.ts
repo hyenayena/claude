@@ -8,6 +8,7 @@ import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
 import {isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
 import {type AccountView, checkAccountName, chooseAccount, clearPin, listAccounts, newAccountNameProblem, pinnedAccount, removeAccount, setOrder, suggestSecretName, useAccount} from './accounts.js';
 import {legacyCount} from './migrate.js';
+import {bindSession, sessionSubscription} from './session-accounts.js';
 import {degradedReason, type ClaudeVault} from './vault.js';
 import type {ChatHandle} from './chat/handle.js';
 import {isTier, type Tier} from './chat/tiers.js';
@@ -21,6 +22,7 @@ import {ago, type PickerItem} from './ui/picker-model.js';
 import {buildEnv, buildOptions, cliEnv, ensureMdLinks, resolvePaths, restrictDataDirs, runtimeInfo, withProjects} from './config.js';
 import {parseLoginArgs, probeLogin, runLogout, type LoginProbe, type LoginRequest, type LoginStatus} from './claude-login.js';
 import {
+	accountOfCredential,
 	accountsCtx,
 	allSecrets,
 	type CredentialOpts,
@@ -445,15 +447,26 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 
-	const prepareAsk = async (): Promise<Credential> => {
+	const prepareAsk = async (resume: string | undefined): Promise<Credential> => {
 		await loadBundle(credOpts);
-		return prepareCredential(credOpts);
+		return prepareCredential(credOpts, {}, sessionSubscription(dataDir, resume));
+	};
+
+	const bindAsk = (sessionId: string, cred: Credential): void => {
+		const account = accountOfCredential(credOpts, cred);
+		if (account === undefined) return;
+		try {
+			if (!bindSession(dataDir, sessionId, account)) log.warn('session subscription mismatch');
+		} catch (err) {
+			log.warn('session account not saved', {errClass: errClass(err)});
+		}
 	};
 
 	const runAsk = async (text: string, fresh: boolean, ctx: CommandContext): Promise<void> => {
+		const resume = fresh ? undefined : (await store.read()).lastSessionId;
 		let cred: Credential;
 		try {
-			cred = await prepareAsk();
+			cred = await prepareAsk(resume);
 		} catch (err) {
 			log.warn('no credential');
 			throw err;
@@ -497,7 +510,6 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			const paths = await withProjects(resolvePaths(dataDir, deps.moduleDir));
 			ensureMdLinks(paths);
 			restrictDataDirs(paths);
-			const resume = fresh ? undefined : state.lastSessionId;
 			let result;
 			const options = buildOptions({paths, cred, abortController: controller, resume, env: buildEnv(env, paths, cred)});
 			try {
@@ -505,6 +517,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			} catch (err) {
 				const failure = timedOut ? new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds`) : err;
 				if (err instanceof TurnFailure && err.sessionId && err.kind !== 'resume') {
+					bindAsk(err.sessionId, cred);
 					await store
 						.update({lastSessionId: err.sessionId, ...(err.model && {lastModel: err.model})})
 						.catch(() => log.warn('ask state save failed'));
@@ -519,6 +532,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				});
 				throw failure;
 			}
+			bindAsk(result.sessionId, cred);
 			await store.update({lastSessionId: result.sessionId, ...(result.model && {lastModel: result.model})});
 			ctx.print(scrub(result.text));
 			const model = result.model ?? 'unknown';

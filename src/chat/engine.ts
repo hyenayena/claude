@@ -4,8 +4,9 @@ import path from 'node:path';
 import type {AgentDefinition} from '@anthropic-ai/claude-agent-sdk';
 import {additionalDirsOf, buildChatOptions, buildEnv, buildRouterOptions, ensureMdLinks, resolvePaths, restrictDataDirs, withProjects, type ClaudePaths} from '../config.js';
 import type {LoginProbe} from '../claude-login.js';
-import {accountsCtx, liveSecrets, makeRedactor, prepareCredential, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
-import {type ChooseOpts, chooseAccount, pinnedAccount} from '../accounts.js';
+import {bindSession, chooseForSession, sessionSubscription, type SessionSub} from '../session-accounts.js';
+import {accountOfCredential, accountsCtx, liveSecrets, makeRedactor, prepareCredential, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
+import {type ChooseOpts, pinnedAccount} from '../accounts.js';
 import {degradedReason, type ClaudeVault} from '../vault.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {buildScope} from '../policy.js';
@@ -94,9 +95,13 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	const {dataDir, env, store} = deps;
 	const log = deps.log ?? noopLog;
 	const credOpts: CredentialOpts = {env, dataDir, log, ...(deps.vault && {vault: deps.vault})};
+	const state = await store.read();
+	const resume = chosen ?? (fresh ? undefined : state.lastSessionId);
+	const subs = new Map<string, SessionSub>();
+	const subOf = (id: string | undefined): SessionSub | undefined => (id === undefined ? undefined : (subs.get(id) ?? sessionSubscription(dataDir, id)));
 	let cred: Credential;
 	try {
-		cred = await requireCredential({...credOpts, ...(deps.probeLogin && {probeLogin: deps.probeLogin})}, sel);
+		cred = await requireCredential({...credOpts, ...(deps.probeLogin && {probeLogin: deps.probeLogin})}, sel, subOf(resume));
 	} catch (err) {
 		log.warn('no credential');
 		throw err;
@@ -135,7 +140,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		throw new Error(`Claude request failed: ${scrub(err instanceof Error ? err.message : String(err))}`);
 	}
 
-	const state = await store.read();
 	const paths = await withProjects(resolvePaths(dataDir, deps.moduleDir));
 	ensureMdLinks(paths);
 	restrictDataDirs(paths);
@@ -152,7 +156,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		...(env.SSH_AUTH_SOCK && {agentSocket: env.SSH_AUTH_SOCK}),
 		...(shellRoot !== undefined && {sessionTmp: cliTmpOf(shellRoot, process.getuid?.() ?? 0)}),
 	});
-	const resume = chosen ?? (fresh ? undefined : state.lastSessionId);
 	log.info('chat starting', {
 		fresh,
 		kind: cred.kind,
@@ -167,6 +170,19 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		log.warn('bash sandbox unavailable');
 		io.warn(`Warning: Bash in the chat runs without its sandbox, so it can write to projects that are not isolated: ${problem}.`);
 	}
+	let keptNoted: string | undefined;
+	const noteKept = (sub: SessionSub | undefined): void => {
+		let kept: string | undefined;
+		try {
+			kept = chooseForSession(accountsCtx(credOpts), sub, sel)?.kept?.wanted;
+		} catch {
+			return;
+		}
+		if (kept === undefined || kept === keptNoted || sub === undefined) return;
+		keptNoted = kept;
+		log.info('session account kept');
+		io.warn(`This chat stays on the Claude subscription "${sub.account}": a chat uses only one subscription. Start a new chat ("claude new") to use "${kept}".`);
+	};
 	let created: ChatSession | undefined;
 	const sandboxExtras = {socketDirs: [sessionDirOf(shellTmpRoot(process.getuid?.() ?? 0))]};
 	const sandbox = createSandboxSync(
@@ -328,7 +344,8 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		},
 		...(state.chatPermissionMode && {initialMode: state.chatPermissionMode}),
 		buildOptions: (abortController, id, prompter) => {
-			cred = prepareCredential(credOpts, sel);
+			noteKept(subOf(id));
+			cred = prepareCredential(credOpts, sel, subOf(id));
 			registerLogRedaction(log, cred);
 			const consoleFlags = createConsoleFlags();
 			const access = paths.projects?.readSync();
@@ -391,7 +408,13 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		preferAccount: () => {
 			const current = cred.account;
 			if (current === undefined) return false;
-			const next = chooseAccount(accountsCtx(credOpts), sel);
+			let next;
+			noteKept(subOf(created?.sessionId));
+			try {
+				next = chooseForSession(accountsCtx(credOpts), subOf(created?.sessionId), sel)?.account;
+			} catch {
+				return false;
+			}
 			return next !== undefined && next.name !== current;
 		},
 		spawnedAccount: () => {
@@ -407,6 +430,20 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		},
 	});
 	created = session;
+	session.subscribe(e => {
+		if (e.type !== 'ui' || e.event.kind !== 'session') return;
+		const id = e.event.sessionId;
+		const account = accountOfCredential(credOpts, cred);
+		if (account?.kind !== 'oauth') return;
+		const sub: SessionSub = {account: account.name, ...(account.email !== undefined && {email: account.email})};
+		try {
+			if (bindSession(dataDir, id, account)) subs.set(id, sub);
+			else log.warn('session subscription mismatch');
+		} catch (err) {
+			log.warn('session account not saved', {errClass: errClass(err)});
+			if (!subs.has(id)) subs.set(id, sub);
+		}
+	});
 
 	const titleTimers = new Set<NodeJS.Timeout>();
 	const refreshTitle = async (): Promise<void> => {
