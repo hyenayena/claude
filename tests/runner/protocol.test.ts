@@ -303,3 +303,25 @@ test('a snapshot carries the route, validated the same way', () => {
 	assert.equal(none.route, undefined);
 	assert.throws(() => createDecoder('toClient').push(line({...snap, route: {outcome: 'rated', main: 'giant'}})), ProtocolError);
 });
+
+test('preview rows carry oldNo, newNo and count; old frames with only no are still accepted', () => {
+	const base = {kind: 'tool', id: 'p1', seq: 1, toolName: 'Edit', input: {}, cwd: '/app', highlights: [], defaultToNo: false, always: false, oversize: false};
+	const withRows = (rows: unknown[]) => ({
+		v: 1,
+		type: 'event',
+		event: {type: 'permission-requested', pending: 1, request: {...base, preview: {rows, added: 1, removed: 1, truncated: false, approximate: false}}},
+	});
+	const rows = [
+		{kind: 'gap', text: '... 3 unchanged lines', count: 3},
+		{kind: 'del', text: 'a', no: 4, oldNo: 4},
+		{kind: 'add', text: 'b', no: 4, newNo: 4},
+		{kind: 'ctx', text: 'c', no: 5, oldNo: 5, newNo: 5},
+	];
+	const [back] = createDecoder('toClient').push(line(withRows(rows)));
+	assert.deepEqual((back as {event: {request: {preview: {rows: unknown[]}}}}).event.request.preview.rows, rows);
+	const old = [{kind: 'del', text: 'a', no: 4}];
+	const [older] = createDecoder('toClient').push(line(withRows(old)));
+	assert.deepEqual((older as {event: {request: {preview: {rows: unknown[]}}}}).event.request.preview.rows, old);
+	assert.throws(() => createDecoder('toClient').push(line(withRows([{kind: 'add', text: 'x', newNo: 'one'}]))), ProtocolError);
+	assert.throws(() => createDecoder('toClient').push(line(withRows([{kind: 'gap', text: '', count: 'x'}]))), ProtocolError);
+});

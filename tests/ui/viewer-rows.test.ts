@@ -12,3 +12,14 @@ test('the transcript viewer wraps once per width and reuses the rows while scrol
 	assert.notEqual(viewerRowsOf(v, 21), rows);
 	assert.equal(viewerRowsOf(v, 21).length, 3);
 });
+
+test('render items are laid out per width and cached with the rows', () => {
+	const widths: number[] = [];
+	const item = {render: (w: number) => (widths.push(w), [`card ${w}`, 'second'])};
+	const v = {lines: ['head', item], top: -1};
+	const rows = viewerRowsOf(v, 21);
+	assert.deepEqual(rows, ['head', 'card 20', 'second']);
+	assert.equal(viewerRowsOf(v, 21), rows);
+	assert.deepEqual(widths, [20]);
+	assert.deepEqual(viewerRowsOf(v, 11), ['head', 'card 10', 'second']);
+});

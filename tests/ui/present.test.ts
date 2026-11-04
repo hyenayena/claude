@@ -2,7 +2,7 @@ import {SGR} from '../helpers/sgr16.js';
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {makeScrub} from '../../src/chat/scrub.js';
-import {stringCells} from '../../src/kit.js';
+import {stringCells, stripStyles, styledCells, withColorDepth, type ColorDepth} from '../../src/kit.js';
 import {
 	formatAssistantBlock,
 	formatError,
@@ -215,11 +215,8 @@ test('tool results: Edit and Write summarise, refusals show denied, Bash keeps t
 	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
 	const block = (name: string, input: unknown, isError: boolean, text: string) =>
 		strip(formatToolBlock({name, input, isError, text}, scrub));
-	assert.match(
-		block('Edit', {file_path: '/app/a.ts', old_string: 'a', new_string: 'b\nc'}, false, 'The file has been updated'),
-		/⎿ {2}Updated \/app\/a\.ts with 2 additions and 1 removal$/m,
-	);
-	assert.match(block('Write', {file_path: '/app/b.ts', content: 'x\ny\n'}, false, 'File created'), /⎿ {2}Wrote 2 lines to \/app\/b\.ts$/m);
+	assert.match(block('Edit', {file_path: '/app/a.ts', old_string: 'a', new_string: 'b\nc'}, false, 'The file has been updated'), /^● Edit {2}▫? ?.*\/app\/a\.ts {2}\+2 −1/m);
+	assert.match(block('Write', {file_path: '/app/b.ts', content: 'x\ny\n'}, false, 'File created'), /^● Write {2}◇ \/app\/b\.ts {2}\+2 −0 {2}new file$/m);
 	assert.match(block('Read', {file_path: '/app/b.ts'}, false, '1\tx\n2\ty\n'), /⎿ {2}Read 2 lines$/);
 	assert.match(block('Glob', {pattern: '*.ts'}, false, '/a.ts\n/b.ts'), /⎿ {2}Found 2 files$/);
 	assert.match(block('Glob', {pattern: '*.ts'}, false, 'No files found'), /⎿ {2}Found 0 files$/);
@@ -334,79 +331,93 @@ test('assistantPrint lays the block out again for each width, with actions for t
 	assert.deepEqual(assistantPrint('plain', id).options.render!(50), {text: '● plain'});
 });
 
-test('an Edit shows its summary, then the whole diff in red and green with line numbers', () => {
-	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
+const SGR_ANY = new RegExp(`${ESC}\\[[0-9;]*m`, 'g');
+const onlySgr = (s: string): boolean => !s.replace(SGR_ANY, '').includes(ESC) && !s.includes('\u0007') && !s.includes('‮');
+const cardOf = (t: Parameters<typeof formatToolBlock>[0], width?: number, depth: ColorDepth = '16') =>
+	withColorDepth(depth, () => formatToolBlock(t, scrub, width));
+
+test('an Edit is a file card: header with counts, then numbered rows in red and green', () => {
 	const patch = {hunks: [{oldStart: 9, newStart: 9, lines: [' keep', '-old', '+new1', '+new2']}]};
-	const raw = formatToolBlock({name: 'Edit', input: {file_path: '/a.ts'}, isError: false, text: 'ok', patch}, scrub);
-	assert.deepEqual(strip(raw).split('\n'), [
-		'● Edit(/a.ts)',
-		'  ⎿  Updated /a.ts with 2 additions and 1 removal',
-		'      9   keep',
-		'     10 - old',
-		'     10 + new1',
-		'     11 + new2',
+	const raw = cardOf({name: 'Edit', input: {file_path: '/a.ts'}, isError: false, text: 'ok', patch}, 80);
+	assert.deepEqual(stripStyles(raw).split('\n'), [
+		'● Edit  ◇ /a.ts  +2 −1',
+		'  │  9  9   keep',
+		'  │ 10    - old',
+		'  │    10 + new1',
+		'  │    11 + new2',
 	]);
-	assert.ok(raw.includes(`${SGR.red}10 - old${SGR.reset}`));
-	assert.ok(raw.includes(`${SGR.green}10 + new1${SGR.reset}`));
+	assert.ok(raw.includes(`${ESC}[0;31m-`) || raw.includes(`${ESC}[31m-`) || raw.includes('31m'));
+	assert.ok(onlySgr(raw));
+	const rows = raw.split('\n');
+	assert.ok(rows[2]!.includes('31'));
+	assert.ok(rows[3]!.includes('32'));
 
-	const big = {hunks: [{oldStart: 1, newStart: 1, lines: Array.from({length: 50}, (_, i) => `+l${i}`)}]};
-	const rows = strip(formatToolBlock({name: 'Edit', input: {file_path: '/a.ts'}, isError: false, text: 'ok', patch: big}, scrub, 80)).split('\n');
-	assert.equal(rows.length, 2 + 50);
-	assert.ok(!rows.some(r => r.includes('ctrl+o')));
+	const big = {hunks: [{oldStart: 1, newStart: 1, lines: Array.from({length: 60}, (_, i) => `+l${i}`)}]};
+	const capped = stripStyles(cardOf({name: 'Edit', input: {file_path: '/a.ts'}, isError: false, text: 'ok', patch: big}, 80)).split('\n');
+	assert.equal(capped.length, 1 + 40);
+	assert.match(capped[32]!, /… \+21 lines \(ctrl\+o to expand\)$/);
+	assert.match(capped.at(-1)!, /l59$/);
 
-	const fallback = strip(formatToolBlock({name: 'Edit', input: {file_path: '/a.ts', old_string: 'a', new_string: 'b'}, isError: false, text: 'ok'}, scrub));
-	assert.deepEqual(fallback.split('\n').slice(2), ['     - a', '     + b']);
+	const fallback = stripStyles(cardOf({name: 'Edit', input: {file_path: '/a.ts', old_string: 'a', new_string: 'b'}, isError: false, text: 'ok'}, 80)).split('\n');
+	assert.deepEqual(fallback.slice(1), ['  │ - a', '  │ + b']);
 });
 
-test('a Write shows the head of a new file, an overwrite as a diff', () => {
-	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
+test('a Write shows the head of a new file, an overwrite as a diff, and the same content twice is a bare header', () => {
 	const content = Array.from({length: 13}, (_, i) => `l${i + 1}`).join('\n');
-	const created = strip(formatToolBlock({name: 'Write', input: {file_path: '/n.ts', content}, isError: false, text: 'ok', patch: {hunks: [], created: true}}, scrub)).split('\n');
-	assert.equal(created[1], '  ⎿  Wrote 13 lines to /n.ts');
-	assert.equal(created[2], '      1 + l1');
-	assert.equal(created.length, 2 + 10 + 1);
-	assert.equal(created.at(-1), '     … +3 lines (ctrl+o to expand)');
+	const created = stripStyles(cardOf({name: 'Write', input: {file_path: '/n.ts', content}, isError: false, text: 'ok', patch: {hunks: [], created: true}}, 80)).split('\n');
+	assert.equal(created[0], '● Write  ◇ /n.ts  +13 −0  new file');
+	assert.equal(created[1], '  │  1 l1');
+	assert.equal(created.length, 1 + 10 + 1);
+	assert.equal(created.at(-1), '  │ … +3 lines (ctrl+o to expand)');
 
 	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: ['-a', '-b', '+c']}]};
-	const over = strip(formatToolBlock({name: 'Write', input: {file_path: '/n.ts', content: 'c'}, isError: false, text: 'ok', patch}, scrub)).split('\n');
-	assert.deepEqual(over.slice(1), ['  ⎿  Updated /n.ts with 1 addition and 2 removals', '     1 - a', '     2 - b', '     1 + c']);
+	const over = stripStyles(cardOf({name: 'Write', input: {file_path: '/n.ts', content: 'c'}, isError: false, text: 'ok', patch}, 80)).split('\n');
+	assert.deepEqual(over, ['● Write  ◇ /n.ts  +1 −2', '  │ 1   - a', '  │ 2   - b', '  │   1 + c']);
 
-	const same = strip(formatToolBlock({name: 'Write', input: {file_path: '/n.ts', content: 'c'}, isError: false, text: 'ok', patch: {hunks: []}}, scrub));
-	assert.deepEqual(same.split('\n').slice(1), ['  ⎿  Wrote 1 line to /n.ts']);
+	const same = stripStyles(cardOf({name: 'Write', input: {file_path: '/n.ts', content: 'c'}, isError: false, text: 'ok', patch: {hunks: []}}, 80));
+	assert.equal(same, '● Write  ◇ /n.ts  +0 −0');
 });
 
-test('diff rows wrap inside the width, and their lines are scrubbed', () => {
-	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
+test('card rows stay inside the width and their lines are scrubbed', () => {
 	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: [`-${'x'.repeat(80)}`, `+${dirty}`, ` ${'界'.repeat(30)}`]}]};
-	const width = 30;
-	const raw = formatToolBlock({name: 'Edit', input: {file_path: `/${'p'.repeat(60)}`}, isError: false, text: 'ok', patch}, scrub, width);
-	assert.ok(onlyConstantEscapes(raw), JSON.stringify(raw));
-	assert.ok(!raw.includes(SECRET));
-	const rows = strip(raw).split('\n');
-	for (const r of rows) assert.ok(stringCells(r) <= width, JSON.stringify(r));
-	assert.ok(rows.some(r => r.startsWith('     1 - xxx')));
-	assert.ok(rows.some(r => r.startsWith('         xxx')));
-
+	for (const width of [20, 30, 60, 100]) {
+		for (const depth of ['truecolor', '16', 'none'] as ColorDepth[]) {
+			const raw = cardOf({name: 'Edit', input: {file_path: `/${'p'.repeat(60)}`}, isError: false, text: 'ok', patch}, width, depth);
+			assert.ok(onlySgr(raw), JSON.stringify(raw));
+			assert.ok(!raw.includes(SECRET));
+			for (const r of raw.split('\n')) assert.ok(styledCells(r) <= width, `${width} ${depth}: ${JSON.stringify(stripStyles(r))}`);
+		}
+	}
 	const content = Array.from({length: 12}, () => 'y'.repeat(70)).join('\n');
-	const head = strip(formatToolBlock({name: 'Write', input: {file_path: '/n', content}, isError: false, text: 'ok'}, scrub, width)).split('\n');
-	for (const r of head) assert.ok(stringCells(r) <= width, JSON.stringify(r));
-	assert.match(head.at(-1) ?? '', /^ {5}… \+2 lines/);
+	const head = stripStyles(cardOf({name: 'Write', input: {file_path: '/n', content}, isError: false, text: 'ok'}, 30)).split('\n');
+	for (const r of head) assert.ok(stringCells(r) <= 30, JSON.stringify(r));
+	assert.match(head.at(-1) ?? '', /^ {2}│ … \+2 lines/);
 });
 
-test('errors and refusals of Edit and Write keep the old result, without a diff', () => {
+test('errors and refusals of Edit and Write keep the old result, without a card', () => {
 	const strip = (s: string) => s.replace(/\u001b\[\d+m/g, '');
 	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: ['-a', '+b']}]};
 	for (const name of ['Edit', 'Write']) {
 		const out = strip(formatToolBlock({name, input: {file_path: '/a.ts', content: 'b'}, isError: true, text: 'boom', patch}, scrub));
 		assert.ok(!out.includes('+ b') && !out.includes('- a'), out);
 		assert.ok(out.split('\n').length <= 3, out);
+		assert.ok(out.startsWith(`● ${name}(/a.ts)`), out);
 	}
+});
+
+test('an Edit with word-level and syntax colours at truecolor, tinted over the whole row', () => {
+	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: ['-const total = count + 1;', '+const total = count + 2;']}]};
+	const rows = cardOf({name: 'Edit', input: {file_path: '/a.ts'}, isError: false, text: 'ok', patch}, 80, 'truecolor').split('\n');
+	assert.equal(styledCells(rows[1]!), 80);
+	assert.ok(rows[1]!.includes('48;2;74;31;36'));
+	assert.ok(rows[2]!.includes('48;2;31;58;36'));
+	assert.ok(rows[2]!.includes('48;2;47;107;58'));
 });
 
 test('secrets and escapes in patch lines never reach the output; a CRLF and a missing width are fine', () => {
 	const patch = {hunks: [{oldStart: 1, newStart: 1, lines: [`-${dirty}`, `+line\r`, `\\ No newline at end of file`]}]};
-	const raw = formatToolBlock({name: 'Edit', input: {file_path: '/a.ts'}, isError: false, text: 'ok', patch}, scrub);
-	assert.ok(onlyConstantEscapes(raw), JSON.stringify(raw));
+	const raw = cardOf({name: 'Edit', input: {file_path: '/a.ts'}, isError: false, text: 'ok', patch});
+	assert.ok(onlySgr(raw), JSON.stringify(raw));
 	assert.ok(!raw.includes(SECRET) && !raw.includes('\r'));
 	assert.ok(raw.includes('[redacted]'));
 });

@@ -70,8 +70,9 @@ test('Edit prompt shows the path header, the preview label and the diff', async 
 	const frame = await show(tool(req));
 	assert.equal(frame.split('\n')[0], 'Edit: /app/a.ts');
 	assert.match(frame, /Preview of the proposed change \(approximate\)/);
-	assert.match(frame, /3 - old/);
-	assert.match(frame, /3 \+ new/);
+	const text = frame.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
+	assert.match(text, /│ 3 +- old/);
+	assert.match(text, /│ +3 \+ new/);
 	assert.match(frame, /Always-allow is not available for this command/);
 	assert.doesNotMatch(frame, /Always allow in this chat/);
 });

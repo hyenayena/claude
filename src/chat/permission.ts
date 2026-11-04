@@ -10,6 +10,9 @@ export type PreviewRow = {
 	kind: 'meta' | 'ctx' | 'add' | 'del' | 'gap';
 	text: string;
 	no?: number;
+	oldNo?: number;
+	newNo?: number;
+	count?: number;
 };
 
 export type Preview = {

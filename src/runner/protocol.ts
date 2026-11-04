@@ -320,6 +320,9 @@ const readPreview = (v: unknown): Preview => {
 				kind: oneOf(ro.kind, ['meta', 'ctx', 'add', 'del', 'gap'] as const, 'row kind'),
 				text: str(ro.text, 'row text', 20_000),
 				...(has(ro, 'no') && {no: num(ro.no, 'no')}),
+				...(has(ro, 'oldNo') && {oldNo: num(ro.oldNo, 'oldNo')}),
+				...(has(ro, 'newNo') && {newNo: num(ro.newNo, 'newNo')}),
+				...(has(ro, 'count') && {count: num(ro.count, 'count')}),
 			};
 		}),
 		added: num(o.added, 'added'),

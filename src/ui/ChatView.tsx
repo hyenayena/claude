@@ -5,7 +5,7 @@ import type {ChatController, ChatEvent} from '../chat/events.js';
 import {limitIndicator, systemClock, type Clock} from '../chat/limits.js';
 import {MODE_CYCLE, QUESTION_LIMITS, REASON_MAX} from '../chat/permission.js';
 import type {ChatMode, PermissionDecision, PermissionRequest} from '../chat/permission.js';
-import {sanitizeMultilineInput, truncateCells, wrapLines} from '../kit.js';
+import {sanitizeMultilineInput, truncateCells, wrapRows} from '../kit.js';
 import {layoutPanel, navigate, revealAgent, type PanelMove} from './agent-panel.js';
 import {createAgentStore} from './agent-store.js';
 import {agentViewLines} from './agent-view.js';
@@ -51,6 +51,7 @@ import {parseSlash, slashHints, type SlashHints} from './slash.js';
 import {commandHost, type ViewCommandInfo} from './view-commands.js';
 import {WorkingLine} from './WorkingLine.js';
 import {StatusBar, useViewHost} from './kit.js';
+import {preloadHighlighter} from './highlight.js';
 import {mouseHost, validEvent, type ViewMouseEvent} from './view-mouse.js';
 import {vimKey, vimStart, type VimEffect, type VimState} from './vim.js';
 import {matchFiles, mentionAt} from '../chat/files.js';
@@ -76,7 +77,7 @@ export interface ChatViewProps {
 	onInbox?: (deliver: ((text: string) => void) | undefined) => void;
 	files?: () => readonly string[];
 	openEditor?: (text: string) => Promise<string | undefined>;
-	loadTranscript?: () => Promise<string[]>;
+	loadTranscript?: () => Promise<ViewerLine[]>;
 	inputMode?: () => 'normal' | 'vim';
 	reveal?: (s: string) => string;
 	projectDir?: string;
@@ -128,11 +129,12 @@ export const clearSentHistory = (): void => {
 	sentHistory.length = 0;
 };
 const COMMAND_LIST_MS = 1000;
-type Viewer = {lines: string[]; top: number; wrapped?: {width: number; rows: string[]}};
+export type ViewerLine = string | {render(width: number): string[]};
+type Viewer = {lines: ViewerLine[]; top: number; wrapped?: {width: number; rows: string[]}};
 
 export function viewerRowsOf(v: Viewer, columns: number): string[] {
 	const width = Math.max(1, columns - 1);
-	if (v.wrapped?.width !== width) v.wrapped = {width, rows: wrapLines(v.lines, width, {mode: 'char'})};
+	if (v.wrapped?.width !== width) v.wrapped = {width, rows: v.lines.flatMap(l => (typeof l === 'string' ? wrapRows(l, width, {mode: 'char'}) : l.render(width)))};
 	return v.wrapped.rows;
 }
 
@@ -461,6 +463,10 @@ export function ChatView(props: ChatViewProps) {
 
 	const sentInitial = useRef(false);
 	useEffect(() => {
+		void preloadHighlighter();
+	}, []);
+
+	useEffect(() => {
 		const text = props.initialSend;
 		if (sentInitial.current || !text) return;
 		sentInitial.current = true;
@@ -683,7 +689,7 @@ export function ChatView(props: ChatViewProps) {
 		props.loadTranscript!().then(
 			lines => {
 				if (!viewerRef.current) return;
-				viewerRef.current = {lines: lines.length > 0 ? lines.map(l => scrub(l)) : ['The transcript is empty so far.'], top: -1};
+				viewerRef.current = {lines: lines.length > 0 ? lines.map(l => (typeof l === 'string' ? scrub(l) : l)) : ['The transcript is empty so far.'], top: -1};
 				render();
 			},
 			(error: unknown) => {

@@ -14,8 +14,8 @@ test('identical and empty inputs give no rows', () => {
 test('single line changes', () => {
 	const p = diffLines('a', 'b');
 	assert.deepEqual(p.rows, [
-		{kind: 'del', text: 'a', no: 1},
-		{kind: 'add', text: 'b', no: 1},
+		{kind: 'del', text: 'a', no: 1, oldNo: 1},
+		{kind: 'add', text: 'b', no: 1, newNo: 1},
 	]);
 	assert.equal(p.added, 1);
 	assert.equal(p.removed, 1);
@@ -33,6 +33,11 @@ test('context, line numbers and gap rows', () => {
 	assert.equal(p.rows[1]?.no, 12);
 	assert.equal(p.rows[4]?.no, 15);
 	assert.equal(p.rows[9]?.text, '... 12 unchanged lines');
+	assert.equal(p.rows[0]?.count, 11);
+	assert.equal(p.rows[9]?.count, 12);
+	assert.deepEqual(p.rows[4], {kind: 'del', text: 'l15', no: 15, oldNo: 15});
+	assert.deepEqual(p.rows[5], {kind: 'add', text: 'CHANGED', no: 15, newNo: 15});
+	assert.deepEqual(p.rows[1], {kind: 'ctx', text: 'l12', no: 12, oldNo: 12, newNo: 12});
 	assert.equal(p.approximate, false);
 });
 
@@ -152,8 +157,8 @@ test('locateEdit never throws', () => {
 test('previewNewFile', () => {
 	const p = previewNewFile('a\nb\n');
 	assert.deepEqual(p.rows, [
-		{kind: 'add', text: 'a', no: 1},
-		{kind: 'add', text: 'b', no: 2},
+		{kind: 'add', text: 'a', no: 1, newNo: 1},
+		{kind: 'add', text: 'b', no: 2, newNo: 2},
 		{kind: 'meta', text: '2 lines, 4 bytes'},
 	]);
 	assert.equal(p.added, 2);

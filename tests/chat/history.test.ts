@@ -80,3 +80,29 @@ test('readTranscriptDetail shows prompts, answers, tool calls with input and the
 	const lines = await readTranscriptDetail(file);
 	assert.deepEqual(lines.filter(l => l !== ''), ['> read it', '● Read', '  {', '    "file_path": "/app/x.ts"', '  }', '  ⎿ line 1', '    line 2', 'Done.']);
 });
+
+test('readTranscriptDetail turns a file tool call into one file item filled by its result', async () => {
+	const {readTranscriptDetail} = await import('../../src/chat/history.js');
+	const {dir} = await setup();
+	const file = join(dir, `${A}.jsonl`);
+	const patch = {structuredPatch: [{oldStart: 3, newStart: 3, lines: [' a', '-b', '+c']}], type: 'update'};
+	await writeFile(
+		file,
+		jsonl([
+			user('edit it'),
+			{type: 'assistant', message: {id: 'm1', content: [{type: 'tool_use', id: 't1', name: 'Edit', input: {file_path: '/app/x.ts', old_string: 'b', new_string: 'c'}}]}},
+			{...user([{type: 'tool_result', tool_use_id: 't1', content: 'The file has been updated'}]), toolUseResult: patch},
+			{type: 'assistant', message: {id: 'm2', content: [{type: 'tool_use', id: 't2', name: 'Write', input: {file_path: '/app/y.ts', content: 'x'}}]}},
+			{...user([{type: 'tool_result', tool_use_id: 't2', content: 'boom', is_error: true}]), toolUseResult: 'text'},
+			assistant('m3', 'Done.'),
+		]),
+	);
+	const lines = await readTranscriptDetail(file);
+	const files = lines.filter((l): l is Exclude<typeof l, string> => typeof l !== 'string');
+	assert.deepEqual(files, [
+		{kind: 'file', name: 'Edit', input: {file_path: '/app/x.ts', old_string: 'b', new_string: 'c'}, isError: false, patch: {hunks: [{oldStart: 3, newStart: 3, lines: [' a', '-b', '+c']}]}},
+		{kind: 'file', name: 'Write', input: {file_path: '/app/y.ts', content: 'x'}, isError: true},
+	]);
+	const text = lines.filter((l): l is string => typeof l === 'string').filter(l => l !== '');
+	assert.deepEqual(text, ['> edit it', 'Done.']);
+});

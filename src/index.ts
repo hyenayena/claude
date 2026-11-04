@@ -1,7 +1,7 @@
 import type {Logger, ModulePlugin} from '../../../src/api.js';
 import {createClaudeCommands} from './commands.js';
 import * as kit from './kit.js';
-import {chatGallerySection} from './ui/gallery.js';
+import {chatGallerySection, diffGallerySection} from './ui/gallery.js';
 import type {ChatUi} from './chat/command.js';
 import type {ConsoleSdk} from './chat/console-tools.js';
 import {ensureSessionDir} from './chat/shell-tmp.js';
@@ -51,7 +51,13 @@ const loadUi = (): Promise<ChatUi> => import('./ui/mount.js');
 // The gallery is optional: an older core has no registry, and a failure here must not stop the plugin.
 function registerGallery(log: Logger): void {
 	try {
-		if (typeof kit.registerGallerySection !== 'function' || !kit.registerGallerySection(chatGallerySection)) log.warn('gallery section skipped');
+		if (typeof kit.registerGallerySection !== 'function') {
+			log.warn('gallery section skipped');
+			return;
+		}
+		for (const section of [chatGallerySection, diffGallerySection]) {
+			if (!kit.registerGallerySection(section)) log.warn('gallery section skipped', {section: section.name});
+		}
 	} catch (err) {
 		log.warn('gallery section skipped', {err});
 	}

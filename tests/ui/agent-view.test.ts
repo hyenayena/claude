@@ -40,7 +40,7 @@ test('the subagent view shows the prompt, every entry and the final report', () 
 	assert.match(out, /Thinking/);
 	assert.match(out, /pondering/);
 	assert.match(out, /I will edit/);
-	assert.match(out, /Edit\(\/x\.ts\)/);
+	assert.match(out, /Edit +\S+ \/x\.ts/);
 	assert.match(out, /old/);
 	assert.match(out, /\bnew\b/);
 	assert.match(out, /Read\(\/y\.ts\)/);

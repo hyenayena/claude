@@ -13,6 +13,7 @@ import type {LockInfo} from '../sessions/lock.js';
 import type {ClaudeState, ChatQueryFn, Credential, CredentialInfo} from '../types.js';
 import type {ChatViewProps, ListPickerProps, WaitingViewProps} from '../ui/mount.js';
 import {formatBanner} from '../ui/banner.js';
+import {formatFileCard} from '../ui/file-card.js';
 import {assistantPrint, formatNotice, formatUserLine} from '../ui/present.js';
 import {readHistory, readTranscriptDetail} from './history.js';
 import {listProjectFiles} from './files.js';
@@ -459,7 +460,9 @@ const runLocked = async (
 				files,
 				loadTranscript: async () => {
 					const id = session.sessionId;
-					return id ? readTranscriptDetail(transcriptFile(paths.configDir, paths.projectDir, id)) : [];
+					if (!id) return [];
+					const detail = await readTranscriptDetail(transcriptFile(paths.configDir, paths.projectDir, id));
+					return detail.map(item => (typeof item === 'string' ? item : {render: (width: number) => formatFileCard(item, scrub, width, {full: true}).split('\n')}));
 				},
 				...(deps.inputMode && {inputMode: deps.inputMode}),
 				...(ctx.suspend && {

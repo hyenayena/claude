@@ -1,5 +1,7 @@
 import {open, readdir, stat} from 'node:fs/promises';
 import path from 'node:path';
+import type {ToolPatch} from './events.js';
+import {toolPatch} from './normalize.js';
 import {titleFromPrompt, transcriptFile} from './title.js';
 
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -19,6 +21,8 @@ type Entry = {
 	aiTitle?: unknown;
 	customTitle?: unknown;
 	message?: {id?: unknown; content?: unknown};
+	toolUseResult?: unknown;
+	tool_use_result?: unknown;
 };
 
 async function readTail(file: string): Promise<string | undefined> {
@@ -156,12 +160,32 @@ const capLines = (text: string, max: number): string[] => {
 	return lines.length > max ? [...lines.slice(0, max), `… ${lines.length - max} more lines`] : lines;
 };
 
-export async function readTranscriptDetail(file: string): Promise<string[]> {
+export type DetailFile = {kind: 'file'; name: string; input: unknown; patch?: ToolPatch; isError: boolean};
+export type DetailLine = string | DetailFile;
+
+const DETAIL_FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+
+const linesIn = (v: unknown): number => (typeof v === 'string' && v !== '' ? v.split('\n').length : 0);
+
+function fileRows(input: unknown): number {
+	if (typeof input !== 'object' || input === null) return 2;
+	const o = input as Record<string, unknown>;
+	const edits = Array.isArray(o['edits']) ? o['edits'].slice(0, 50).reduce((n: number, e) => n + linesIn((e as {old_string?: unknown})?.old_string) + linesIn((e as {new_string?: unknown})?.new_string), 0) : 0;
+	return 2 + linesIn(o['content']) + linesIn(o['old_string']) + linesIn(o['new_string']) + linesIn(o['new_source']) + edits;
+}
+
+export async function readTranscriptDetail(file: string): Promise<DetailLine[]> {
 	const text = await readTail(file);
 	if (text === undefined) return [];
-	const out: string[] = [];
+	const out: DetailLine[] = [];
+	let rows = 0;
+	const files = new Map<string, DetailFile>();
 	const push = (...lines: string[]) => {
-		for (const l of lines) if (out.length < DETAIL_MAX_LINES) out.push(l);
+		for (const l of lines) {
+			if (rows >= DETAIL_MAX_LINES) return;
+			out.push(l);
+			rows++;
+		}
 	};
 	for (const e of entries(text)) {
 		if (e.isSidechain === true) continue;
@@ -175,6 +199,13 @@ export async function readTranscriptDetail(file: string): Promise<string[]> {
 			if (!Array.isArray(content)) continue;
 			for (const b of content as Array<Record<string, unknown>>) {
 				if (b?.['type'] !== 'tool_result') continue;
+				const item = files.get(String(b['tool_use_id']));
+				if (item !== undefined) {
+					item.isError = b['is_error'] === true;
+					const patch = toolPatch(e.toolUseResult ?? e.tool_use_result);
+					if (patch !== undefined && (content as unknown[]).length === 1) item.patch = patch;
+					continue;
+				}
 				const lines = capLines(blockText(b['content']), DETAIL_RESULT_LINES);
 				push(...lines.map((l, i) => `${i === 0 ? '  ⎿ ' : '    '}${l}`), ...(b['is_error'] === true ? ['    (error)'] : []));
 			}
@@ -185,6 +216,14 @@ export async function readTranscriptDetail(file: string): Promise<string[]> {
 			if (b?.['type'] === 'text' && typeof b['text'] === 'string') push('', ...(b['text'] as string).split('\n'));
 			else if (b?.['type'] === 'thinking' && typeof b['thinking'] === 'string' && (b['thinking'] as string).trim()) {
 				push('', '✻ Thinking', ...(b['thinking'] as string).split('\n').map(l => `  ${l}`));
+			} else if (b?.['type'] === 'tool_use' && DETAIL_FILE_TOOLS.has(String(b['name']))) {
+				const item: DetailFile = {kind: 'file', name: String(b['name']), input: b['input'] ?? {}, isError: false};
+				const need = fileRows(item.input);
+				if (rows + need > DETAIL_MAX_LINES) continue;
+				push('');
+				out.push(item);
+				rows += need;
+				if (typeof b['id'] === 'string') files.set(b['id'], item);
 			} else if (b?.['type'] === 'tool_use') {
 				const input = JSON.stringify(b['input'] ?? {}, null, 2) ?? '';
 				push('', `● ${String(b['name'] ?? 'tool')}`, ...capLines(input, DETAIL_RESULT_LINES).map(l => `  ${l}`));

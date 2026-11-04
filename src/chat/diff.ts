@@ -8,7 +8,7 @@ export type DiffOptions = {
 	maxRows?: number;
 };
 
-type Op = {t: 'eq' | 'add' | 'del'; text: string; no: number};
+type Op = {t: 'eq' | 'add' | 'del'; text: string; no: number; oldNo?: number; newNo?: number};
 
 const splitLines = (text: string): string[] => {
 	if (text === '') {
@@ -152,7 +152,7 @@ function diffUnsafe(oldText: string, newText: string, opts: DiffOptions): Previe
 
 	const ops: Op[] = [];
 	for (let i = 0; i < pre; i++) {
-		ops.push({t: 'eq', text: shown(oldLines[i] as string), no: i + 1});
+		ops.push({t: 'eq', text: shown(oldLines[i] as string), no: i + 1, oldNo: i + 1, newNo: i + 1});
 	}
 	let oi = pre;
 	let ni = pre;
@@ -160,21 +160,21 @@ function diffUnsafe(oldText: string, newText: string, opts: DiffOptions): Previe
 	let removed = 0;
 	for (const step of script) {
 		if (step === 'eq') {
-			ops.push({t: 'eq', text: shown(newLines[ni] as string), no: ni + 1});
+			ops.push({t: 'eq', text: shown(newLines[ni] as string), no: ni + 1, oldNo: oi + 1, newNo: ni + 1});
 			oi++;
 			ni++;
 		} else if (step === 'del') {
-			ops.push({t: 'del', text: shown(oldLines[oi] as string), no: oi + 1});
+			ops.push({t: 'del', text: shown(oldLines[oi] as string), no: oi + 1, oldNo: oi + 1});
 			oi++;
 			removed++;
 		} else {
-			ops.push({t: 'add', text: shown(newLines[ni] as string), no: ni + 1});
+			ops.push({t: 'add', text: shown(newLines[ni] as string), no: ni + 1, newNo: ni + 1});
 			ni++;
 			added++;
 		}
 	}
 	for (let i = 0; i < suf; i++) {
-		ops.push({t: 'eq', text: shown(newLines[ni + i] as string), no: ni + i + 1});
+		ops.push({t: 'eq', text: shown(newLines[ni + i] as string), no: ni + i + 1, oldNo: oi + i + 1, newNo: ni + i + 1});
 	}
 
 	if (added === 0 && removed === 0) {
@@ -204,12 +204,18 @@ function diffUnsafe(oldText: string, newText: string, opts: DiffOptions): Previe
 			while (j < ops.length && !keep[j]) {
 				j++;
 			}
-			rows.push({kind: 'gap', text: `... ${j - i} unchanged lines`});
+			rows.push({kind: 'gap', text: `... ${j - i} unchanged lines`, count: j - i});
 			i = j;
 			continue;
 		}
 		const op = ops[i] as Op;
-		rows.push({kind: op.t === 'eq' ? 'ctx' : op.t, text: op.text, no: op.no});
+		rows.push({
+			kind: op.t === 'eq' ? 'ctx' : op.t,
+			text: op.text,
+			no: op.no,
+			...(op.oldNo !== undefined && {oldNo: op.oldNo}),
+			...(op.newNo !== undefined && {newNo: op.newNo}),
+		});
 		i++;
 	}
 	return {rows, added, removed, truncated, approximate: false};
@@ -264,7 +270,7 @@ export function previewNewFile(content: string): Preview {
 	const all = splitLines(text);
 	const rows: PreviewRow[] = all
 		.slice(0, NEW_FILE_ROWS)
-		.map((line, i) => ({kind: 'add' as const, text: shown(line), no: i + 1}));
+		.map((line, i) => ({kind: 'add' as const, text: shown(line), no: i + 1, newNo: i + 1}));
 	const truncated = all.length > NEW_FILE_ROWS;
 	if (truncated) {
 		rows.push({kind: 'gap', text: `... ${all.length - NEW_FILE_ROWS} more lines`});

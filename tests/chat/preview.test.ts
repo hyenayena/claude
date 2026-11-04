@@ -33,7 +33,7 @@ test('Edit shows real context and line numbers', async () => {
 	const p = await buildPreview('Edit', {file_path: 'a.txt', old_string: 'l5', new_string: 'FIVE'}, scope);
 	assert.ok(p);
 	const del = p.rows.find(r => r.kind === 'del');
-	assert.deepEqual(del, {kind: 'del', text: 'l5', no: 5});
+	assert.deepEqual(del, {kind: 'del', text: 'l5', no: 5, oldNo: 5});
 	assert.equal(p.approximate, false);
 	assert.ok(texts(p).includes('l2'));
 });

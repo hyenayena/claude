@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
 
-for (const name of ['present.ts', 'markdown.ts', 'banner.ts', 'agent-view.ts']) {
+for (const name of ['present.ts', 'markdown.ts', 'banner.ts', 'agent-view.ts', 'file-card.ts', 'highlight.ts']) {
 	test(`${name} takes its colours from the theme, not from escape literals`, () => {
 		const source = readFileSync(fileURLToPath(new URL(`../../src/ui/${name}`, import.meta.url)), 'utf8');
 		assert.ok(!source.includes('\\u001b'), 'a \\u001b literal');

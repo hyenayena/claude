@@ -10,9 +10,8 @@ import {SGR_ATTR, sliceCells, stringCells, truncateCells, wrapRows} from '../kit
 import {sgr, type Sgr} from './sgr.js';
 import type {PrintAction, PrintOptions} from '../../../../src/api.js';
 import type {RouteInfo, ToolPatch} from '../chat/events.js';
-import type {PreviewRow} from '../chat/permission.js';
 import {openFenceLine, renderMarkdownBlocks} from './markdown.js';
-import {WRITE_HEAD_LINES, editRows, writeRows} from './tool-diff.js';
+import {FILE_TOOLS, formatFileCard} from './file-card.js';
 import {LIVE, parseTodos, ROUTE_TOOL_NAME, type Out, type Phase, type RunningTool, type StatusLine, type Todo} from './transcript.js';
 import type {Tier} from '../chat/tiers.js';
 
@@ -198,25 +197,7 @@ const countLines = (s: string): number => {
 	return s.endsWith('\n') ? n - 1 : n;
 };
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
-const pathOf = (t: ToolResult, scrub: Scrub): string | undefined => {
-	const p = field('file_path')(t.input);
-	return p === '' ? undefined : scrub(p);
-};
-
 const RESULT_REGISTRY: Record<string, ResultSummary> = {
-	Edit: (t, scrub) => {
-		const path = pathOf(t, scrub);
-		if (t.isError || path === undefined) return undefined;
-		const {added, removed} = editRows(t.input, t.patch);
-		return `Updated ${path} with ${plural(added, 'addition')} and ${plural(removed, 'removal')}`;
-	},
-	Write: (t, scrub) => {
-		const path = pathOf(t, scrub);
-		if (t.isError || path === undefined) return undefined;
-		const w = writeRows(t.input, t.patch);
-		if (w.mode === 'diff') return `Updated ${path} with ${plural(w.added, 'addition')} and ${plural(w.removed, 'removal')}`;
-		return `Wrote ${plural(countLines(field('content')(t.input)), 'line')} to ${path}`;
-	},
 	Read: t => (t.isError ? undefined : `Read ${plural(countLines(t.text.replace(/\n+$/, '')), 'line')}`),
 	Glob: t => {
 		if (t.isError) return undefined;
@@ -262,45 +243,6 @@ export const resultLines = (lines: string[]): string[] => lines.map((l, i) => `$
 
 export const TOOL_RESULT_ROWS = 5;
 
-const diffTone = (sg: Sgr): Record<PreviewRow['kind'], string> => ({del: sg.removed, add: sg.added, ctx: sg.muted, gap: sg.muted, meta: sg.muted});
-
-function diffRowLines(rows: PreviewRow[], scrub: Scrub, sg: Sgr, inner?: number): string[] {
-	const tone = diffTone(sg);
-	const wrap = (text: string, max: number): string[] => (inner === undefined ? [text] : wrapRows(text, Math.max(1, max), {mode: 'char'}));
-	let digits = 0;
-	for (const r of rows) if (r.no !== undefined) digits = Math.max(digits, String(r.no).length);
-	const out: string[] = [];
-	for (const row of rows) {
-		const text = scrub(row.text).split('\n').join(' ');
-		if (row.kind === 'gap' || row.kind === 'meta') {
-			for (const part of wrap(row.kind === 'gap' && text === '' ? '…' : text, inner ?? 0)) out.push(paint(sg.muted, part));
-			continue;
-		}
-		const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' ';
-		const no = digits === 0 ? '' : `${(row.no === undefined ? '' : String(row.no)).padStart(digits)} `;
-		const gutter = `${no}${sign} `;
-		wrap(text, (inner ?? 0) - gutter.length).forEach((part, i) =>
-			out.push(paint(tone[row.kind], `${i === 0 ? gutter : ' '.repeat(gutter.length)}${part}`)),
-		);
-	}
-	return out;
-}
-
-function fileChangeRows(t: ToolResult, summary: string, scrub: Scrub, sg: Sgr, inner?: number): string[] {
-	const head = summary.split('\n').flatMap(l => (inner === undefined ? [l] : wrapRows(l, inner, {mode: 'char'})));
-	let rows: string[];
-	if (t.name === 'Edit') rows = diffRowLines(editRows(t.input, t.patch).rows, scrub, sg, inner);
-	else {
-		const w = writeRows(t.input, t.patch);
-		rows = diffRowLines(w.rows, scrub, sg, inner);
-		if (w.mode === 'head' && w.total > WRITE_HEAD_LINES) {
-			const more = `… +${w.total - WRITE_HEAD_LINES} lines (ctrl+o to expand)`;
-			rows.push(paint(sg.muted, inner === undefined ? more : truncateCells(more, inner)));
-		}
-	}
-	return [...resultLines(head).map(r => paint(sg.muted, r)), ...rows.map(r => `${RESULT_INDENT}${r}`)];
-}
-
 export function formatToolBlock(t: ToolResult, scrub: Scrub, width?: number): string {
 	const sg = sgr();
 	const dot = `${t.isError ? sg.error : sg.ok}●${sg.reset}`;
@@ -313,8 +255,9 @@ export function formatToolBlock(t: ToolResult, scrub: Scrub, width?: number): st
 	const refusal = refusalSummary(t);
 	const custom = refusal ?? RESULT_REGISTRY[t.name]?.(t, scrub);
 	const inner = width === undefined ? undefined : Math.max(1, width - RESULT_PREFIX.length);
-	if (refusal === undefined && custom !== undefined && (t.name === 'Edit' || t.name === 'Write')) {
-		return `${header}\n${fileChangeRows(t, custom, scrub, sg, inner).join('\n')}`;
+	if (refusal === undefined && !t.isError && (FILE_TOOLS as readonly string[]).includes(t.name)) {
+		const card = formatFileCard(t, scrub, width);
+		if (card !== '') return card;
 	}
 	const body = custom ?? scrub(t.text.slice(0, RESULT_INPUT_CAP)).replace(/\n+$/, '');
 	if (body.trim() === '') return t.isError ? `${header}\n${paint(sg.muted, `${RESULT_PREFIX}Error`)}` : header;

@@ -291,7 +291,7 @@ const fromAgent = (parent: string, msg: Loose): UiEvent[] => {
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
-const toolPatch = (v: unknown): ToolPatch | undefined => {
+export const toolPatch = (v: unknown): ToolPatch | undefined => {
 	if (!isRecord(v) || v['staged'] === true) return undefined;
 	const created = v['type'] === 'create';
 	const raw = v['structuredPatch'];

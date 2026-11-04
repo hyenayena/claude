@@ -1,6 +1,7 @@
 import type {Key} from 'ink';
 import {BASH_REVIEW_MAX, PAYLOAD_REVIEW_MAX, QUESTION_LIMITS, REASON_MAX} from '../chat/permission.js';
 import type {PermissionDecision, Preview, QuestionRequest, QuestionSpec, ToolRequest} from '../chat/permission.js';
+import {previewCardRows} from './file-card.js';
 import {sanitizeMultilineInput, wrapRows, type FrameRow, type Tone} from '../kit.js';
 
 export type Reveal = (s: string) => string;
@@ -424,31 +425,24 @@ function pushWrapped(rows: BodyRow[], text: string, tone: Tone, width: number, i
 	parts.forEach((part, i) => rows.push({text: `${i === 0 ? '' : indent}${part}`, tone}));
 }
 
-function previewRows(preview: Preview, reveal: Reveal, width: number): BodyRow[] {
-	const rows: BodyRow[] = [];
+const sliced = new WeakMap<Preview, Preview>();
+
+function previewRows(preview: Preview, path: string, reveal: Reveal, width: number): BodyRow[] {
 	let budget = PAYLOAD_REVIEW_MAX;
-	const digits = Math.max(1, ...preview.rows.map(r => String(r.no ?? '').length));
+	let kept = 0;
 	for (const row of preview.rows) {
-		if (budget <= 0) {
-			rows.push({text: '… [preview truncated]', tone: 'dim'});
-			break;
-		}
+		if (budget <= 0) break;
 		budget -= row.text.length + 1;
-		const text = reveal(row.text);
-		if (row.kind === 'gap') {
-			rows.push({text: text === '' ? '⋯' : text, tone: 'dim'});
-			continue;
-		}
-		if (row.kind === 'meta') {
-			pushWrapped(rows, text, 'dim', width);
-			continue;
-		}
-		const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' ';
-		const gutter = `${row.no === undefined ? ' '.repeat(digits) : String(row.no).padStart(digits)} ${sign} `;
-		const tone: Tone = row.kind === 'add' ? 'add' : row.kind === 'del' ? 'del' : 'plain';
-		const parts = wrapRows(text, Math.max(1, width - gutter.length), {mode: 'char'});
-		parts.forEach((part, i) => rows.push({text: `${i === 0 ? gutter : ' '.repeat(gutter.length)}${part}`, tone}));
+		kept++;
 	}
+	const cut = kept < preview.rows.length;
+	let shown = preview;
+	if (cut) {
+		shown = sliced.get(preview) ?? {...preview, rows: preview.rows.slice(0, kept)};
+		sliced.set(preview, shown);
+	}
+	const rows: BodyRow[] = previewCardRows(shown, path, reveal, width).map(text => ({text, tone: 'plain', styled: true}));
+	if (cut) rows.push({text: '… [preview truncated]', tone: 'dim'});
 	return rows;
 }
 
@@ -493,7 +487,7 @@ export function toolBodyRows(req: ToolRequest, reveal: Reveal, width: number): B
 			text: req.preview.approximate ? 'Preview of the proposed change (approximate):' : 'Preview of the proposed change:',
 			tone: 'dim',
 		});
-		rows.push(...previewRows(req.preview, reveal, width));
+		rows.push(...previewRows(req.preview, req.path ?? '', reveal, width));
 		if (req.preview.truncated) rows.push({text: '… [preview truncated]', tone: 'dim'});
 	} else {
 		rows.push({text: 'No preview is available for this change.', tone: 'warn'});

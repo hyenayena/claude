@@ -17,6 +17,7 @@ import {
 	type QuestionPromptState,
 	type ToolPromptState,
 } from '../../src/ui/prompt-state.js';
+import {styledCells, stripStyles} from '../../src/kit.js';
 import {questionReq, toolReq} from './testkit.js';
 
 const ch = (c: string): PromptKey => ({name: 'char', char: c});
@@ -354,4 +355,31 @@ test('blind mode (nothing reviewable on screen) only refuses', () => {
 	for (const key of [ch('1'), ch('o'), k('enter'), k('space')]) assert.equal(qpress(key).decision, undefined);
 	assert.deepEqual(qpress(ch('n')).decision, {kind: 'deny'});
 	assert.deepEqual(qpress(ch('s')).decision, {kind: 'deny', stop: true});
+});
+
+test('an Edit preview is drawn as styled card rows within the width, with the budget row', () => {
+	const preview = {
+		rows: [
+			{kind: 'gap' as const, text: '... 7 unchanged lines', count: 7},
+			{kind: 'ctx' as const, text: 'keep', no: 8, oldNo: 8, newNo: 8},
+			{kind: 'del' as const, text: 'const a = 1;', no: 9, oldNo: 9},
+			{kind: 'add' as const, text: 'const a = 2;', no: 9, newNo: 9},
+		],
+		added: 1,
+		removed: 1,
+		truncated: false,
+		approximate: false,
+	};
+	const req = toolReq({toolName: 'Edit', path: '/app/a.ts', input: {file_path: '/app/a.ts'}, always: false, preview});
+	const rows = toolBodyRows(req, s => s, 60);
+	const card = rows.filter(r => r.styled === true);
+	assert.equal(card.length, 4);
+	for (const r of card) assert.ok(styledCells(r.text) <= 60, r.text);
+	assert.match(card[0]!.text, /⋯ 7 unchanged lines/);
+	assert.match(stripStyles(card[2]!.text), /9 +- const a = 1;/);
+	assert.match(stripStyles(card[3]!.text), /9 \+ const a = 2;/);
+
+	const long = {...preview, rows: [...preview.rows, ...Array.from({length: 3000}, (_, i) => ({kind: 'add' as const, text: 'x'.repeat(100), newNo: 10 + i}))]};
+	const cut = toolBodyRows(toolReq({toolName: 'Edit', path: '/app/a.ts', input: {file_path: '/app/a.ts'}, always: false, preview: long}), s => s, 60);
+	assert.ok(cut.some(r => r.text === '… [preview truncated]'));
 });
