@@ -2,7 +2,9 @@ import type {AccountReason, ChatEvent, RouteInfo, ToolPatch, TurnOutcome, UiEven
 import type {RateLimitInfo} from '../chat/limits.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
 import type {Tier} from '../chat/tiers.js';
+import type {TurnSummary} from '../chat/turn-stats.js';
 import {isFoldable} from './tool-kind.js';
+import {showSummary} from './turn-summary.js';
 
 export const LIVE = {
 	maxRawChars: 2_000_000,
@@ -68,6 +70,7 @@ export interface TranscriptState {
 	limit?: RateLimitInfo;
 	pendingApiError?: string;
 	account?: string;
+	lastSummary?: TurnSummary;
 }
 
 export type ToolOut = {
@@ -88,6 +91,7 @@ export type Out =
 	| {kind: 'error'; message: string}
 	| {kind: 'api-error'; code: string}
 	| {kind: 'outcome'; outcome: Exclude<TurnOutcome, 'ok'>; error?: string}
+	| {kind: 'turn-summary'; summary: TurnSummary; outcome: TurnOutcome}
 	| {kind: 'audit'; entry: AuditEntry}
 	| {kind: 'mode'; mode: ChatMode; error?: string}
 	| {kind: 'account'; account: string; previous: string; reason: AccountReason}
@@ -178,6 +182,7 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 			if (state.status?.kind !== 'tool-input') return {state, out: []};
 			return {state: {...state, status: {...state.status, chars: state.status.chars + e.chars}}, out: []};
 		case 'cli-state':
+		case 'context':
 			return {state, out: []};
 		case 'task':
 			if (e.status === 'running' || !e.background) return {state: {...state}, out: []};
@@ -309,9 +314,11 @@ function reduceEvent(state: TranscriptState, event: ChatEvent): Step {
 			const out: Out[] = [...flushed.out];
 			const quiet = event.outcome === 'limit' || event.outcome === 'context';
 			if (state.pendingApiError !== undefined && !quiet) out.push({kind: 'api-error', code: state.pendingApiError});
-			if (event.outcome !== 'ok') {
+			const summary = event.summary !== undefined && showSummary(event.summary, event.outcome) ? event.summary : undefined;
+			if (event.outcome !== 'ok' && !(event.outcome === 'interrupted' && summary !== undefined)) {
 				out.push({kind: 'outcome', outcome: event.outcome, error: event.error});
 			}
+			if (summary !== undefined) out.push({kind: 'turn-summary', summary, outcome: event.outcome});
 			if (flushed.state.turnPrintedText || event.outcome !== 'ok') out.push({kind: 'blank'});
 			return {
 				state: {
@@ -321,6 +328,7 @@ function reduceEvent(state: TranscriptState, event: ChatEvent): Step {
 					turnPrintedText: false,
 					approvals: 0,
 					pendingApiError: undefined,
+					...(event.summary !== undefined && {lastSummary: event.summary}),
 				},
 				out,
 			};

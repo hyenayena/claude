@@ -355,3 +355,44 @@ test('thinking-text duration round-trips, older frames stay valid, bad values ar
 	for (const ms of ['1', -1, 86_400_001, {}, [1]]) assert.throws(() => createDecoder('toClient').push(frame(ms)), ProtocolError, String(ms));
 	assert.equal(createDecoder('toClient').push(frame(86_400_000)).length, 1);
 });
+
+const summary = {durationMs: 61_000, tools: 3, files: [{path: '/p/a.ts', added: 4, removed: 1, created: true as const}], filesTotal: 1, added: 4, removed: 1, outputTokens: 900};
+const toClient = (o: unknown) => createDecoder('toClient').push(Buffer.from(line({v: 1, ...(o as object)})));
+
+test('turn-end summary, context event and snapshot context round-trip; old frames still parse', () => {
+	const end: RunnerFrame = {v: 1, type: 'event', event: {type: 'turn-end', outcome: 'ok', summary}};
+	assert.deepEqual(toClient(end), [end]);
+	const ctx: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'context', used: 5000, limit: 160_000}}};
+	assert.deepEqual(toClient(ctx), [ctx]);
+	const bare: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'context', used: 1}}};
+	assert.deepEqual(toClient(bare), [bare]);
+	const old: RunnerFrame = {v: 1, type: 'event', event: {type: 'turn-end', outcome: 'ok'}};
+	assert.deepEqual(toClient(old), [old]);
+});
+
+test('invalid summary and context values fail the frame', () => {
+	const bad = (event: unknown) => assert.throws(() => toClient({type: 'event', event}), ProtocolError);
+	bad({type: 'turn-end', outcome: 'ok', summary: {...summary, tools: -1}});
+	bad({type: 'turn-end', outcome: 'ok', summary: {...summary, durationMs: 'x'}});
+	bad({type: 'turn-end', outcome: 'ok', summary: {...summary, files: Array.from({length: 201}, () => summary.files[0])}});
+	bad({type: 'turn-end', outcome: 'ok', summary: {...summary, files: [{path: 'x'.repeat(1025), added: 0, removed: 0}]}});
+	bad({type: 'turn-end', outcome: 'ok', summary: {...summary, outputTokens: 2e9}});
+	bad({type: 'ui', event: {kind: 'context', used: 2e8}});
+	bad({type: 'ui', event: {kind: 'context', used: 1, limit: -5}});
+	bad({type: 'ui', event: {kind: 'context'}});
+});
+
+test('an event with a ui kind this client does not know is dropped, not failed', () => {
+	const dec = createDecoder('toClient');
+	const out = dec.push(Buffer.from(line({v: 1, type: 'event', event: {type: 'ui', event: {kind: 'from-the-future', x: 1}}}) + line({v: 1, type: 'event', event: {type: 'state', state: 'idle'}})));
+	assert.deepEqual(out.map(f => f.type), ['event']);
+	assert.throws(() => toClient({type: 'event', event: {type: 'ui', event: {kind: ''}}}), ProtocolError);
+	assert.throws(() => toClient({type: 'event', event: {type: 'ui', event: {}}}), ProtocolError);
+});
+
+test('a turn-end summary at the caps (200 long escaped paths, largest numbers) fits one frame and parses', () => {
+	const files = Array.from({length: 200}, (_, i) => ({path: `/${String(i).padStart(4, '0')}${'ä"\\'.repeat(340)}`.slice(0, 1024), added: 1_000_000_000, removed: 1_000_000_000}));
+	const full = {durationMs: 604_800_000, tools: 1_000_000_000, files, filesTotal: 1_000_000_000, added: 1_000_000_000, removed: 1_000_000_000, outputTokens: 1_000_000_000};
+	const frame: RunnerFrame = {v: 1, type: 'event', event: {type: 'turn-end', outcome: 'error', error: 'e'.repeat(20_000), summary: full}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(frame)), [frame]);
+});

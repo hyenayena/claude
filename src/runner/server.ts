@@ -45,6 +45,7 @@ export type RunnerSession = Pick<
 	| 'needsNewSession'
 	| 'title'
 	| 'route'
+	| 'context'
 	| 'pendingPermissions'
 	| 'tasks'
 	| 'commands'
@@ -328,6 +329,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 			needsNewSession: s.needsNewSession,
 			...(s.title !== undefined && {title: s.title}),
 			...(s.route !== undefined && {route: s.route}),
+			...(s.context !== undefined && {context: s.context}),
 			pendingPermissions: [...s.pendingPermissions],
 			tasks: [...s.tasks],
 			commands: [...s.commands],

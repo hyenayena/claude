@@ -1,8 +1,9 @@
 import type {AgentPolicy, CommandConfirmRequest, CommandInfo, CommandInfoSub, CommandRunResult, CommandRunStatus} from '../../../../src/api.js';
 import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import type {SlashCommandInfo, TaskInfo} from '../chat/chat-session.js';
-import {ACCOUNT_REASONS, ROUTE_OUTCOMES, ROUTE_SOURCES, type AgentItem, type ChatEvent, type ChatState, type RouteInfo, type ToolPatch, type TurnOutcome, type UiEvent} from '../chat/events.js';
+import {ACCOUNT_REASONS, ROUTE_OUTCOMES, ROUTE_SOURCES, type AgentItem, type ChatEvent, type ChatState, type ContextInfo, type RouteInfo, type ToolPatch, type TurnOutcome, type UiEvent} from '../chat/events.js';
 import {TIERS, type Tier} from '../chat/tiers.js';
+import {MAX_TURN_FILES, MAX_TURN_PATH, type TurnFileChange, type TurnSummary} from '../chat/turn-stats.js';
 import type {LimitType, RateLimitInfo} from '../chat/limits.js';
 import {ACCOUNT_NAME_RE} from '../accounts.js';
 import {MAX_ENTRIES, type WireBundle, type WireEntry} from '../vault.js';
@@ -53,6 +54,7 @@ export type Snapshot = {
 	needsNewSession: boolean;
 	title?: string;
 	route?: RouteInfo;
+	context?: ContextInfo;
 	pendingPermissions: PermissionRequest[];
 	tasks: TaskInfo[];
 	commands: SlashCommandInfo[];
@@ -435,7 +437,8 @@ const readAgentItem = (v: unknown): AgentItem => {
 	}
 };
 
-const readUiEvent = (v: unknown): UiEvent => {
+// A kind this client does not know comes from a newer runner: the frame is dropped instead of failing the connection.
+const readUiEvent = (v: unknown): UiEvent | undefined => {
 	const o = rec(v, 'ui event');
 	switch (o.kind) {
 		case 'session':
@@ -519,6 +522,8 @@ const readUiEvent = (v: unknown): UiEvent => {
 			return {kind: 'thinking-tokens', tokens: num(o.tokens, 'tokens')};
 		case 'cli-state':
 			return {kind: 'cli-state', state: oneOf(o.state, ['running', 'idle', 'requires_action'] as const, 'state')};
+		case 'context':
+			return {kind: 'context', ...readContext(o)};
 		case 'status':
 			return {kind: 'status', status: o.status === null ? null : oneOf(o.status, ['compacting', 'requesting'] as const, 'status')};
 		case 'retry':
@@ -551,8 +556,39 @@ const readUiEvent = (v: unknown): UiEvent => {
 				...(has(o, 'queuedTurns') && {queuedTurns: int(o.queuedTurns, 'queuedTurns')}),
 			};
 		default:
-			return fail('ui event kind');
+			return typeof o.kind === 'string' && o.kind !== '' ? undefined : fail('ui event kind');
 	}
+};
+
+const MAX_CONTEXT_TOKENS = 100_000_000;
+const MAX_SUMMARY_MS = 604_800_000;
+const MAX_SUMMARY_COUNT = 1_000_000_000;
+
+const readContext = (o: Rec): ContextInfo => ({
+	used: nonNeg(o.used, 'used', MAX_CONTEXT_TOKENS),
+	...(has(o, 'limit') && {limit: nonNeg(o.limit, 'limit', MAX_CONTEXT_TOKENS)}),
+});
+
+const readTurnSummary = (v: unknown): TurnSummary => {
+	const o = rec(v, 'summary');
+	const files = arr(o.files, 'files', MAX_TURN_FILES).map((f): TurnFileChange => {
+		const fo = rec(f, 'file');
+		return {
+			path: str(fo.path, 'path', MAX_TURN_PATH),
+			added: nonNeg(fo.added, 'added', MAX_SUMMARY_COUNT),
+			removed: nonNeg(fo.removed, 'removed', MAX_SUMMARY_COUNT),
+			...(fo.created === true && {created: true as const}),
+		};
+	});
+	return {
+		durationMs: nonNeg(o.durationMs, 'durationMs', MAX_SUMMARY_MS),
+		tools: nonNeg(o.tools, 'tools', MAX_SUMMARY_COUNT),
+		files,
+		filesTotal: nonNeg(o.filesTotal, 'filesTotal', MAX_SUMMARY_COUNT),
+		added: nonNeg(o.added, 'added', MAX_SUMMARY_COUNT),
+		removed: nonNeg(o.removed, 'removed', MAX_SUMMARY_COUNT),
+		outputTokens: nonNeg(o.outputTokens, 'outputTokens', MAX_SUMMARY_COUNT),
+	};
 };
 
 const readRoute = (v: unknown): RouteInfo => {
@@ -574,11 +610,14 @@ const readRoute = (v: unknown): RouteInfo => {
 	};
 };
 
-export const readChatEvent = (v: unknown): ChatEvent => {
+export const readChatEvent = (v: unknown): ChatEvent | undefined => {
 	const o = rec(v, 'event');
 	switch (o.type) {
 		case 'ui':
-			return {type: 'ui', event: readUiEvent(o.event)};
+		{
+			const event = readUiEvent(o.event);
+			return event && {type: 'ui', event};
+		}
 		case 'state':
 			return {type: 'state', state: oneOf(o.state, STATES, 'state') as ChatState};
 		case 'turn-end':
@@ -586,6 +625,7 @@ export const readChatEvent = (v: unknown): ChatEvent => {
 				type: 'turn-end',
 				outcome: oneOf(o.outcome, OUTCOMES, 'outcome') as TurnOutcome,
 				...(has(o, 'error') && {error: str(o.error, 'error', 20_000)}),
+				...(has(o, 'summary') && {summary: readTurnSummary(o.summary)}),
 			};
 		case 'permission-requested':
 			return {type: 'permission-requested', request: readPermission(o.request), pending: int(o.pending, 'pending')};
@@ -658,6 +698,7 @@ const readSnapshot = (o: Rec): Snapshot => ({
 	needsNewSession: bool(o.needsNewSession, 'needsNewSession'),
 	...(has(o, 'title') && {title: str(o.title, 'title', 4096)}),
 	...(has(o, 'route') && {route: readRoute(o.route)}),
+	...(has(o, 'context') && {context: readContext(rec(o.context, 'context'))}),
 	pendingPermissions: arr(o.pendingPermissions, 'pendingPermissions', 100).map(readPermission),
 	tasks: arr(o.tasks, 'tasks', 100).map(readTask),
 	commands: arr(o.commands, 'commands', 300).map(readSlash),
@@ -736,7 +777,7 @@ const readBundle = (v: unknown): WireBundle => {
 	return {status: oneOf(o.status, VAULT_STATUSES, 'status'), entries: arr(o.entries, 'entries', MAX_ENTRIES).map(readWireEntry)};
 };
 
-type Reader = (o: Rec) => Rec;
+type Reader = (o: Rec) => Rec | null;
 
 const CLIENT: Record<string, Reader> = {
 	hello: o => ({role: oneOf(o.role, ['attach', 'control'] as const, 'role')}),
@@ -770,7 +811,10 @@ const CLIENT: Record<string, Reader> = {
 
 const RUNNER: Record<string, Reader> = {
 	snapshot: o => ({...readSnapshot(o)}),
-	event: o => ({event: readChatEvent(o.event)}),
+	event: o => {
+		const event = readChatEvent(o.event);
+		return event ? {event} : null;
+	},
 	rpcResult: o => {
 		const ok = bool(o.ok, 'ok');
 		return {
@@ -802,7 +846,8 @@ export const validateFrame = (raw: unknown, direction: FrameDirection): Frame | 
 	if (typeof o.type !== 'string') fail('missing type');
 	const table = direction === 'toRunner' ? CLIENT : RUNNER;
 	if (!Object.hasOwn(table, o.type as string)) return null;
-	return {v: 1, type: o.type, ...table[o.type as string]!(o)} as Frame;
+	const body = table[o.type as string]!(o);
+	return body === null ? null : ({v: 1, type: o.type, ...body} as Frame);
 };
 
 export const encodeFrame = (frame: Frame): string => {

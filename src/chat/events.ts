@@ -1,5 +1,6 @@
 import type {RateLimitInfo} from './limits.js';
 import type {Tier} from './tiers.js';
+import type {TurnSummary} from './turn-stats.js';
 import type {AuditEntry, ChatMode, PermissionDecision, PermissionRequest} from './permission.js';
 
 export type ToolPatch = {hunks: {oldStart: number; newStart: number; lines: string[]}[]; created?: true};
@@ -39,6 +40,7 @@ export type UiEvent =
 	| {kind: 'tool-progress'; toolUseId: string; name: string; elapsedSeconds: number}
 	| {kind: 'agent-activity'; toolUseId: string; name: string; input: unknown}
 	| {kind: 'agent-message'; agentId: string; model?: string; items: AgentItem[]}
+	| {kind: 'context'; used: number; limit?: number}
 	| {kind: 'status'; status: 'compacting' | 'requesting' | null}
 	| {kind: 'cli-state'; state: 'running' | 'idle' | 'requires_action'}
 	| {kind: 'thinking-tokens'; tokens: number}
@@ -58,6 +60,8 @@ export type UiEvent =
 			queuedTurns?: number;
 	  };
 
+export type ContextInfo = {used: number; limit?: number};
+
 export type TurnOutcome = 'ok' | 'error' | 'interrupted' | 'timeout' | 'max-turns' | 'limit' | 'context';
 export type ChatState = 'idle' | 'running' | 'closed';
 
@@ -67,7 +71,7 @@ export type AccountReason = (typeof ACCOUNT_REASONS)[number];
 export type ChatEvent =
 	| {type: 'ui'; event: UiEvent}
 	| {type: 'state'; state: ChatState}
-	| {type: 'turn-end'; outcome: TurnOutcome; error?: string}
+	| {type: 'turn-end'; outcome: TurnOutcome; error?: string; summary?: TurnSummary}
 	| {type: 'permission-requested'; request: PermissionRequest; pending: number}
 	| {type: 'permission-resolved'; id: string; pending: number}
 	| {type: 'audit'; entry: AuditEntry}
@@ -101,6 +105,7 @@ export interface ChatController {
 	readonly mode: ChatMode;
 	readonly title: string | undefined;
 	readonly route?: RouteInfo;
+	readonly context?: ContextInfo;
 	readonly tasks?: readonly {id?: string; status: string; background: boolean; taskType?: string; toolUseId?: string; subagentType?: string; description?: string}[];
 	backgroundTasks?(): Promise<boolean>;
 	readonly pendingPermissions: readonly PermissionRequest[];

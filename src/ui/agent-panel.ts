@@ -1,6 +1,6 @@
 import {boxRows, frameAround, gridLayout, joinBlocks, type BoxBadge, type SpanRow} from '../kit.js';
 import type {AgentBox, AgentEntry, AgentsState} from './agents.js';
-import {shortModel, toolOneLiner, type Scrub} from './present.js';
+import {shortModel, toolOneLiner, verbFor, type Scrub} from './present.js';
 
 export type PanelLook = {columns: number; rows: number; scrub: Scrub; spinner?: string; corner?: string};
 
@@ -60,7 +60,7 @@ const bodyOf = (box: AgentBox, height: number, look: PanelLook): SpanRow[] => {
 		if (line) lines.unshift(line);
 	}
 	if (lines.length === 0 && room > 0 && box.description !== '') lines.push([{text: firstLine(look.scrub(box.description)), tone: 'dim'}]);
-	return [...lines, [{text: `${look.corner ?? '◰'} thinking…`, tone: 'dim'}]];
+	return [...lines, [{text: `${look.corner ?? '◰'} ${verbFor(box.id, box.history.length)}…`, tone: 'dim'}]];
 };
 
 const renderBox = (state: AgentsState, box: AgentBox, width: number, height: number, look: PanelLook): SpanRow[] => {

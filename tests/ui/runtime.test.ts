@@ -65,7 +65,7 @@ test('ui components render under tsx run from the host root', () => {
 	assert.match(frames['Spinner'] as string, /[◰◳◲◱]/);
 	assert.match(frames['InputLine'] as string, /input-ok/);
 	assert.match(frames['LiveTools'] as string, /tools-ok/);
-	assert.match(frames['ChatView'] as string, /idle$/);
+	assert.match(frames['ChatView'] as string, /idle/);
 	assert.match(frames['AgentPanel'] as string, /panel-ok/);
 	assert.match(frames['PermissionPrompt'] as string, /perm-ok/);
 	assert.match(frames['QuestionPrompt'] as string, /Which color\?/);

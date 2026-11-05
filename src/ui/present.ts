@@ -9,6 +9,7 @@ import {formatToolCard, formatToolGroup, resultLines} from './tool-card.js';
 import type {Scrub} from './tool-args.js';
 import {LIVE, ROUTE_TOOL_NAME, type Out, type Phase, type StatusLine, type Todo} from './transcript.js';
 import type {Tier} from '../chat/tiers.js';
+import {turnSummaryRow} from './turn-summary.js';
 
 export {CODE_BLOCK_ROWS};
 export type {Scrub} from './tool-args.js';
@@ -273,6 +274,8 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 			return formatError(`API error (${out.code})`, scrub);
 		case 'blank':
 			return ' ';
+		case 'turn-summary':
+			return turnSummaryRow(out.summary, out.outcome, Math.max(1, (width ?? 80) - 1));
 		case 'outcome':
 			switch (out.outcome) {
 				case 'interrupted':
@@ -337,13 +340,6 @@ export function statusLineText(status: StatusLine): string {
 	}
 }
 
-export const formatDuration = (seconds: number): string => {
-	const s = Math.max(0, Math.floor(seconds));
-	return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
-};
-
-const formatTokens = (n: number): string => (n < 1000 ? `${Math.round(n)}` : `${(n / 1000).toFixed(1)}k`);
-
 export const QUIET_NOTICE_S = 60;
 
 export const WORKING_VERBS = [
@@ -398,15 +394,11 @@ export function pickWorkingVerb(random = Math.random, previous?: string): string
 	return pool[Math.floor(random() * pool.length)] ?? 'Working';
 }
 
-export function workingText(phase: Phase, status: StatusLine, seconds: number, quietSeconds = 0, verb?: string): string {
-	if (phase === 'interrupting') return 'Interrupting…';
-	const what = verb !== undefined && (!status || status.kind === 'thinking') ? `${verb}…` : statusLineText(status) || 'Working…';
-	const parts = [formatDuration(seconds)];
-	const tokens = status?.kind === 'thinking' ? status.tokens : status?.kind === 'tool-input' && status.chars > 0 ? status.chars / 4 : undefined;
-	if (tokens !== undefined && tokens > 0) parts.push(`↓ ${formatTokens(tokens)} tokens`);
-	if (quietSeconds >= QUIET_NOTICE_S) parts.push(`no response for ${formatDuration(quietSeconds)}`);
-	parts.push('esc to interrupt');
-	return `${what} (${parts.join(' · ')})`;
+// Stable for a seed and beat, so a box does not change its verb on every render.
+export function verbFor(seed: string, beat: number): string {
+	let h = 2166136261;
+	for (const c of `${seed}:${beat}`) h = Math.imul(h ^ c.codePointAt(0)!, 16777619) >>> 0;
+	return WORKING_VERBS[h % WORKING_VERBS.length] ?? 'Working';
 }
 
 const MODE_HINT: Record<ChatMode, string> = {
@@ -425,31 +417,5 @@ export function tasksBarText(tasks: readonly {status: string; background: boolea
 	const parts: string[] = [];
 	if (agents > 0) parts.push(`${agents} ${agents === 1 ? 'agent' : 'agents'}`);
 	if (background > 0) parts.push(`${background} in background`);
-	return parts.join(' · ');
-}
-
-export function statusBarText(
-	s: {
-		account?: string;
-		pin?: string;
-		model: string | undefined;
-		route?: string;
-		sessionId: string | undefined;
-		phase: Phase;
-		pending?: number;
-		limit?: string;
-		tasks?: string;
-	},
-	scrub: Scrub,
-): string {
-	const parts: string[] = [];
-	if (s.pin !== undefined && s.pin !== s.account) parts.push(s.account ? `${scrub(s.account)} -> *${scrub(s.pin)}` : `*${scrub(s.pin)}`);
-	else if (s.account) parts.push(`${s.pin !== undefined ? '*' : ''}${scrub(s.account)}`);
-	if (s.sessionId) parts.push(scrub(s.sessionId).slice(0, 8));
-	if (s.model) parts.push(scrub(s.model));
-	if (s.route) parts.push(scrub(s.route));
-	if (s.limit) parts.push(scrub(s.limit));
-	parts.push(s.pending !== undefined && s.pending > 0 ? 'awaiting approval' : s.phase);
-	if (s.tasks) parts.push(s.tasks);
 	return parts.join(' · ');
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {gallerySections, registerGallerySection, styledCells, stripStyles, withColorDepth, type ColorDepth} from '../../src/kit.js';
-import {chatGallerySection, diffGallerySection, toolsGallerySection} from '../../src/ui/gallery.js';
+import {chatGallerySection, diffGallerySection, statusGallerySection, toolsGallerySection} from '../../src/ui/gallery.js';
 
 const ESC = String.fromCharCode(27);
 
@@ -82,4 +82,20 @@ test('the markdown section renders at 39, 79 and 159 columns within the width', 
 			assert.ok(!rows.join('\n').replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '').includes(ESC));
 		}
 	}
+});
+
+test('the status section renders within the width at every depth and is registered', async () => {
+	const render = await statusGallerySection.load();
+	for (const width of [39, 79, 159]) {
+		for (const depth of ['truecolor', '256', '16', 'none'] as ColorDepth[]) {
+			for (const ascii of [false, true]) {
+				const rows = withColorDepth(depth, () => render({width, depth, ascii}));
+				assert.ok(rows.length > 10);
+				for (const row of rows) assert.ok(styledCells(row) <= width, `${width} ${depth}: ${stripStyles(row)}`);
+			}
+		}
+	}
+	const text = withColorDepth('none', () => render({width: 159, depth: 'none', ascii: false})).map(stripStyles).join('\n');
+	for (const part of ['idle', 'awaiting approval', 'esc to interrupt', 'interrupted', '3 files changed']) assert.ok(text.includes(part), part);
+	assert.equal(registerGallerySection(statusGallerySection), true);
 });

@@ -11,7 +11,7 @@ import {readHolder} from '../sessions/lock.js';
 import type {RewindResult} from '../types.js';
 import {type CredentialBundle, encodeBundle} from '../vault.js';
 import type {SlashCommandInfo, TaskInfo} from './chat-session.js';
-import type {ChatEvent, ChatState, RouteInfo} from './events.js';
+import type {ChatEvent, ChatState, ContextInfo, RouteInfo} from './events.js';
 import type {ChatHandle} from './handle.js';
 import type {Tier} from './tiers.js';
 import type {RateLimitInfo} from './limits.js';
@@ -72,6 +72,7 @@ export class RemoteChatSession implements ChatHandle {
 	private _mode: ChatMode = 'default';
 	private _title: string | undefined;
 	private _route: RouteInfo | undefined;
+	private _context: ContextInfo | undefined;
 	private _needsNewSession = false;
 	private _commands: SlashCommandInfo[] = [];
 	private _rateLimit: RateLimitInfo | undefined;
@@ -184,6 +185,9 @@ export class RemoteChatSession implements ChatHandle {
 	}
 	get route(): RouteInfo | undefined {
 		return this._route;
+	}
+	get context(): ContextInfo | undefined {
+		return this._context;
 	}
 	get title(): string | undefined {
 		return this._title;
@@ -403,6 +407,7 @@ export class RemoteChatSession implements ChatHandle {
 		this._needsNewSession = s.needsNewSession;
 		this._title = s.title;
 		this._route = s.route;
+		this._context = s.context;
 		this.remotePending = [...s.pendingPermissions];
 		this._tasks.clear();
 		for (const t of [...s.tasks].reverse()) this._tasks.set(t.id, t);
@@ -527,6 +532,9 @@ export class RemoteChatSession implements ChatHandle {
 			}
 			case 'rate-limit':
 				this._rateLimit = ev.info;
+				return;
+			case 'context':
+				this._context = {used: ev.used, ...(ev.limit !== undefined && {limit: ev.limit})};
 				return;
 			case 'result':
 				if (ev.sessionId) this._sessionId = ev.sessionId;

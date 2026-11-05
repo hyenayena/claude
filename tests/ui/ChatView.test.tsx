@@ -26,6 +26,9 @@ afterEach(() => {
 	cleanup = [];
 });
 
+const bar = (t: {lastFrame(): string}): string => stripStyles(t.lastFrame()).trimEnd().split('\n').at(-1)!;
+const plainFrame = (t: {lastFrame(): string}): string => stripStyles(t.lastFrame());
+
 function setup(size?: {columns: number; rows: number}, extra: Partial<ChatViewProps> = {}) {
 	const controller: FakeController = fakeController();
 	const printed: string[] = [];
@@ -55,7 +58,7 @@ test('createChatElement returns a renderable element', async () => {
 	);
 	cleanup.push(() => h.unmount());
 	await h.settle();
-	assert.match(h.lastFrame(), /idle$/);
+	assert.equal(bar(h), 'idle');
 });
 
 test('typing builds the buffer and Enter sends and echoes', async () => {
@@ -79,7 +82,7 @@ test('Esc while running interrupts; Esc while interrupting hard-stops', async ()
 	t.press(ESC);
 	await t.settle(50);
 	assert.equal(t.controller.calls.interrupts, 1);
-	assert.match(t.lastFrame(), /interrupting/);
+	assert.match(bar(t), /Interrupting…/);
 	assert.equal(t.closed.count, 0);
 	t.press(ESC);
 	await t.settle(50);
@@ -199,9 +202,9 @@ test('status bar starts with the session and never shows a secret', async () => 
 	t.controller.ui({kind: 'session', sessionId: 'abcdef123456', model: `model-${SECRET}`});
 	t.controller.ui({kind: 'result', ok: true, subtype: 'success', costUsd: 0.0123});
 	await t.settle();
-	const frame = t.lastFrame();
+	const frame = plainFrame(t);
 	assert.ok(!frame.includes(SECRET));
-	assert.match(frame, /abcdef12 · model-\[redacted\] · idle/);
+	assert.equal(bar(t), 'idle · model-[redacted]');
 });
 
 test('live height stays below rows - 2 after a 50 KB stream at 24 rows', async () => {
@@ -260,7 +263,7 @@ test('live region respects small terminal heights', async () => {
 		await t.settle(60);
 		const height = t.lastFrame().split('\n').length;
 		assert.ok(height < (rows >= 12 ? rows - 2 : rows), `rows=${rows} height=${height}`);
-		assert.match(t.lastFrame(), /running/);
+		assert.match(bar(t), /esc to interrupt/);
 	}
 });
 
@@ -474,7 +477,7 @@ test('long lines wrap and large commands and diffs fit the live region', async (
 		const command = Array.from({length: 100}, (_, i) => `echo line ${i}`).join('\n');
 		const bash = await withPrompt(toolReq({input: {command}}), {columns: 80, rows});
 		assert.ok(frameRows(bash.lastFrame()) <= rows - 2, `bash rows=${rows} h=${frameRows(bash.lastFrame())}`);
-		assert.match(bash.lastFrame(), /awaiting approval$/);
+		assert.equal(bar(bash), 'awaiting approval · app');
 
 		const preview = {
 			rows: Array.from({length: 500}, (_, i) => ({kind: (i % 2 ? 'add' : 'del') as 'add' | 'del', text: `line ${i}`, no: i + 1})),
@@ -488,7 +491,7 @@ test('long lines wrap and large commands and diffs fit the live region', async (
 			{columns: 80, rows},
 		);
 		assert.ok(frameRows(edit.lastFrame()) <= rows - 2, `edit rows=${rows} h=${frameRows(edit.lastFrame())}`);
-		assert.match(edit.lastFrame(), /awaiting approval$/);
+		assert.equal(bar(edit), 'awaiting approval · app');
 	}
 });
 
@@ -749,8 +752,8 @@ test('with a host title bar: the chat name and status go up there, without a pri
 	const host = {...f.host, setTitle: (title: string | undefined, detail?: string) => void bars.push([title, detail])};
 	const t = setup(undefined, {host});
 	await t.settle();
-	assert.deepEqual(bars.at(-1), ['New chat', 'idle']);
-	assert.doesNotMatch(t.lastFrame(), /idle$/);
+	assert.deepEqual(bars.at(-1), ['New chat', undefined]);
+	assert.equal(bar(t), 'idle');
 	(t.controller as {title?: string}).title = 'Build fix';
 	t.controller.emit({type: 'title', title: 'Build fix'});
 	t.controller.ui({kind: 'result', ok: true, subtype: 'success', costUsd: 0.5});
@@ -990,7 +993,7 @@ test('Ctrl+O shows the full transcript with scrolling; Esc closes it', async () 
 	t.press(ESC);
 	await t.settle(60);
 	assert.doesNotMatch(t.lastFrame(), /Transcript/);
-	assert.match(t.lastFrame(), /idle$/);
+	assert.equal(bar(t), 'idle');
 });
 
 function mouseFakeHost() {
@@ -1092,7 +1095,7 @@ test('mouse: clicks during a permission prompt or while waiting for the answer a
 	t.controller.setState('running');
 	t.controller.emit({type: 'state', state: 'running'});
 	await t.settle();
-	assert.match(t.lastFrame(), /[\w -]+… \(\d+s · esc to interrupt\)/);
+	assert.match(bar(t), /[\w -]+… [\dms. ]+/);
 	assert.equal(m.click(3, 8), false);
 });
 
@@ -1112,12 +1115,12 @@ test('thinking status shows the animated spinner, one hyena verb for the turn, s
 	await t.settle();
 	t.controller.ui({kind: 'thinking'});
 	await t.settle();
-	const line = /([·✢✳✶✻✽]) ([\w -]+)… \(\d+s · esc to interrupt\)/;
-	const first = t.lastFrame().match(line);
+	const line = /([·✢✳✶✻✽]) ([\w -]+)… [\dms. ]+ · esc to interrupt/;
+	const first = bar(t).match(line);
 	assert.ok(first, 'spinner frame before the status text');
 	assert.ok((WORKING_VERBS as readonly string[]).includes(first[2]), first[2]);
 	await t.settle(400);
-	const later = t.lastFrame().match(line);
+	const later = bar(t).match(line);
 	assert.ok(later);
 	assert.notEqual(later[1], first[1]);
 	assert.equal(later[2], first[2]);
@@ -1128,15 +1131,15 @@ test('each answer or tool call Claude prints brings a new working verb', async (
 	t.controller.setState('running');
 	t.controller.ui({kind: 'thinking'});
 	await t.settle();
-	const line = /[·✢✳✶✻✽] ([\w -]+)… \(/;
-	const verbs = [t.lastFrame().match(line)?.[1]];
+	const line = /[·✢✳✶✻✽] ([\w -]+)… /;
+	const verbs = [bar(t).match(line)?.[1]];
 	t.controller.ui({kind: 'text', messageId: 'm1', text: 'first answer'});
 	await t.settle();
-	verbs.push(t.lastFrame().match(line)?.[1]);
+	verbs.push(bar(t).match(line)?.[1]);
 	t.controller.ui({kind: 'tool-use', toolUseId: 'a', name: 'Bash', input: {command: 'x'}});
 	t.controller.ui({kind: 'tool-result', toolUseId: 'a', isError: false, text: 'ok'});
 	await t.settle();
-	verbs.push(t.lastFrame().match(line)?.[1]);
+	verbs.push(bar(t).match(line)?.[1]);
 	for (const v of verbs) assert.ok(v && (WORKING_VERBS as readonly string[]).includes(v), String(v));
 	assert.notEqual(verbs[1], verbs[0]);
 	assert.notEqual(verbs[2], verbs[1]);
@@ -1158,18 +1161,18 @@ test('the limit indicator shows in the status, clears on allowed and on expiry',
 	await t.settle();
 	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed_warning', type: 'five_hour', utilization: 0.85, resetsAt}});
 	await t.settle();
-	assert.match(t.bars.at(-1)![1] ?? '', /^5h limit 85%, resets 11:00 · idle$/);
+	assert.equal(bar(t), 'idle · 5h limit 85%, resets 11:00');
 	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed'}});
 	await t.settle();
-	assert.doesNotMatch(t.bars.at(-1)![1] ?? '', /limit/);
+	assert.doesNotMatch(bar(t), /limit/);
 
 	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed_warning', type: 'five_hour', utilization: 0.9, resetsAt}});
 	await t.settle();
-	assert.match(t.bars.at(-1)![1] ?? '', /5h limit/);
+	assert.match(bar(t), /5h limit/);
 	nowMs.value += 3600_000;
 	t.controller.emit({type: 'title', title: 'again'});
 	await t.settle();
-	assert.doesNotMatch(t.bars.at(-1)![1] ?? '', /limit/);
+	assert.doesNotMatch(bar(t), /limit/);
 });
 
 test('the indicator disappears by itself when the reset time passes', async () => {
@@ -1179,10 +1182,10 @@ test('the indicator disappears by itself when the reset time passes', async () =
 	await t.settle();
 	t.controller.ui({kind: 'rate-limit', info: {status: 'allowed_warning', type: 'five_hour', utilization: 0.5, resetsAt: start / 1000 + 1.5}});
 	await t.settle();
-	assert.match(t.bars.at(-1)![1] ?? '', /5h limit/);
+	assert.match(bar(t), /5h limit/);
 	await new Promise(r => setTimeout(r, Math.max(0, start + 1700 - Date.now())));
 	await t.settle();
-	assert.doesNotMatch(t.bars.at(-1)![1] ?? '', /limit/);
+	assert.doesNotMatch(bar(t), /limit/);
 });
 
 test('after a limit the queued text goes back to the draft and nothing is sent', async () => {
@@ -1514,21 +1517,18 @@ test('the status bar shows the pinned account at once and stars it once the chat
 	const pin = createPinWatch(() => pinned);
 	const t = setup(undefined, {initialAccount: 'work', pin});
 	await t.settle();
-	assert.match(t.lastFrame(), /(^|\s)work · /m);
-	assert.doesNotMatch(t.lastFrame(), /\*/);
+	assert.equal(bar(t), 'idle · work');
 	pinned = 'spare';
 	pin.refresh();
 	await t.settle();
-	assert.match(t.lastFrame(), /work -> \*spare · /);
+	assert.equal(bar(t), 'idle · work -> *spare');
 	t.controller.emit({type: 'account', account: 'spare', previous: 'work', reason: 'pinned'});
 	await t.settle();
-	assert.match(t.lastFrame(), /(^|\s)\*spare · /m);
-	assert.doesNotMatch(t.lastFrame(), /->/);
+	assert.equal(bar(t), 'idle · *spare');
 	pinned = undefined;
 	pin.refresh();
 	await t.settle();
-	assert.match(t.lastFrame(), /(^|\s)spare · /m);
-	assert.doesNotMatch(t.lastFrame(), /\*/);
+	assert.equal(bar(t), 'idle · spare');
 });
 
 test('Esc interrupts at once early in a turn, later only when pressed twice within a short time', () => {
@@ -1538,4 +1538,40 @@ test('Esc interrupts at once early in a turn, later only when pressed twice with
 	assert.equal(escapeInterrupts(late, since, undefined), false);
 	assert.equal(escapeInterrupts(late + ESC_AGAIN_MS, since, late), true);
 	assert.equal(escapeInterrupts(late + ESC_AGAIN_MS + 1, since, late), false);
+});
+
+const TURN = {durationMs: 134_000, tools: 2, files: [{path: '/proj/src/a.ts', added: 3, removed: 1}], filesTotal: 1, added: 3, removed: 1, outputTokens: 900};
+
+test('a turn summary is printed after the turn, the status bar stays the last row and the old working line is gone', async () => {
+	const t = setup({columns: 80, rows: 24}, {projectDir: '/proj', readBranch: async () => 'develop'});
+	await t.settle();
+	t.controller.setState('running');
+	t.controller.emit({type: 'turn-end', outcome: 'ok', summary: TURN});
+	t.controller.setState('idle');
+	await t.settle();
+	const block = t.printed.map(stripStyles).join('\n');
+	assert.match(block, /✓ 2m 14s · 1 file changed \+3 −1 · 2 tools/);
+	assert.equal(bar(t), 'idle · proj ⎇ develop');
+});
+
+test('a short plain turn prints no summary', async () => {
+	const t = setup();
+	await t.settle();
+	t.controller.setState('running');
+	t.controller.emit({type: 'turn-end', outcome: 'ok', summary: {...TURN, durationMs: 2000, tools: 0, files: [], filesTotal: 0}});
+	t.controller.setState('idle');
+	await t.settle();
+	assert.equal(t.printed.length, 0);
+});
+
+test('Ctrl+O ends with the files of the last turn', async () => {
+	const t = setup({columns: 80, rows: 24}, {projectDir: '/proj', loadTranscript: async () => ['row 0']});
+	await t.settle();
+	t.controller.emit({type: 'turn-end', outcome: 'ok', summary: TURN});
+	await t.settle();
+	t.press('\u000f');
+	await t.settle(60);
+	const frame = plainFrame(t);
+	assert.match(frame, /Changed in the last turn/);
+	assert.match(frame, /✎ src\/a\.ts +\+3 −1/);
 });

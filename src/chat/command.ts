@@ -30,6 +30,7 @@ import {transcriptFile} from './title.js';
 import {createShellPanel} from './shell-panel.js';
 import {createShellWatch, type ShellWatch} from './shell-watch.js';
 import {createPinWatch} from './pin-watch.js';
+import {readGitBranch} from './git-head.js';
 
 export const CHAT_USAGE = 'Usage: claude chat [--new]';
 export const NEEDS_MOUNT_MESSAGE = '"claude chat" needs an interface that can show views';
@@ -449,6 +450,7 @@ const runLocked = async (
 				...(control.host && {host: control.host}),
 				scrub,
 				reveal,
+				readBranch: () => readGitBranch(paths.projectDir),
 				projectDir: paths.projectDir,
 				pin,
 				...(initialModel !== undefined && {initialModel}),

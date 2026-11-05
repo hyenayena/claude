@@ -296,3 +296,27 @@ test('thinking-text keeps its duration on the printed thought, and none when the
 	const plain = run([ui({kind: 'thinking-text', text: 'hmm'})]);
 	assert.deepEqual(plain.out, [{kind: 'thinking', text: 'hmm'}]);
 });
+
+const SUMMARY = {durationMs: 5000, tools: 0, files: [], filesTotal: 0, added: 0, removed: 0, outputTokens: 10};
+
+test('turn-end with a summary: shown after the outcome row, replaces the interrupted notice, kept as the last summary', () => {
+	const shown = run([{type: 'turn-end', outcome: 'ok', summary: {...SUMMARY, tools: 2}}]);
+	assert.deepEqual(shown.out.map(o => o.kind), ['turn-summary']);
+	assert.equal(shown.state.lastSummary?.tools, 2);
+	const err = run([{type: 'turn-end', outcome: 'error', error: 'boom', summary: SUMMARY}]);
+	assert.deepEqual(err.out.map(o => o.kind).filter(k => k !== 'blank'), ['outcome', 'turn-summary']);
+	const cut = run([{type: 'turn-end', outcome: 'interrupted', summary: SUMMARY}]);
+	assert.deepEqual(cut.out.map(o => o.kind).filter(k => k !== 'blank'), ['turn-summary']);
+});
+
+test('a short plain answer gets no summary row; a slow one does; none without a summary keeps the old rows', () => {
+	assert.deepEqual(run([{type: 'turn-end', outcome: 'ok', summary: SUMMARY}]).out, []);
+	assert.deepEqual(run([{type: 'turn-end', outcome: 'ok', summary: {...SUMMARY, durationMs: 30_000}}]).out.map(o => o.kind), ['turn-summary']);
+	assert.deepEqual(run([{type: 'turn-end', outcome: 'interrupted'}]).out.map(o => o.kind).filter(k => k !== 'blank'), ['outcome']);
+});
+
+test('the context event changes nothing in the transcript', () => {
+	const {state, out} = run([ui({kind: 'context', used: 5, limit: 10})]);
+	assert.deepEqual(out, []);
+	assert.deepEqual(state, initialTranscript());
+});

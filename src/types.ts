@@ -69,6 +69,7 @@ export type ChatQueryFn = (p: {
 	backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
 	mcpServerStatus?: () => Promise<Array<{name: string; status: string; error?: string}>>;
 	reconnectMcpServer?: (name: string) => Promise<void>;
+	getContextUsage?: (opts?: {detail?: 'summary' | 'full'}) => Promise<unknown>;
 };
 
 export type RewindResult = {canRewind: boolean; error?: string; filesChanged?: string[]; insertions?: number; deletions?: number};

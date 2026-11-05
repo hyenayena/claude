@@ -298,3 +298,13 @@ test('setTier writes a frame; the route comes from the snapshot and follows rout
 	assert.deepEqual(s.route, {outcome: 'rated', main: 'strong', rated: 'standard', held: true});
 	assert.equal(seen.at(-1)?.type, 'route');
 });
+
+test('the context comes from the snapshot and follows context events', async () => {
+	const r = await fakeRunner({...SNAPSHOT, context: {used: 10_000, limit: 150_000}});
+	const s = await connect(r.socketPath);
+	cleanup.push(() => s.close());
+	assert.deepEqual(s.context, {used: 10_000, limit: 150_000});
+	r.send({type: 'event', event: {type: 'ui', event: {kind: 'context', used: 20_000}}});
+	await r.until(() => s.context?.used === 20_000);
+	assert.deepEqual(s.context, {used: 20_000});
+});

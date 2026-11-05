@@ -1555,3 +1555,104 @@ test('a thought that ends with the thinking-text itself is timed up to it', asyn
 	const ev = t.uis().find(e => e.kind === 'thinking-text');
 	assert.equal(ev?.kind === 'thinking-text' && ev.durationMs, 4000);
 });
+
+const usage = (input: number, output: number, cacheRead = 0) => ({input_tokens: input, cache_creation_input_tokens: 0, cache_read_input_tokens: cacheRead, output_tokens: output});
+const mainMsg = (id: string, content: unknown[], u = usage(10, 5, 100)) => ({type: 'assistant', parent_tool_use_id: null, message: {id, role: 'assistant', content, usage: u}});
+const resultMsg = (id: string, patch?: unknown) => ({
+	type: 'user',
+	message: {role: 'user', content: [{type: 'tool_result', tool_use_id: id, content: 'ok', is_error: false}]},
+	...(patch !== undefined && {tool_use_result: patch}),
+});
+
+test('the turn-end event carries a summary: duration on the engine clock, tools, files and output tokens', async () => {
+	let now = 1_000_000;
+	const clock: Clock = {now: () => now, timeZone: 'UTC'};
+	const {session, queries, events} = setup({clock});
+	session.send('edit it');
+	await tick();
+	now += 5_000;
+	queries[0]?.emit(mainMsg('m1', [{type: 'tool_use', id: 't1', name: 'Edit', input: {file_path: '/p/a.ts', old_string: 'a', new_string: 'b'}}], usage(10, 7)));
+	queries[0]?.emit(resultMsg('t1', {structuredPatch: [{oldStart: 1, newStart: 1, lines: [' x', '-a', '+b', '+c']}]}));
+	queries[0]?.emit(mainMsg('m2', [{type: 'tool_use', id: 't2', name: 'Bash', input: {command: 'ls'}}], usage(10, 3)));
+	queries[0]?.emit(resultMsg('t2'));
+	queries[0]?.emit({type: 'assistant', parent_tool_use_id: 'agent-1', message: {id: 'sub1', role: 'assistant', content: [{type: 'tool_use', id: 's1', name: 'Write', input: {file_path: '/p/new.ts', content: 'l1\nl2\n'}}], usage: usage(1, 4)}});
+	queries[0]?.emit({type: 'user', parent_tool_use_id: 'agent-1', message: {role: 'user', content: [{type: 'tool_result', tool_use_id: 's1', content: 'ok'}]}, tool_use_result: {type: 'create'}});
+	now += 9_000;
+	queries[0]?.emit(ok());
+	await tick();
+	const end = events.find(e => e.type === 'turn-end');
+	assert.ok(end && end.type === 'turn-end' && end.summary);
+	const s = end.summary;
+	assert.equal(s.durationMs, 14_000);
+	assert.equal(s.tools, 3);
+	assert.equal(s.outputTokens, 14);
+	assert.deepEqual(s.files, [
+		{path: '/p/a.ts', added: 2, removed: 1},
+		{path: '/p/new.ts', added: 2, removed: 0, created: true},
+	]);
+	assert.equal(s.filesTotal, 2);
+	assert.equal(s.added, 4);
+	assert.equal(s.removed, 1);
+});
+
+test('a failed tool result does not count as a changed file, and the next turn starts clean', async () => {
+	const {session, queries, events} = setup();
+	session.send('one');
+	await tick();
+	queries[0]?.emit(mainMsg('m1', [{type: 'tool_use', id: 't1', name: 'Write', input: {file_path: '/p/a.ts', content: 'x'}}]));
+	queries[0]?.emit({type: 'user', message: {role: 'user', content: [{type: 'tool_result', tool_use_id: 't1', content: 'denied', is_error: true}]}});
+	queries[0]?.emit(ok());
+	await tick();
+	session.send('two');
+	await tick();
+	queries[0]?.emit(ok());
+	await tick();
+	const ends = events.filter(e => e.type === 'turn-end');
+	assert.equal(ends[0]?.type === 'turn-end' && ends[0].summary?.filesTotal, 0);
+	assert.equal(ends[0]?.type === 'turn-end' && ends[0].summary?.tools, 1);
+	assert.equal(ends[1]?.type === 'turn-end' && ends[1].summary?.tools, 0);
+});
+
+test('context events follow the main messages only; the limit comes from getContextUsage after the turn', async () => {
+	const {session, queries, events} = setup();
+	session.send('hi');
+	await tick();
+	const q = queries[0]!;
+	Object.assign(q, {
+		getContextUsage: async (opts?: {detail?: string}) => {
+			assert.equal(opts?.detail, 'summary');
+			return {totalTokens: 50_000, rawMaxTokens: 200_000, categories: [{kind: 'used', tokens: 50_000}, {kind: 'buffer', tokens: 40_000}, {kind: 'free', tokens: 1}]};
+		},
+	});
+	q.emit(mainMsg('m1', [], usage(10, 5, 1000)));
+	q.emit({type: 'assistant', parent_tool_use_id: 'agent-1', message: {id: 'sub', role: 'assistant', content: [], usage: usage(900, 1)}});
+	await tick();
+	const contexts = () => events.flatMap(e => (e.type === 'ui' && e.event.kind === 'context' ? [e.event] : []));
+	assert.deepEqual(contexts(), [{kind: 'context', used: 1010}]);
+	assert.deepEqual(session.context, {used: 1010});
+	q.emit(ok());
+	await tick();
+	await tick();
+	assert.deepEqual(contexts().at(-1), {kind: 'context', used: 50_000, limit: 160_000});
+	assert.deepEqual(session.context, {used: 50_000, limit: 160_000});
+});
+
+test('a missing, failing or hanging getContextUsage leaves the tokens-only meter and logs nothing loud', async () => {
+	for (const mode of ['missing', 'fails', 'garbage', 'hangs'] as const) {
+		const {session, queries, events, log} = setup();
+		session.send('hi');
+		await tick();
+		const q = queries[0]!;
+		if (mode === 'fails') Object.assign(q, {getContextUsage: async () => Promise.reject(new Error('boom'))});
+		if (mode === 'garbage') Object.assign(q, {getContextUsage: async () => ({totalTokens: 'x'})});
+		if (mode === 'hangs') Object.assign(q, {getContextUsage: () => new Promise(() => undefined)});
+		q.emit(mainMsg('m1', [], usage(1, 1, 99)));
+		q.emit(ok());
+		await tick();
+		await tick();
+		assert.deepEqual(session.context, {used: 100}, mode);
+		assert.equal(events.filter(e => e.type === 'ui' && e.event.kind === 'context').length, 1, mode);
+		assert.equal(log.records.filter(r => r.level === 'warn' || r.level === 'error').length, 0, mode);
+		session.close();
+	}
+});

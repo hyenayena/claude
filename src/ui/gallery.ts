@@ -122,3 +122,60 @@ export const toolsGallerySection: GallerySection = {
 		};
 	},
 };
+
+const sampleSummary = {
+	durationMs: 134_000,
+	tools: 5,
+	files: [
+		{path: 'src/parse.ts', added: 30, removed: 5},
+		{path: 'src/load.ts', added: 12, removed: 2, created: true as const},
+	],
+	filesTotal: 3,
+	added: 42,
+	removed: 7,
+	outputTokens: 18_400,
+};
+
+export const statusGallerySection: GallerySection = {
+	name: 'status',
+	title: 'Status bar and turn summary',
+	description: 'The status bar at 40, 80 and 120 columns (idle, running, awaiting approval, high context) and the summary row after a turn',
+	load: async () => {
+		const [bar, summary] = await Promise.all([import('./status-bar.js'), import('./turn-summary.js')]);
+		const base = {
+			phase: 'idle' as const,
+			status: null,
+			awaiting: false,
+			elapsedMs: 0,
+			quietMs: 0,
+			verb: 'Sniffing',
+			model: 'claude-opus-4-5-20251101',
+			route: 'task: light · chat: strong',
+			context: {used: 96_000, limit: 200_000},
+			account: 'work',
+			limit: '5h 82%',
+			tasks: [{status: 'running', background: true, taskType: 'local_agent'}],
+			project: 'yena',
+			branch: 'develop',
+			scrub,
+		};
+		const states = [
+			['idle', base],
+			['running', {...base, phase: 'running' as const, elapsedMs: 72_000, status: {kind: 'thinking' as const, tokens: 1200}}],
+			['awaiting approval', {...base, phase: 'running' as const, awaiting: true}],
+			['high context', {...base, context: {used: 180_000, limit: 200_000}}],
+		] as const;
+		const outcomes = ['ok', 'interrupted', 'error'] as const;
+		return ({width, depth, ascii}) => {
+			const widths = [40, 80, 120].filter(w => w <= width);
+			const rows: string[] = [];
+			for (const [name, input] of states) {
+				rows.push(name);
+				for (const w of widths.length > 0 ? widths : [width]) rows.push(bar.chatStatusRow(input, w - 1, {frame: ascii ? '*' : '✻', depth, ascii}));
+			}
+			rows.push('turn summary');
+			for (const outcome of outcomes) rows.push(summary.turnSummaryRow(sampleSummary, outcome, width - 1, {depth, ascii}));
+			return rows;
+		};
+	},
+};

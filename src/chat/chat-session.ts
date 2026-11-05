@@ -5,12 +5,13 @@ import {clip, errClass, noopLog} from '../log.js';
 import {AUTH_MESSAGE, mapFailure, RESUME_MESSAGE} from '../session.js';
 import type {Effort, LivePatch} from '../chat-prefs.js';
 import type {ChatQueryFn, RewindResult} from '../types.js';
-import type {ChatController, ChatEvent, ChatState, RouteInfo, TurnOutcome, UiEvent} from './events.js';
+import type {ChatController, ChatEvent, ChatState, ContextInfo, RouteInfo, TurnOutcome, UiEvent} from './events.js';
 import type {CacheInfo} from './router.js';
 import type {Tier} from './tiers.js';
 import {InputQueue} from './input-queue.js';
 import {classifyFailure, type Clock, failureMessage, type FailureKind, type RateLimitInfo, systemClock} from './limits.js';
 import {normalize} from './normalize.js';
+import {TurnStats} from './turn-stats.js';
 import {type ChatUsage, subtract, UsageMeter} from './usage.js';
 import {
 	type AuditEntry,
@@ -155,6 +156,30 @@ const outcomeOf = (req: PermissionRequest, d: PermissionDecision): AuditEntry['o
 	}
 };
 
+const MAX_CONTEXT = 100_000_000;
+const CONTEXT_USAGE_MS = 3000;
+
+const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+
+// The limit is the auto-compact point: the window minus the compaction reserve.
+export function parseContextUsage(raw: unknown): {used: number; limit?: number} | undefined {
+	if (typeof raw !== 'object' || raw === null) return undefined;
+	const r = raw as Record<string, unknown>;
+	const used = num(r['totalTokens'] ?? r['total_tokens']);
+	if (used === undefined) return undefined;
+	const max = num(r['rawMaxTokens'] ?? r['raw_max_tokens']);
+	if (max === undefined || max <= 0) return {used};
+	let buffer = 0;
+	const categories = r['categories'];
+	if (Array.isArray(categories)) {
+		for (const c of categories.slice(0, 100)) {
+			if (typeof c === 'object' && c !== null && (c as {kind?: unknown}).kind === 'buffer') buffer += num((c as {tokens?: unknown}).tokens) ?? 0;
+		}
+	}
+	const limit = Math.min(MAX_CONTEXT, Math.round(max - buffer));
+	return limit > 0 ? {used, limit} : {used};
+}
+
 export class ChatSession implements ChatController, PermissionPrompter {
 	private readonly opts: ChatSessionOptions;
 	private readonly timeoutMs: number;
@@ -184,6 +209,12 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private holds = 0;
 	private readonly meter = new UsageMeter();
 	private turnUsageFrom: ChatUsage | undefined;
+	private stats: TurnStats | undefined;
+	private turnClockStart = 0;
+	private _context: ContextInfo | undefined;
+	private contextLimit: number | undefined;
+	private lastContextMain: object | undefined;
+	private compacting = false;
 	private firstOutput: {at: number; warm: boolean} | undefined;
 	private lockHeld = false;
 	private idleTimer: NodeJS.Timeout | undefined;
@@ -236,6 +267,10 @@ export class ChatSession implements ChatController, PermissionPrompter {
 
 	get route(): RouteInfo | undefined {
 		return this._route;
+	}
+
+	get context(): ContextInfo | undefined {
+		return this._context;
 	}
 
 	applyRoute(apply: RouteApply, info: RouteInfo, previous?: Tier, settled?: (applied: boolean) => void): void {
@@ -367,6 +402,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.setState('running');
 		this.turnStartedAt = Date.now();
 		this.turnUsageFrom = this.usage;
+		this.stats = new TurnStats();
+		this.turnClockStart = this.clock.now();
 		this.log.info('turn started', {chars: text.length});
 		this.turnHandle = handle;
 		this.armTurnTimer(this.timeoutMs);
@@ -620,6 +657,9 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this._costUsd = undefined;
 		this._needsNewSession = false;
 		this._route = undefined;
+		this._context = undefined;
+		this.contextLimit = undefined;
+		this.lastContextMain = undefined;
 		this.opts.onReset?.();
 	}
 
@@ -713,6 +753,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.setState('running');
 		this.turnStartedAt = Date.now();
 		this.turnUsageFrom = this.usage;
+		this.stats = new TurnStats();
+		this.turnClockStart = this.clock.now();
 		this.log.info('turn started', {origin: 'claude-code'});
 		this.turnHandle = handle;
 		this.armTurnTimer(this.timeoutMs);
@@ -723,6 +765,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			for await (const msg of handle.q) {
 				if (this.handle !== handle) return;
 				this.meter.add(msg, this.clock.now());
+				this.noteContext();
 				this.keepTurnAlive(handle);
 				for (const ev of normalize(msg, this.clock)) {
 					if (this.handle !== handle) return;
@@ -783,6 +826,12 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			const t = this._tasks.get(ev.id)!;
 			if (ev.status !== 'running') queueMicrotask(() => this.settleIdle());
 			ev = {...ev, background: t.background, description: t.description};
+		}
+		this.feedStats(ev);
+		if (ev.kind === 'status') {
+			const wasCompacting = this.compacting;
+			this.compacting = ev.status === 'compacting';
+			if (wasCompacting && ev.status === null) queueMicrotask(() => this.refreshContext(handle));
 		}
 		if (ev.kind === 'tool-use') {
 			const at = this.clock.now();
@@ -934,8 +983,64 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			...(failure !== undefined && {failure}),
 			...(error !== undefined && failure === undefined && {reason: clip(this.opts.redact(error))}),
 		});
-		this.emit({type: 'turn-end', outcome, ...(error !== undefined && {error})});
+		const stats = this.stats;
+		this.stats = undefined;
+		const summary =
+			stats && main && agents ? stats.finish(this.clock.now() - this.turnClockStart, Math.max(0, main.output) + Math.max(0, agents.output)) : undefined;
+		this.emit({type: 'turn-end', outcome, ...(error !== undefined && {error}), ...(summary !== undefined && {summary})});
 		this.settleIdle();
+		const handle = this.handle;
+		if (handle) void this.refreshContext(handle);
+	}
+
+	private feedStats(ev: UiEvent): void {
+		const stats = this.stats;
+		if (!stats) return;
+		if (ev.kind === 'tool-use') stats.use(ev.toolUseId, ev.name, ev.input);
+		else if (ev.kind === 'tool-result') stats.result(ev.toolUseId, ev.isError, ev.patch);
+		else if (ev.kind === 'agent-message') {
+			for (const item of ev.items) {
+				if (item.type === 'tool-use') stats.use(item.toolUseId, item.name, item.input);
+				else if (item.type === 'tool-result') stats.result(item.toolUseId, item.isError, item.patch);
+			}
+		}
+	}
+
+	private setContext(used: number, limit: number | undefined): void {
+		const info: ContextInfo = {used: Math.min(MAX_CONTEXT, Math.max(0, Math.round(used))), ...(limit !== undefined && {limit})};
+		const was = this._context;
+		if (was && was.used === info.used && was.limit === info.limit) return;
+		this._context = info;
+		this.emit({type: 'ui', event: {kind: 'context', ...info}});
+	}
+
+	private noteContext(): void {
+		const last = this.meter.lastMain;
+		if (!last || last === this.lastContextMain) return;
+		this.lastContextMain = last;
+		this.setContext(last.context, this.contextLimit);
+	}
+
+	private async refreshContext(handle: Handle): Promise<void> {
+		const ask = handle.q.getContextUsage;
+		if (!ask || this.handle !== handle) return;
+		let timer: NodeJS.Timeout | undefined;
+		try {
+			const timeout = new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error('timed out')), CONTEXT_USAGE_MS);
+				timer.unref();
+			});
+			const raw = await Promise.race([ask.call(handle.q, {detail: 'summary'}), timeout]);
+			if (this.handle !== handle) return;
+			const usage = parseContextUsage(raw);
+			if (!usage) return;
+			this.contextLimit = usage.limit;
+			this.setContext(usage.used, usage.limit);
+		} catch (err) {
+			this.log.debug('context usage unavailable', {errClass: errClass(err)});
+		} finally {
+			if (timer) clearTimeout(timer);
+		}
 	}
 
 	private hasRunningTasks(): boolean {

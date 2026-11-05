@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {ChatEvent, RouteInfo} from '../../src/chat/events.js';
 import type {Tier} from '../../src/chat/tiers.js';
-import {formatOut, formatRouteBlock, routeBarText, routeBlockOf, statusBarText, toolHeader} from '../../src/ui/present.js';
+import {formatOut, formatRouteBlock, routeBarText, routeBlockOf, toolHeader} from '../../src/ui/present.js';
 import {runningToolRow} from '../../src/ui/tool-card.js';
 import {initialTranscript, reduceTranscript, ROUTE_TOOL_ID, type Out, type TranscriptState} from '../../src/ui/transcript.js';
 import {stringCells, stripStyles} from '../../src/kit.js';
@@ -78,7 +78,4 @@ test('the status bar shows the task tier, a held chat tier and a pin', () => {
 	assert.equal(routeBarText({outcome: 'rated', main: 'standard', rated: 'standard'}), 'task: standard');
 	assert.equal(routeBarText({outcome: 'rated', main: 'strong', rated: 'standard', held: true}), 'task: standard · chat: strong');
 	assert.equal(routeBarText({outcome: 'pinned', main: 'max', pinned: 'max'}), 'tier: max (pinned)');
-	const base = {model: 'm', sessionId: '0123456789', phase: 'idle' as const};
-	assert.equal(statusBarText({...base, route: 'task: light'}, scrub), '01234567 · m · task: light · idle');
-	assert.equal(statusBarText({...base, route: ''}, scrub), '01234567 · m · idle');
 });

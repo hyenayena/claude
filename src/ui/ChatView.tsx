@@ -1,3 +1,4 @@
+import {basename} from 'node:path';
 import React, {createElement, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore} from 'react';
 import {Box, Text, useInput, usePaste, useWindowSize, type Key} from 'ink';
 import type {PrintOptions, ViewHost} from '../../../../src/api.js';
@@ -25,8 +26,6 @@ import {
 	liveTail,
 	modeHint,
 	routeBarText,
-	statusBarText,
-	tasksBarText,
 	todoLines,
 	queuedLines,
 	type Scrub,
@@ -49,8 +48,9 @@ import {
 import {QuestionPrompt} from './QuestionPrompt.js';
 import {parseSlash, slashHints, type SlashHints} from './slash.js';
 import {commandHost, type ViewCommandInfo} from './view-commands.js';
-import {WorkingLine} from './WorkingLine.js';
-import {StatusBar, useViewHost} from './kit.js';
+import {ChatStatusBar} from './ChatStatusBar.js';
+import {turnFilesRows} from './turn-summary.js';
+import {useViewHost} from './kit.js';
 import {preloadHighlighter} from './highlight.js';
 import {mouseHost, validEvent, type ViewMouseEvent} from './view-mouse.js';
 import {vimKey, vimStart, type VimEffect, type VimState} from './vim.js';
@@ -81,6 +81,7 @@ export interface ChatViewProps {
 	inputMode?: () => 'normal' | 'vim';
 	reveal?: (s: string) => string;
 	projectDir?: string;
+	readBranch?: () => Promise<string | undefined>;
 	pin?: {current(): string | undefined; subscribe(cb: () => void): () => void};
 	armMs?: number;
 	host?: ViewHost;
@@ -172,6 +173,9 @@ export function ChatView(props: ChatViewProps) {
 		[printRaw],
 	);
 	const sinceRef = useRef(Date.now());
+	const branchRef = useRef<string | undefined>(undefined);
+	const readBranchRef = useRef(props.readBranch);
+	readBranchRef.current = props.readBranch;
 	const escArmedRef = useRef<number | undefined>(undefined);
 	const lastEventRef = useRef(Date.now());
 	const beatRef = useRef(0);
@@ -261,6 +265,20 @@ export function ChatView(props: ChatViewProps) {
 		render();
 	}, [render]);
 
+	const refreshBranch = useCallback(() => {
+		const read = readBranchRef.current;
+		if (!read) return;
+		read().then(
+			branch => {
+				if (closedRef.current || branch === branchRef.current) return;
+				branchRef.current = branch;
+				render();
+			},
+			() => undefined,
+		);
+	}, [render]);
+	useEffect(() => refreshBranch(), [refreshBranch]);
+
 	const feed = useCallback(
 		(event: ChatEvent) => {
 			if (closedRef.current) return;
@@ -285,8 +303,13 @@ export function ChatView(props: ChatViewProps) {
 			const step = reduceTranscript(tRef.current, event);
 			if (tRef.current.phase === 'idle' && step.state.phase !== 'idle') sinceRef.current = Date.now();
 			setT(event.type === 'turn-end' ? {...step.state, notice: undefined} : step.state);
+			if (event.type === 'turn-end') refreshBranch();
 			for (const out of step.out) {
 				if (out.kind === 'blank') continue;
+				if (out.kind === 'turn-summary') {
+					print(formatOut(out, scrub, reveal, lastWidthRef.current || undefined), {render: w => formatOut(out, scrub, reveal, w)});
+					continue;
+				}
 				if (out.kind === 'assistant') {
 					beatRef.current++;
 					const width = lastWidthRef.current > 1 ? lastWidthRef.current - 1 : undefined;
@@ -319,7 +342,7 @@ export function ChatView(props: ChatViewProps) {
 				}
 			}
 		},
-		[print, printNotice, scrub, reveal, setT, render, setQueue, agents],
+		[print, printNotice, scrub, reveal, setT, render, setQueue, agents, refreshBranch],
 	);
 
 	const flushQueue = useCallback(() => {
@@ -708,7 +731,10 @@ export function ChatView(props: ChatViewProps) {
 		props.loadTranscript!().then(
 			lines => {
 				if (!viewerRef.current) return;
-				viewerRef.current = {lines: lines.length > 0 ? lines.map(l => (typeof l === 'string' ? scrub(l) : l)) : ['The transcript is empty so far.'], top: -1};
+				const shown: ViewerLine[] = lines.length > 0 ? lines.map(l => (typeof l === 'string' ? scrub(l) : l)) : ['The transcript is empty so far.'];
+				const summary = tRef.current.lastSummary;
+				if (summary !== undefined && summary.files.length > 0) shown.push('', {render: w => turnFilesRows(summary, w, scrub, props.projectDir)});
+				viewerRef.current = {lines: shown, top: -1};
 				render();
 			},
 			(error: unknown) => {
@@ -1027,7 +1053,7 @@ export function ChatView(props: ChatViewProps) {
 	}, {isActive: focused});
 
 	useEffect(() => {
-		host?.setTitle?.(barTitle, barStatusFull);
+		host?.setTitle?.(barTitle, sessionId8);
 	});
 
 	useEffect(() => {
@@ -1049,23 +1075,30 @@ export function ChatView(props: ChatViewProps) {
 		return armExpiry(resetsAt * 1000, clock, render);
 	}, [resetsAt, clock, render]);
 	const pin = props.pin?.current();
-	const barStatusFull = statusBarText(
-		{
-			...(t.account !== undefined && {account: t.account}),
-			...(pin !== undefined && {pin}),
-			model: t.model,
-			route: routeBarText(controller.route),
-			sessionId: t.sessionId,
-			phase: t.phase,
-			pending: controller.pendingPermissions.length,
-			...(limit !== undefined && {limit}),
-			tasks: tasksBarText(controller.tasks ?? []),
-		},
-		scrub,
-	);
+	const sessionId8 = t.sessionId ? scrub(t.sessionId).slice(0, 8) : undefined;
 	const barTitle = scrub(controller.title ?? NEW_CHAT_TITLE);
-	const statusBar = host?.setTitle ? null : <StatusBar text={barStatusFull} />;
-	shownRef.current = {columns, rows, inputRows: 0, vimNormal: false, statusBar: statusBar !== null, waiting: false, belowInput: 0, panelHeight};
+	const statusBar = (
+		<ChatStatusBar
+			phase={t.phase}
+			status={t.status}
+			pending={controller.pendingPermissions.length}
+			since={sinceRef.current}
+			beat={beatRef.current}
+			lastEventAt={lastEventRef.current}
+			columns={columns}
+			{...(t.model !== undefined && {model: t.model})}
+			route={routeBarText(controller.route)}
+			{...(controller.context !== undefined && {context: controller.context})}
+			{...(t.account !== undefined && {account: t.account})}
+			{...(pin !== undefined && {pin})}
+			{...(limit !== undefined && {limit})}
+			tasks={controller.tasks ?? []}
+			{...(props.projectDir !== undefined && {project: basename(props.projectDir)})}
+			{...(branchRef.current !== undefined && {branch: branchRef.current})}
+			scrub={scrub}
+		/>
+	);
+	shownRef.current = {columns, rows, inputRows: 0, vimNormal: false, statusBar: true, waiting: false, belowInput: 0, panelHeight};
 	const headerSlot = headerHost(host) !== undefined;
 	const fallbackPanel = headerSlot ? null : <AgentPanel store={agents} {...(host !== undefined && {host})} scrub={scrub} rows={rows} />;
 
@@ -1162,7 +1195,7 @@ export function ChatView(props: ChatViewProps) {
 	const hint = modeHint(t.mode);
 	const rule = '─'.repeat(Math.max(1, columns - 1));
 	const cap = (rows >= 12 ? rows - 3 : rows - 1) - panelHeight;
-	let rem = Math.max(0, cap - 1);
+	let rem = Math.max(0, cap - 2);
 	const ruleRows = rem >= 6 ? 2 : 0;
 	rem -= ruleRows;
 	const hintRows = hint && rem >= 4 ? 1 : 0;
@@ -1172,8 +1205,6 @@ export function ChatView(props: ChatViewProps) {
 	const noticeNeeded = noticeText ? Math.ceil(noticeText.length / Math.max(1, columns)) : 0;
 	const noticeRows = Math.min(noticeNeeded, 2, Math.max(0, rem));
 	rem -= noticeRows;
-	const workingRows = (running || t.status !== null) && rem > 0 ? 1 : 0;
-	rem -= workingRows;
 	const mention = activeMention();
 	const mentionRows = mention ? Math.min(mention.matches.length, Math.max(0, rem - 2)) : 0;
 	rem -= mentionRows;
@@ -1202,7 +1233,6 @@ export function ChatView(props: ChatViewProps) {
 				</Text>
 			))}
 			<LiveTools tools={tools} fold={t.fold} scrub={scrub} maxRows={toolRows} width={Math.max(1, columns - 1)} />
-			{workingRows > 0 && <WorkingLine phase={t.phase} status={t.status} since={sinceRef.current} beat={beatRef.current} lastEventAt={t.pending > 0 ? undefined : lastEventRef.current} />}
 			{todos.map((line, i) => (
 				<Text key={`todo-${i}`} wrap="truncate">
 					{line}
