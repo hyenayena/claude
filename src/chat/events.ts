@@ -39,7 +39,7 @@ export type UiEvent =
 	| {kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; patch?: ToolPatch; durationMs?: number}
 	| {kind: 'tool-progress'; toolUseId: string; name: string; elapsedSeconds: number}
 	| {kind: 'agent-activity'; toolUseId: string; name: string; input: unknown}
-	| {kind: 'agent-message'; agentId: string; model?: string; items: AgentItem[]}
+	| {kind: 'agent-message'; agentId: string; taskId?: string; model?: string; items: AgentItem[]}
 	| {kind: 'context'; used: number; limit?: number}
 	| {kind: 'status'; status: 'compacting' | 'requesting' | null}
 	| {kind: 'cli-state'; state: 'running' | 'idle' | 'requires_action'}

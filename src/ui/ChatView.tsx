@@ -10,7 +10,7 @@ import {sanitizeMultilineInput, truncateCells, wrapRows} from '../kit.js';
 import {layoutPanel, navigate, revealAgent, type PanelMove} from './agent-panel.js';
 import {createAgentStore} from './agent-store.js';
 import {agentViewLines} from './agent-view.js';
-import {focusAgent, initialAgents, reduceAgents, seedFromTasks} from './agents.js';
+import {focusAgent, initialAgents, reconcileAgents, reduceAgents, seedFromTasks} from './agents.js';
 import {AgentPanel} from './AgentPanel.js';
 import {headerHost} from './view-header.js';
 import {editorReduce, emptyEditor, MAX_INPUT, type EditorAction, type EditorState} from './editor.js';
@@ -279,11 +279,33 @@ export function ChatView(props: ChatViewProps) {
 	}, [render]);
 	useEffect(() => refreshBranch(), [refreshBranch]);
 
+	const reconcileTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const reconcileNow = useCallback((): void => {
+		if (reconcileTimer.current !== undefined) clearTimeout(reconcileTimer.current);
+		reconcileTimer.current = undefined;
+		const now = Date.now();
+		const {state, recheckAt} = reconcileAgents(agents.get(), controller.tasks ?? [], now);
+		if (state !== agents.get()) agents.set(state);
+		if (recheckAt !== undefined && !closedRef.current) {
+			reconcileTimer.current = setTimeout(reconcileNow, Math.max(0, recheckAt - now) + 50);
+			reconcileTimer.current.unref?.();
+		}
+	}, [agents, controller]);
+	useEffect(
+		() => () => {
+			if (reconcileTimer.current !== undefined) clearTimeout(reconcileTimer.current);
+		},
+		[],
+	);
+
 	const feed = useCallback(
 		(event: ChatEvent) => {
 			if (closedRef.current) return;
 			lastEventRef.current = Date.now();
-			agents.set(reduceAgents(agents.get(), event));
+			agents.set(reduceAgents(agents.get(), event, Date.now()));
+			if (event.type === 'turn-end' || event.type === 'sent' || event.type === 'state' || (event.type === 'ui' && event.event.kind === 'task')) {
+				reconcileNow();
+			}
 			if (event.type === 'sent') {
 				print(formatUserLine(event.text, scrub));
 				return;
@@ -342,7 +364,7 @@ export function ChatView(props: ChatViewProps) {
 				}
 			}
 		},
-		[print, printNotice, scrub, reveal, setT, render, setQueue, agents, refreshBranch],
+		[print, printNotice, scrub, reveal, setT, render, setQueue, agents, refreshBranch, reconcileNow],
 	);
 
 	const flushQueue = useCallback(() => {

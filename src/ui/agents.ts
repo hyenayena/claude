@@ -1,4 +1,4 @@
-import {SPAWN_TOOLS} from '../chat/agent-policy.js';
+import {HANDBACK_TOOL, SPAWN_TOOLS} from '../chat/agent-policy.js';
 import type {AgentItem, ChatEvent, TaskStatus, ToolPatch, UiEvent} from '../chat/events.js';
 
 export type AgentStatus = TaskStatus;
@@ -28,6 +28,12 @@ export type AgentBox = {
 	bytes: number;
 	pending: Map<string, {name: string; input: unknown}>;
 	report?: string;
+	spawnName?: string;
+	aliases?: string[];
+	placeholder?: true;
+	touchedAt?: number;
+	reopened?: {status: AgentStatus; finishedTurn?: number; report?: string; entries: number};
+	staleStopped?: true;
 };
 
 export type AgentsState = {
@@ -53,8 +59,11 @@ export const AGENTS_CAPS = {
 	report: 64 * 1024,
 	field: 16 * 1024,
 	name: 256,
+	aliases: 16,
 } as const;
 
+export const AGENT_STALE_GRACE_MS = 10_000;
+export const RESUMED_NOTICE = 'Resumed';
 export const SEED_NOTICE = 'Earlier messages are not available';
 
 export const initialAgents = (): AgentsState => ({boxes: new Map(), order: [], turn: 0, lastTurnEnd: 0, running: false, scroll: 0});
@@ -160,13 +169,18 @@ const newBox = (state: AgentsState, id: string, base: string, fields: Partial<Ag
 	...fields,
 });
 
-const spawnBox = (state: AgentsState, id: string, input: unknown, parent?: string): AgentsState => {
+const touch = (box: AgentBox, now?: number): AgentBox => (now === undefined ? box : {...box, touchedAt: now});
+
+const spawnBox = (state: AgentsState, id: string, input: unknown, parent?: string, now?: number): AgentsState => {
 	if (state.boxes.has(id)) return state;
 	const o = isRecord(input) ? input : {};
 	const parentBox = parent !== undefined ? state.boxes.get(parent) : undefined;
 	const model = text(o['model'], AGENTS_CAPS.name);
 	const subagentType = text(o['subagent_type'], AGENTS_CAPS.name);
-	const box = newBox(state, id, text(o['name'], AGENTS_CAPS.name) ?? subagentType ?? 'agent', {
+	const spawnName = text(o['name'], AGENTS_CAPS.name);
+	const box = newBox(state, id, spawnName ?? subagentType ?? 'agent', {
+		...(spawnName !== undefined && {spawnName}),
+		...(now !== undefined && {touchedAt: now}),
 		description: text(o['description'], AGENTS_CAPS.field) ?? '',
 		prompt: text(o['prompt'], AGENTS_CAPS.field) ?? '',
 		background: o['run_in_background'] === true,
@@ -249,28 +263,98 @@ const finishFromResult = (state: AgentsState, id: string, isError: boolean, repo
 	return putBox(state, finish(box, isError ? 'failed' : 'completed', state.turn, report));
 };
 
-const agentMessage = (state: AgentsState, e: Extract<UiEvent, {kind: 'agent-message'}>): AgentsState => {
+const findBox = (state: AgentsState, id?: string, taskId?: string): AgentBox | undefined => {
+	const boxes = [...state.boxes.values()];
+	return (
+		(id !== undefined ? (state.boxes.get(id) ?? boxes.find(b => b.aliases?.includes(id))) : undefined) ??
+		(taskId !== undefined ? boxes.find(b => b.taskId === taskId) : undefined)
+	);
+};
+
+const isKnownId = (box: AgentBox, id: string): boolean => box.id === id || (box.aliases?.includes(id) ?? false);
+
+const withAlias = (box: AgentBox, id?: string): AgentBox => {
+	if (id === undefined || isKnownId(box, id)) return box;
+	const aliases = [...(box.aliases ?? []), id];
+	while (aliases.length > AGENTS_CAPS.aliases) aliases.shift();
+	return {...box, aliases};
+};
+
+const reopen = (box: AgentBox, now?: number, alias?: string): AgentBox => {
+	const aliased = withAlias(box, alias);
+	if (box.status === 'running') return touch(aliased, now);
+	const {finishedTurn, report, ...rest} = aliased;
+	const noticed = appendEntries({...rest, status: 'running', background: true}, [{kind: 'notice', text: RESUMED_NOTICE}]);
+	return touch(
+		{
+			...noticed,
+			reopened: {
+				status: box.status,
+				entries: noticed.dropped + noticed.history.length,
+				...(finishedTurn !== undefined && {finishedTurn}),
+				...(report !== undefined && {report}),
+			},
+		},
+		now,
+	);
+};
+
+const sendMessage = (state: AgentsState, callId: string, input: unknown, now?: number): AgentsState => {
+	const to = isRecord(input) ? text(input['to'], AGENTS_CAPS.name) : undefined;
+	if (to === undefined) return state;
+	const boxes = state.order.map(i => state.boxes.get(i)!).filter(b => b !== undefined).reverse();
+	const box = boxes.find(b => b.spawnName === to) ?? boxes.find(b => b.taskId === to) ?? boxes.find(b => b.name === to);
+	return box ? putBox(state, reopen(box, now, callId)) : state;
+};
+
+const agentMessage = (state: AgentsState, e: Extract<UiEvent, {kind: 'agent-message'}>, now?: number): AgentsState => {
 	let next = state;
-	if (!next.boxes.has(e.agentId)) {
-		next = addBox(next, newBox(next, e.agentId, 'agent'));
-		if (!next.boxes.has(e.agentId)) return state;
+	let found = findBox(next, e.agentId, e.taskId);
+	if (!found) {
+		next = addBox(next, newBox(next, e.agentId, 'agent', {placeholder: true, ...(e.taskId !== undefined && {taskId: e.taskId}), ...(now !== undefined && {touchedAt: now})}));
+		found = next.boxes.get(e.agentId);
+		if (!found) return state;
+	} else {
+		const resumed = !isKnownId(found, e.agentId);
+		let box: AgentBox;
+		if (found.staleStopped) {
+			// The safety net stopped it during a long silent step: the agent was alive after all.
+			const {staleStopped: _stale, finishedTurn: _turn, ...rest} = withAlias(found, resumed ? e.agentId : undefined);
+			box = touch({...rest, status: 'running'}, now);
+		} else box = resumed ? reopen(withAlias(found, e.agentId), now) : found;
+		if (box.taskId === undefined && e.taskId !== undefined) box = {...box, taskId: e.taskId};
+		if (box !== found) next = putBox(next, box);
+		found = box;
 	}
+	const ownId = found.id;
 	for (const item of e.items) {
-		if (item.type === 'tool-use' && SPAWN_TOOLS.has(item.name)) next = spawnBox(next, item.toolUseId, item.input, e.agentId);
-		if (item.type === 'tool-result' && item.toolUseId !== e.agentId && next.boxes.has(item.toolUseId)) {
+		if (item.type === 'tool-use' && SPAWN_TOOLS.has(item.name)) next = spawnBox(next, item.toolUseId, item.input, ownId, now);
+		else if (item.type === 'tool-use' && item.name === 'SendMessage') next = sendMessage(next, item.toolUseId, item.input, now);
+		if (item.type === 'tool-result' && item.toolUseId !== ownId && next.boxes.has(item.toolUseId)) {
 			next = finishFromResult(next, item.toolUseId, item.isError, item.text);
 		}
 	}
-	const box = next.boxes.get(e.agentId);
+	const box = next.boxes.get(ownId);
 	if (!box) return next;
-	let updated = applyItems(box, e.items);
+	let updated = touch(applyItems(box, e.items), now);
 	if (e.model !== undefined && !updated.modelReported) updated = {...updated, model: e.model, modelReported: true};
+	const handback = e.items.find(i => i.type === 'tool-use' && i.name === HANDBACK_TOOL);
+	if (handback?.type === 'tool-use' && updated.status === 'running') {
+		const message = isRecord(handback.input) ? text(handback.input['message'], AGENTS_CAPS.report) : undefined;
+		updated = finish(updated, 'completed', next.turn, message);
+	}
 	return putBox(next, updated);
 };
 
-const taskEvent = (state: AgentsState, e: Extract<UiEvent, {kind: 'task'}>): AgentsState => {
-	const box = e.toolUseId !== undefined ? state.boxes.get(e.toolUseId) : [...state.boxes.values()].find(b => b.taskId === e.id);
+const taskEvent = (state: AgentsState, e: Extract<UiEvent, {kind: 'task'}>, now?: number): AgentsState => {
+	let box = findBox(state, e.toolUseId, e.id);
 	if (!box) return state;
+	if (e.toolUseId !== undefined && !isKnownId(box, e.toolUseId)) {
+		const resumed = e.status === 'running' && box.status !== 'running';
+		box = withAlias(box, e.toolUseId);
+		if (resumed) box = reopen(box, now);
+	}
+	if (e.status === 'running') box = touch(box, now);
 	const parentBox = e.parentTaskId !== undefined ? [...state.boxes.values()].find(b => b.taskId === e.parentTaskId && b.id !== box.id) : undefined;
 	let next: AgentBox = {
 		...box,
@@ -298,14 +382,49 @@ const removeWhere = (state: AgentsState, drop: (b: AgentBox) => boolean): Agents
 	return prune({...state, boxes});
 };
 
-export function reduceAgents(state: AgentsState, event: ChatEvent): AgentsState {
+export function reconcileAgents(state: AgentsState, tasks: readonly SeedTask[], now: number): {state: AgentsState; recheckAt?: number} {
+	if (state.running) return {state};
+	const mapped = (b: AgentBox): boolean =>
+		tasks.some(t => t.status === 'running' && ((t.id !== undefined && t.id === b.taskId) || (t.toolUseId !== undefined && isKnownId(b, t.toolUseId))));
+	const gone = new Set<string>();
+	const changed = new Map<string, AgentBox>();
+	let recheckAt: number | undefined;
+	for (const b of state.boxes.values()) {
+		if (b.status !== 'running' || mapped(b)) continue;
+		const expiry = (b.touchedAt ?? 0) + AGENT_STALE_GRACE_MS;
+		if (now < expiry) {
+			recheckAt = recheckAt === undefined ? expiry : Math.min(recheckAt, expiry);
+			continue;
+		}
+		if (b.placeholder) gone.add(b.id);
+		else if (b.reopened && b.reopened.entries === b.dropped + b.history.length) {
+			const {reopened, ...rest} = b;
+			changed.set(b.id, {
+				...rest,
+				status: reopened.status,
+				...(reopened.finishedTurn !== undefined && {finishedTurn: reopened.finishedTurn}),
+				...(reopened.report !== undefined && {report: reopened.report}),
+			});
+		} else changed.set(b.id, {...finish(b, 'stopped', state.turn), staleStopped: true});
+	}
+	let next = state;
+	if (changed.size > 0) {
+		const boxes = new Map(state.boxes);
+		for (const [id, b] of changed) boxes.set(id, b);
+		next = {...state, boxes};
+	}
+	next = removeWhere(next, b => gone.has(b.id));
+	return {state: next, ...(recheckAt !== undefined && {recheckAt})};
+}
+
+export function reduceAgents(state: AgentsState, event: ChatEvent, now?: number): AgentsState {
 	switch (event.type) {
 		case 'state':
 			if (event.state === 'running' && !state.running) return {...state, running: true, turn: state.turn + 1};
 			if (event.state !== 'running' && state.running) return {...state, running: false};
 			return state;
 		case 'sent':
-			return removeWhere(state, b => b.status !== 'running' && !b.background);
+			return removeWhere(state, b => b.status !== 'running' && (!b.background || b.placeholder === true));
 		case 'turn-end': {
 			const stop = event.outcome === 'interrupted' || event.outcome === 'error' || event.outcome === 'timeout';
 			let next: AgentsState = {...state, running: false, lastTurnEnd: state.turn};
@@ -319,13 +438,14 @@ export function reduceAgents(state: AgentsState, event: ChatEvent): AgentsState 
 			const e = event.event;
 			switch (e.kind) {
 				case 'tool-use':
-					return SPAWN_TOOLS.has(e.name) ? spawnBox(state, e.toolUseId, e.input) : state;
+					if (SPAWN_TOOLS.has(e.name)) return spawnBox(state, e.toolUseId, e.input, undefined, now);
+					return e.name === 'SendMessage' ? sendMessage(state, e.toolUseId, e.input, now) : state;
 				case 'tool-result':
 					return finishFromResult(state, e.toolUseId, e.isError, e.text);
 				case 'agent-message':
-					return agentMessage(state, e);
+					return agentMessage(state, e, now);
 				case 'task':
-					return taskEvent(state, e);
+					return taskEvent(state, e, now);
 				default:
 					return state;
 			}

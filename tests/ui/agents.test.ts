@@ -7,7 +7,7 @@ const ui = (event: UiEvent): ChatEvent => ({type: 'ui', event});
 const spawn = (id: string, input: Record<string, unknown> = {}): ChatEvent => ui({kind: 'tool-use', toolUseId: id, name: 'Agent', input});
 const msg = (agentId: string, items: AgentItem[], model?: string): ChatEvent =>
 	ui({kind: 'agent-message', agentId, items, ...(model !== undefined && {model})});
-const run = (events: ChatEvent[], from: AgentsState = initialAgents()): AgentsState => events.reduce(reduceAgents, from);
+const run = (events: ChatEvent[], from: AgentsState = initialAgents()): AgentsState => events.reduce((s, e) => reduceAgents(s, e), from);
 
 test('a main Agent or Task call creates a box with its name, prompt, model and background flag', () => {
 	const s = run([

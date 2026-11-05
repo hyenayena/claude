@@ -511,6 +511,7 @@ const readUiEvent = (v: unknown): UiEvent | undefined => {
 			return {
 				kind: 'agent-message',
 				agentId: str(o.agentId, 'agentId', 256),
+				...(has(o, 'taskId') && {taskId: ident(o.taskId, 'taskId')}),
 				...(has(o, 'model') && {model: str(o.model, 'model', 256)}),
 				items: arr(o.items, 'items', 64).map(readAgentItem),
 			};

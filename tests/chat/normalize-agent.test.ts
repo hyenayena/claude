@@ -16,6 +16,19 @@ test('subagent messages with a malformed parent id or content produce nothing', 
 	assert.deepEqual(normalize(sdk({type: 'result', parent_tool_use_id: 'p'})), []);
 });
 
+test('agent_id becomes taskId; an over-long or empty one is omitted', () => {
+	const first = (extra: Record<string, unknown>) => {
+		const [e] = normalize(assistant('p', [{type: 'text', text: 'x'}], extra));
+		assert.equal(e?.kind, 'agent-message');
+		return e as Extract<NonNullable<typeof e>, {kind: 'agent-message'}>;
+	};
+	assert.equal(first({agent_id: 'task-1'}).taskId, 'task-1');
+	assert.equal('taskId' in first({agent_id: 't'.repeat(257)}), false);
+	assert.equal('taskId' in first({agent_id: ''}), false);
+	assert.equal('taskId' in first({agent_id: 5}), false);
+	assert.equal('taskId' in first({}), false);
+});
+
 test('an oversized subagent message is capped by items and bytes and still fits a runner frame', () => {
 	const many = Array.from({length: 500}, (_, i) => ({type: 'tool_use', id: `t${i}`, name: 'Read', input: {file_path: `f${i}`}}));
 	const [a] = normalize(assistant('p', many));

@@ -282,10 +282,12 @@ const fromAgent = (parent: string, msg: Loose): UiEvent[] => {
 	if (items.length === 0) return [];
 	const inner = isRecord(msg['message']) ? msg['message'] : {};
 	const model = str(inner['model']);
+	const taskId = str(msg['agent_id']);
 	return [
 		{
 			kind: 'agent-message',
 			agentId: parent,
+			...(taskId && taskId.length <= NAME_CAP && {taskId}),
 			...(msg['type'] === 'assistant' && model && model.length <= NAME_CAP && {model}),
 			items: capItems(items),
 		},

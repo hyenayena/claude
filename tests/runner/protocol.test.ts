@@ -206,9 +206,14 @@ test('an agent-message round-trips with every item type; malformed or oversized 
 	assert.deepEqual(createDecoder('toClient').push(encodeFrame(frame)), [frame]);
 	const plain: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'agent-message', agentId: 'a', items: []}}};
 	assert.deepEqual(createDecoder('toClient').push(encodeFrame(plain)), [plain]);
+	const withTask: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'agent-message', agentId: 'a', taskId: 'task-1', items: []}}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(withTask)), [withTask]);
 	const bad = (event: unknown) => line({v: 1, type: 'event', event: {type: 'ui', event}});
 	const ok = {kind: 'agent-message', agentId: 'a', items: [{type: 'text', text: 'x'}]};
 	for (const event of [
+		{...ok, taskId: 7},
+		{...ok, taskId: ''},
+		{...ok, taskId: 't'.repeat(257)},
 		{...ok, agentId: 7},
 		{...ok, agentId: 'a'.repeat(257)},
 		{...ok, model: 'm'.repeat(257)},
