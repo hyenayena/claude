@@ -15,6 +15,9 @@ export const AGENT_ITEMS_CAP = 64;
 export const AGENT_TEXT_CAP = 64 * 1024;
 export const AGENT_TOTAL_CAP = 512 * 1024;
 const TASK_PROMPT_CAP = 16 * 1024;
+// The runner protocol rejects a longer field and the attached chat loses its runner.
+const TASK_DESCRIPTION_CAP = 4096;
+const TASK_SUMMARY_CAP = 20_000;
 const NAME_CAP = 256;
 
 const isRecord = (v: unknown): v is Loose => typeof v === 'object' && v !== null;
@@ -76,11 +79,11 @@ const fromSystem = (msg: Loose): UiEvent[] => {
 					kind: 'task',
 					id,
 					status,
-					...(description !== undefined && {description}),
+					...(description !== undefined && {description: description.slice(0, TASK_DESCRIPTION_CAP)}),
 					...(msg['is_backgrounded'] === true && {background: true}),
-					...(summary !== undefined && {summary}),
-					...(toolUseId !== undefined && {toolUseId}),
-					...(taskType !== undefined && {taskType}),
+					...(summary !== undefined && {summary: summary.slice(0, TASK_SUMMARY_CAP)}),
+					...(toolUseId !== undefined && toolUseId.length <= NAME_CAP && {toolUseId}),
+					...(taskType !== undefined && taskType.length <= NAME_CAP && {taskType}),
 					...nested,
 				},
 			];

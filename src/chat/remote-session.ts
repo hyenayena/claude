@@ -139,7 +139,7 @@ export class RemoteChatSession implements ChatHandle {
 				} catch (err) {
 					const message = err instanceof ProtocolError ? err.message : 'Invalid data';
 					if (!settled) fail(new Error(`Could not read the background chat: ${message}`));
-					else session.lose('The background chat sent invalid data.');
+					else session.lose('The background chat sent invalid data.', message);
 					return;
 				}
 				for (const frame of frames) {
@@ -597,11 +597,11 @@ export class RemoteChatSession implements ChatHandle {
 		entry.detach();
 	}
 
-	private lose(reason: string): void {
+	private lose(reason: string, cause?: string): void {
 		if (this._state === 'closed') return;
 		if (!this.lostReported) {
 			this.lostReported = true;
-			this.log.warn('chat remote', {action: 'lost'});
+			this.log.warn('chat remote', {action: 'lost', ...(cause !== undefined && {cause})});
 			this.opts.onLost?.(reason);
 		}
 		this.shutdown();

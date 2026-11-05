@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {SDKMessage} from '@anthropic-ai/claude-agent-sdk';
 import {normalize} from '../../src/chat/normalize.js';
+import {createDecoder, encodeFrame, type RunnerFrame} from '../../src/runner/protocol.js';
 
 const n = (m: unknown) => normalize(m as SDKMessage);
 
@@ -130,6 +131,23 @@ test('rate_limit_event validates resetsAt against the injected clock', () => {
 	const raw = {type: 'rate_limit_event', rate_limit_info: {status: 'rejected', resetsAt: FAR + 600}};
 	assert.deepEqual(normalize(raw as SDKMessage, clock), [{kind: 'rate-limit', info: {status: 'rejected', resetsAt: FAR + 600}}]);
 	assert.deepEqual(n(raw), [{kind: 'rate-limit', info: {status: 'rejected'}}]);
+});
+
+test('long task fields are clipped so the runner frame still decodes', () => {
+	const events = [
+		n({type: 'system', subtype: 'task_started', task_id: 'b1', task_type: 'local_bash', description: 'x'.repeat(10_000)}),
+		n({type: 'system', subtype: 'task_notification', task_id: 'b1', status: 'completed', summary: 'y'.repeat(50_000), tool_use_id: 'z'.repeat(300)}),
+	].flat();
+	assert.equal(events.length, 2);
+	for (const event of events) {
+		const frame = {v: 1, type: 'event', event: {type: 'ui', event}} as RunnerFrame;
+		const [decoded] = createDecoder('toClient').push(Buffer.from(encodeFrame(frame)));
+		assert.deepEqual(decoded, frame);
+	}
+	const [started, done] = events as Array<{description?: string; summary?: string; toolUseId?: string}>;
+	assert.equal(started!.description!.length, 4096);
+	assert.equal(done!.summary!.length, 20_000);
+	assert.equal(done!.toolUseId, undefined);
 });
 
 test('task_started carries tool_use_id and task_type', () => {
