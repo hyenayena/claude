@@ -11,7 +11,9 @@ import {layoutPanel, navigate, revealAgent, type PanelMove} from './agent-panel.
 import {createAgentStore} from './agent-store.js';
 import {agentViewLines} from './agent-view.js';
 import {focusAgent, initialAgents, reconcileAgents, reduceAgents, seedFromTasks} from './agents.js';
-import {AgentPanel} from './AgentPanel.js';
+import {ChatHeader} from './ChatHeader.js';
+import {createStore} from './store.js';
+import {PLAN, planViewerRows, planWidgetRows, type PlanView} from './plan-widget.js';
 import {headerHost} from './view-header.js';
 import {editorReduce, emptyEditor, MAX_INPUT, type EditorAction, type EditorState} from './editor.js';
 import {cursorFromClick, InputLine, inputRowsNeeded} from './InputLine.js';
@@ -26,7 +28,6 @@ import {
 	liveTail,
 	modeHint,
 	routeBarText,
-	todoLines,
 	queuedLines,
 	type Scrub,
 } from './present.js';
@@ -194,6 +195,7 @@ export function ChatView(props: ChatViewProps) {
 			...(props.initialAccount !== undefined && {account: props.initialAccount}),
 			mode: controller.mode,
 			pending: controller.pendingPermissions.length,
+			...(controller.plan !== undefined && {plan: controller.plan}),
 		}),
 	);
 	const promptRef = useRef<PromptEntry | null>(null);
@@ -224,9 +226,16 @@ export function ChatView(props: ChatViewProps) {
 	const agents = agentsRef.current;
 	const agentsState = useSyncExternalStore(agents.subscribe, agents.get);
 	const agentTopRef = useRef(-1);
-	const panelOf = (cols: number, height: number) => layoutPanel(agents.get(), {columns: cols, rows: height, scrub});
-	const focusBox = (focus: Parameters<typeof focusAgent>[1]) => agents.set(revealAgent(focusAgent(agents.get(), focus), {columns, rows, scrub}));
-	const panelHeight = layoutPanel(agentsState, {columns, rows, scrub}).height;
+	const planRef = useRef<ReturnType<typeof createStore<PlanView>> | undefined>(undefined);
+	if (!planRef.current) planRef.current = createStore<PlanView>({items: tRef.current.plan, running: false, stale: false, expanded: false});
+	const planStore = planRef.current;
+	const planState = useSyncExternalStore(planStore.subscribe, planStore.get);
+	const planRowsFor = (cols: number, height: number) => planWidgetRows(planStore.get(), {columns: cols, rows: height, scrub, now: 0}).length;
+	const panelOf = (cols: number, height: number) => layoutPanel(agents.get(), {columns: cols, rows: height - planRowsFor(cols, height), scrub});
+	const focusBox = (focus: Parameters<typeof focusAgent>[1]) =>
+		agents.set(revealAgent(focusAgent(agents.get(), focus), {columns, rows: rows - planRowsFor(columns, rows), scrub}));
+	const planHeight = planWidgetRows(planState, {columns, rows, scrub, now: 0}).length;
+	const panelHeight = planHeight + layoutPanel(agentsState, {columns, rows: rows - planHeight, scrub}).height;
 	const viewRows = rows - panelHeight;
 	const [, setTick] = useState(0);
 	const render = useCallback(() => setTick(n => n + 1), []);
@@ -236,9 +245,14 @@ export function ChatView(props: ChatViewProps) {
 	const setT = useCallback(
 		(next: TranscriptState) => {
 			tRef.current = next;
+			const cur = planStore.get();
+			const running = next.phase !== 'idle';
+			if (cur.items !== next.plan || cur.running !== running || cur.stale !== next.planStale) {
+				planStore.set({...cur, items: next.plan, running, stale: next.planStale, ...(next.plan.length === 0 && {expanded: false})});
+			}
 			render();
 		},
-		[render],
+		[render, planStore],
 	);
 	const undoRef = useRef<EditorState[]>([]);
 	const edit = useCallback(
@@ -347,6 +361,10 @@ export function ChatView(props: ChatViewProps) {
 					if (out.kind === 'audit') printNotice(text, options);
 					else print(text, options);
 					continue;
+				}
+				if (out.kind === 'plan-note' && out.notes.some(n => n.kind === 'done')) {
+					const last = out.notes.filter(n => n.kind === 'done').at(-1);
+					if (last?.kind === 'done') planStore.set({...planStore.get(), flash: {text: last.text, until: Date.now() + PLAN.flashMs}});
 				}
 				const text = formatOut(out, scrub, reveal, lastWidthRef.current || undefined);
 				if (out.kind === 'mode' || out.kind === 'account' || out.kind === 'route') printNotice(text);
@@ -755,6 +773,8 @@ export function ChatView(props: ChatViewProps) {
 				if (!viewerRef.current) return;
 				const shown: ViewerLine[] = lines.length > 0 ? lines.map(l => (typeof l === 'string' ? scrub(l) : l)) : ['The transcript is empty so far.'];
 				const summary = tRef.current.lastSummary;
+				const plan = tRef.current.plan;
+				if (plan.length > 0) shown.push('', {render: w => planViewerRows(plan, w, scrub)});
 				if (summary !== undefined && summary.files.length > 0) shown.push('', {render: w => turnFilesRows(summary, w, scrub, props.projectDir)});
 				viewerRef.current = {lines: shown, top: -1};
 				render();
@@ -855,6 +875,7 @@ export function ChatView(props: ChatViewProps) {
 	const onHeaderMouse = (raw: ViewMouseEvent): boolean => {
 		const shown = shownRef.current;
 		const layout = panelOf(shown.columns, shown.rows);
+		const planRows = planRowsFor(shown.columns, shown.rows);
 		if (raw.kind === 'wheel') {
 			const scroll = Math.min(layout.maxScroll, Math.max(0, layout.scroll + (raw.wheel === 'up' ? -1 : 1)));
 			agents.set({...agents.get(), scroll});
@@ -863,7 +884,12 @@ export function ChatView(props: ChatViewProps) {
 		}
 		if (raw.kind !== 'press' || raw.button !== 'left') return true;
 		if (controller.pendingPermissions.length > 0 || searchRef.current || pendingModeRef.current) return true;
-		const id = layout.hit(raw.x, raw.y);
+		if (raw.y < planRows) {
+			planStore.set({...planStore.get(), expanded: !planStore.get().expanded});
+			render();
+			return true;
+		}
+		const id = layout.hit(raw.x, raw.y - planRows);
 		if (id === undefined) return true;
 		if (agents.get().open === id) focusBox({selected: id});
 		else {
@@ -908,9 +934,9 @@ export function ChatView(props: ChatViewProps) {
 	useEffect(() => {
 		const setHeader = headerHost(host);
 		if (!setHeader) return;
-		setHeader(createElement(AgentPanel, {store: agents, ...(host !== undefined && {host}), scrub}));
+		setHeader(createElement(ChatHeader, {plan: planStore, agents, ...(host !== undefined && {host}), scrub}));
 		return () => setHeader(null);
-	}, [host, agents, scrub]);
+	}, [host, agents, planStore, scrub]);
 
 	const runVimEffect = (effect: VimEffect) => {
 		switch (effect.kind) {
@@ -1122,7 +1148,7 @@ export function ChatView(props: ChatViewProps) {
 	);
 	shownRef.current = {columns, rows, inputRows: 0, vimNormal: false, statusBar: true, waiting: false, belowInput: 0, panelHeight};
 	const headerSlot = headerHost(host) !== undefined;
-	const fallbackPanel = headerSlot ? null : <AgentPanel store={agents} {...(host !== undefined && {host})} scrub={scrub} rows={rows} />;
+	const fallbackPanel = headerSlot ? null : <ChatHeader plan={planStore} agents={agents} {...(host !== undefined && {host})} scrub={scrub} rows={rows} />;
 
 	if (prompt) {
 		const layout = layoutPrompt(viewRows, columns);
@@ -1239,8 +1265,6 @@ export function ChatView(props: ChatViewProps) {
 	rem -= vimNormal ? 1 : 0;
 	const queued = queuedLines(queueRef.current, scrub, Math.min(3, Math.max(0, rem - 1)));
 	rem -= queued.length;
-	const todos = todoLines(t.todos, scrub, Math.min(LIVE.maxTodoRows, Math.floor(rem / 2)));
-	rem -= todos.length;
 	const toolRows = toolLayout(tools.length + (t.fold.length > 0 ? 1 : 0), t.liveRaw ? Math.floor(rem / 2) : rem).rows;
 	rem -= toolRows;
 	const tail = liveTail(t.liveRaw, scrub, Math.min(LIVE.maxTailRows, Math.max(0, rem)), columns);
@@ -1255,11 +1279,6 @@ export function ChatView(props: ChatViewProps) {
 				</Text>
 			))}
 			<LiveTools tools={tools} fold={t.fold} scrub={scrub} maxRows={toolRows} width={Math.max(1, columns - 1)} />
-			{todos.map((line, i) => (
-				<Text key={`todo-${i}`} wrap="truncate">
-					{line}
-				</Text>
-			))}
 			{queued.map((line, i) => (
 				<Text key={`queued-${i}`} dimColor wrap="truncate">
 					{line}

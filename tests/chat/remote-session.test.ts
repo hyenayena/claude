@@ -308,3 +308,22 @@ test('the context comes from the snapshot and follows context events', async () 
 	await r.until(() => s.context?.used === 20_000);
 	assert.deepEqual(s.context, {used: 20_000});
 });
+
+test('the plan comes from the snapshot, follows plan events and is cleared by reset', async () => {
+	const items = [{id: '1', content: 'Write tests', status: 'in_progress' as const}];
+	const r = await fakeRunner({...SNAPSHOT, plan: items});
+	const s = await connect(r.socketPath);
+	cleanup.push(() => s.close());
+	assert.deepEqual(s.plan, items);
+	r.send({type: 'event', event: {type: 'ui', event: {kind: 'plan', items: [{id: '1', content: 'Write tests', status: 'completed'}]}}});
+	await r.until(() => s.plan[0]?.status === 'completed');
+	s.reset();
+	assert.deepEqual(s.plan, []);
+});
+
+test('a snapshot without a plan leaves it empty', async () => {
+	const r = await fakeRunner({...SNAPSHOT});
+	const s = await connect(r.socketPath);
+	cleanup.push(() => s.close());
+	assert.deepEqual(s.plan, []);
+});

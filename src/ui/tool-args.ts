@@ -4,7 +4,8 @@ import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
 import type {ToolPatch} from '../chat/events.js';
 import {sgr} from './sgr.js';
 import {mcpParts} from './tool-kind.js';
-import {parseTodos, ROUTE_TOOL_NAME} from './transcript.js';
+import {parseTodos} from '../chat/plan.js';
+import {ROUTE_TOOL_NAME} from './transcript.js';
 
 export type Scrub = (s: string) => string;
 
@@ -32,6 +33,14 @@ const questionArgs: ArgsSummary = input => {
 	return qs.length > 1 ? `${text} (+${qs.length - 1} more)` : text;
 };
 
+const taskUpdateArgs: ArgsSummary = input => {
+	const id = inputField(input, 'taskId');
+	const status = inputField(input, 'status');
+	const subject = inputField(input, 'subject');
+	const head = id === '' ? 'Task' : `Task #${id}`;
+	return status !== '' ? `${head} → ${status}` : subject !== '' ? `${head}: ${subject}` : head;
+};
+
 function agentArgs(input: unknown): string {
 	if (typeof input !== 'object' || input === null) return '';
 	const r = input as Record<string, unknown>;
@@ -52,6 +61,8 @@ export const ARGS_REGISTRY: Record<string, ArgsSummary> = {
 		const n = parseTodos(input).length;
 		return `${n} item${n === 1 ? '' : 's'}`;
 	},
+	TaskCreate: field('subject'),
+	TaskUpdate: taskUpdateArgs,
 	Agent: agentArgs,
 	Task: agentArgs,
 	SendMessage: field('to'),

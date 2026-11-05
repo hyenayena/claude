@@ -1,4 +1,5 @@
 import type {RateLimitInfo} from './limits.js';
+import type {PlanItem} from './plan.js';
 import type {Tier} from './tiers.js';
 import type {TurnSummary} from './turn-stats.js';
 import type {AuditEntry, ChatMode, PermissionDecision, PermissionRequest} from './permission.js';
@@ -41,6 +42,7 @@ export type UiEvent =
 	| {kind: 'agent-activity'; toolUseId: string; name: string; input: unknown}
 	| {kind: 'agent-message'; agentId: string; taskId?: string; model?: string; items: AgentItem[]}
 	| {kind: 'context'; used: number; limit?: number}
+	| {kind: 'plan'; items: PlanItem[]}
 	| {kind: 'status'; status: 'compacting' | 'requesting' | null}
 	| {kind: 'cli-state'; state: 'running' | 'idle' | 'requires_action'}
 	| {kind: 'thinking-tokens'; tokens: number}
@@ -106,6 +108,7 @@ export interface ChatController {
 	readonly title: string | undefined;
 	readonly route?: RouteInfo;
 	readonly context?: ContextInfo;
+	readonly plan?: readonly PlanItem[];
 	readonly tasks?: readonly {id?: string; status: string; background: boolean; taskType?: string; toolUseId?: string; subagentType?: string; description?: string}[];
 	backgroundTasks?(): Promise<boolean>;
 	readonly pendingPermissions: readonly PermissionRequest[];

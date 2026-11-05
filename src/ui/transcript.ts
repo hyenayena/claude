@@ -1,5 +1,6 @@
 import type {AccountReason, ChatEvent, RouteInfo, ToolPatch, TurnOutcome, UiEvent} from '../chat/events.js';
 import type {RateLimitInfo} from '../chat/limits.js';
+import {PLAN_TOOLS, planChanges, type PlanItem, type PlanNote} from '../chat/plan.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
 import type {Tier} from '../chat/tiers.js';
 import type {TurnSummary} from '../chat/turn-stats.js';
@@ -11,7 +12,6 @@ export const LIVE = {
 	tailChars: 16_000,
 	maxTools: 4,
 	maxInputRows: 10,
-	maxTodoRows: 8,
 	minTailRows: 3,
 	maxTailRows: 30,
 	collapsedResultLines: 3,
@@ -35,25 +35,10 @@ export type StatusLine =
 	| {kind: 'retry'; attempt: number; maxRetries: number; delayMs: number}
 	| null;
 
-export type Todo = {content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string};
-
-const MAX_TODOS = 50;
-
-export function parseTodos(input: unknown): Todo[] {
-	const list = (input as {todos?: unknown} | null)?.todos;
-	if (!Array.isArray(list)) return [];
-	const out: Todo[] = [];
-	for (const raw of list.slice(0, MAX_TODOS)) {
-		const t = raw as {content?: unknown; status?: unknown; activeForm?: unknown} | null;
-		if (!t || typeof t.content !== 'string' || t.content.trim() === '') continue;
-		const status = t.status === 'in_progress' || t.status === 'completed' ? t.status : 'pending';
-		out.push({content: t.content, status, ...(typeof t.activeForm === 'string' && t.activeForm && {activeForm: t.activeForm})});
-	}
-	return out;
-}
-
 export interface TranscriptState {
-	todos: Todo[];
+	plan: PlanItem[];
+	planTouched: boolean;
+	planStale: boolean;
 	phase: Phase;
 	liveRaw: string;
 	tools: Map<string, RunningTool>;
@@ -97,6 +82,7 @@ export type Out =
 	| {kind: 'account'; account: string; previous: string; reason: AccountReason}
 	| {kind: 'thinking'; text: string; durationMs?: number}
 	| {kind: 'task'; status: string; description: string; summary?: string}
+	| {kind: 'plan-note'; notes: PlanNote[]}
 	| {kind: 'route-block'; route: RouteInfo; previous?: Tier}
 	| {kind: 'route'; pinned?: Tier}
 	| {kind: 'blank'};
@@ -110,11 +96,13 @@ export interface Step {
 }
 
 export function initialTranscript(
-	init: {model?: string; sessionId?: string; mode?: ChatMode; pending?: number; account?: string} = {},
+	init: {model?: string; sessionId?: string; mode?: ChatMode; pending?: number; account?: string; plan?: readonly PlanItem[]} = {},
 ): TranscriptState {
 	return {
 		...(init.account !== undefined && {account: init.account}),
-		todos: [],
+		plan: init.plan ? init.plan.map(i => ({...i})) : [],
+		planTouched: false,
+		planStale: false,
 		phase: 'idle',
 		liveRaw: '',
 		tools: new Map(),
@@ -184,6 +172,13 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 		case 'cli-state':
 		case 'context':
 			return {state, out: []};
+		case 'plan': {
+			const notes = planChanges(state.plan, e.items);
+			return {
+				state: {...state, plan: e.items, planTouched: true, planStale: false},
+				out: notes.length > 0 ? [{kind: 'plan-note', notes}] : [],
+			};
+		}
 		case 'task':
 			if (e.status === 'running' || !e.background) return {state: {...state}, out: []};
 			return {state: {...state}, out: [{kind: 'task', status: e.status, description: e.description ?? 'task', ...(e.summary !== undefined && {summary: e.summary})}]};
@@ -192,8 +187,7 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 		case 'tool-use': {
 			const tools = new Map(state.tools);
 			tools.set(e.toolUseId, {id: e.toolUseId, name: e.name, input: e.input, elapsedSeconds: 0, ...(e.at !== undefined && {startedAt: e.at})});
-			const todos = e.name === 'TodoWrite' ? parseTodos(e.input) : state.todos;
-			return {state: {...state, tools, todos, status: null}, out: []};
+			return {state: {...state, tools, status: null}, out: []};
 		}
 		case 'agent-activity': {
 			const tool = state.tools.get(e.toolUseId);
@@ -221,6 +215,7 @@ function reduceUi(state: TranscriptState, e: UiEvent): Step {
 			const tool = state.tools.get(e.toolUseId);
 			const tools = new Map(state.tools);
 			tools.delete(e.toolUseId);
+			if (tool !== undefined && PLAN_TOOLS.has(tool.name) && !e.isError) return {state: {...state, tools}, out: []};
 			const durationMs = e.durationMs ?? (tool !== undefined && tool.elapsedSeconds > 0 ? tool.elapsedSeconds * 1000 : undefined);
 			return {
 				state: {...state, tools},
@@ -299,7 +294,9 @@ function reduceEvent(state: TranscriptState, event: ChatEvent): Step {
 			return reduceUi(state, event.event);
 		case 'state':
 			if (event.state === 'running') {
-				return {state: state.phase === 'idle' ? {...state, phase: 'running'} : state, out: []};
+				if (state.phase !== 'idle') return {state, out: []};
+				const finished = state.plan.length > 0 && state.plan.every(i => i.status === 'completed');
+				return {state: {...state, phase: 'running', ...(finished && {plan: []})}, out: []};
 			}
 			if (event.state === 'idle') {
 				const flushed = flushPartial(state);
@@ -328,6 +325,8 @@ function reduceEvent(state: TranscriptState, event: ChatEvent): Step {
 					turnPrintedText: false,
 					approvals: 0,
 					pendingApiError: undefined,
+					planTouched: false,
+					planStale: !state.planTouched && state.plan.some(i => i.status !== 'completed'),
 					...(event.summary !== undefined && {lastSummary: event.summary}),
 				},
 				out,

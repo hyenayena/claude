@@ -12,6 +12,7 @@ import type {RewindResult} from '../types.js';
 import {type CredentialBundle, encodeBundle} from '../vault.js';
 import type {SlashCommandInfo, TaskInfo} from './chat-session.js';
 import type {ChatEvent, ChatState, ContextInfo, RouteInfo} from './events.js';
+import type {PlanItem} from './plan.js';
 import type {ChatHandle} from './handle.js';
 import type {Tier} from './tiers.js';
 import type {RateLimitInfo} from './limits.js';
@@ -73,6 +74,7 @@ export class RemoteChatSession implements ChatHandle {
 	private _title: string | undefined;
 	private _route: RouteInfo | undefined;
 	private _context: ContextInfo | undefined;
+	private _plan: readonly PlanItem[] = [];
 	private _needsNewSession = false;
 	private _commands: SlashCommandInfo[] = [];
 	private _rateLimit: RateLimitInfo | undefined;
@@ -189,6 +191,9 @@ export class RemoteChatSession implements ChatHandle {
 	get context(): ContextInfo | undefined {
 		return this._context;
 	}
+	get plan(): readonly PlanItem[] {
+		return this._plan;
+	}
 	get title(): string | undefined {
 		return this._title;
 	}
@@ -280,6 +285,7 @@ export class RemoteChatSession implements ChatHandle {
 		this._sessionId = undefined;
 		this._model = undefined;
 		this._costUsd = undefined;
+		this._plan = [];
 		this._needsNewSession = false;
 		this.write({v: 1, type: 'reset'});
 	}
@@ -408,6 +414,7 @@ export class RemoteChatSession implements ChatHandle {
 		this._title = s.title;
 		this._route = s.route;
 		this._context = s.context;
+		this._plan = s.plan ?? [];
 		this.remotePending = [...s.pendingPermissions];
 		this._tasks.clear();
 		for (const t of [...s.tasks].reverse()) this._tasks.set(t.id, t);
@@ -535,6 +542,9 @@ export class RemoteChatSession implements ChatHandle {
 				return;
 			case 'context':
 				this._context = {used: ev.used, ...(ev.limit !== undefined && {limit: ev.limit})};
+				return;
+			case 'plan':
+				this._plan = ev.items;
 				return;
 			case 'result':
 				if (ev.sessionId) this._sessionId = ev.sessionId;

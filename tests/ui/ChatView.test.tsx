@@ -783,21 +783,36 @@ test(':q in the chat quits through the host, or leaves the chat without one; it 
 	assert.deepEqual(plain.controller.calls.sent, []);
 });
 
-test('the open checklist shows above the input and goes when everything is done', async () => {
-	const t = setup();
+test('the plan shows as a widget in the chat without a header slot and goes when everything is done', async () => {
+	const t = setup({columns: 80, rows: 30});
 	await t.settle();
+	t.controller.setState('running');
 	t.controller.ui({
-		kind: 'tool-use',
-		toolUseId: 't1',
-		name: 'TodoWrite',
-		input: {todos: [{content: 'Plan', status: 'completed'}, {content: 'Code', status: 'in_progress', activeForm: 'Coding'}]},
+		kind: 'plan',
+		items: [
+			{id: '1', content: 'Plan', status: 'completed'},
+			{id: '2', content: 'Code', status: 'in_progress', activeForm: 'Coding'},
+			{id: '3', content: 'Docs', status: 'pending'},
+		],
 	});
 	await t.settle();
-	assert.match(t.lastFrame(), /⎿ {2}.*☒ Plan/);
-	assert.match(t.lastFrame(), /^ {5}.*☐ Coding/m);
-	t.controller.ui({kind: 'tool-use', toolUseId: 't2', name: 'TodoWrite', input: {todos: [{content: 'Plan', status: 'completed'}, {content: 'Code', status: 'completed'}]}});
+	assert.match(plainFrame(t), /☰ Plan 1\/3/);
+	assert.match(plainFrame(t), /Coding/);
+	assert.match(plainFrame(t), /○ Docs/);
+	assert.doesNotMatch(plainFrame(t), /☒|☐/, 'the old live checklist is gone');
+	t.controller.ui({
+		kind: 'plan',
+		items: [
+			{id: '1', content: 'Plan', status: 'completed'},
+			{id: '2', content: 'Code', status: 'completed'},
+			{id: '3', content: 'Docs', status: 'completed'},
+		],
+	});
 	await t.settle();
-	assert.doesNotMatch(t.lastFrame(), /☒ Plan/);
+	assert.match(plainFrame(t), /Plan 3\/3/);
+	t.controller.setState('idle');
+	await t.settle();
+	assert.doesNotMatch(plainFrame(t), /Plan 3\/3/);
 });
 
 test('Enter while Claude answers queues the message and sends the queue when the turn ends', async () => {

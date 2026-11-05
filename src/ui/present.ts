@@ -1,13 +1,14 @@
 import {BLOCK_DISPLAY_CAP, clampChars} from '../chat/truncate.js';
 import type {AuditEntry, ChatMode} from '../chat/permission.js';
-import {SGR_ATTR, formatElapsed, sliceCells, stringCells, truncateCells} from '../kit.js';
+import {SGR_ATTR, formatElapsed, glyph, sliceCells, stringCells, truncateCells} from '../kit.js';
 import {sgr} from './sgr.js';
 import type {PrintAction, PrintOptions} from '../../../../src/api.js';
 import type {RouteInfo} from '../chat/events.js';
+import type {PlanNote} from '../chat/plan.js';
 import {CODE_BLOCK_ROWS, openFenceLine, renderMarkdownRows} from './markdown.js';
 import {formatToolCard, formatToolGroup, resultLines} from './tool-card.js';
 import type {Scrub} from './tool-args.js';
-import {LIVE, ROUTE_TOOL_NAME, type Out, type Phase, type StatusLine, type Todo} from './transcript.js';
+import {LIVE, ROUTE_TOOL_NAME, type Out, type Phase, type StatusLine} from './transcript.js';
 import type {Tier} from '../chat/tiers.js';
 import {turnSummaryRow} from './turn-summary.js';
 
@@ -109,23 +110,6 @@ export function queuedLines(queue: string[], scrub: Scrub, max: number): string[
 	const one = (q: string) => `↳ queued: ${scrub(q.replace(/\s+/g, ' '))}`;
 	if (queue.length <= max) return queue.map(one);
 	return [...queue.slice(0, max - 1).map(one), `↳ +${queue.length - max + 1} more queued`];
-}
-
-const TODO_MARK: Record<Todo['status'], string> = {completed: '☒', in_progress: '☐', pending: '☐'};
-
-export function todoLines(todos: Todo[], scrub: Scrub, max: number): string[] {
-	const sg = sgr();
-	if (max <= 0 || !todos.some(t => t.status !== 'completed')) return [];
-	const line = (t: Todo) => {
-		const text = `${TODO_MARK[t.status]} ${scrub(t.status === 'in_progress' ? (t.activeForm ?? t.content) : t.content)}`;
-		if (t.status === 'completed') return paint(sg.muted + sg.strike, text);
-		return t.status === 'in_progress' ? paint(sg.bold, text) : text;
-	};
-	if (todos.length <= max) return resultLines(todos.map(line));
-	const current = Math.max(0, todos.findIndex(t => t.status !== 'completed'));
-	const start = Math.min(current, todos.length - (max - 1));
-	const shown = todos.slice(start, start + max - 1).map(line);
-	return resultLines([...shown, paint(sg.muted, `… +${todos.length - shown.length} more`)]);
 }
 
 export {RESULT_PREFIX, resultLines, TOOL_RESULT_ROWS} from './tool-card.js';
@@ -241,6 +225,30 @@ export function formatModeLine(mode: ChatMode, error?: string, scrub: Scrub = s 
 	return paint(sgr().muted, line);
 }
 
+const steps = (n: number): string => `${n} ${n === 1 ? 'step' : 'steps'}`;
+
+export function formatPlanNotes(notes: readonly PlanNote[], scrub: Scrub): string {
+	const sg = sgr();
+	const mark = (g: string, tone: string, text: string): string => paint(tone, `${g} ${text}`);
+	const tick = glyph('check');
+	return notes
+		.map(n => {
+			switch (n.kind) {
+				case 'new':
+					return mark(glyph('toolTask'), sg.muted, `Plan · ${steps(n.steps)}`);
+				case 'added':
+					return mark(glyph('toolTask'), sg.muted, `Plan +${steps(n.steps)}`);
+				case 'done':
+					return `${paint(sg.ok, tick)} ${scrub(n.text)}`;
+				case 'more-done':
+					return mark(tick, sg.muted, `+${n.count} more done`);
+				case 'finished':
+					return mark(tick, sg.ok, `Plan done · ${n.done}/${n.total}`);
+			}
+		})
+		.join('\n');
+}
+
 export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?: number): string {
 	switch (out.kind) {
 		case 'audit':
@@ -254,6 +262,8 @@ export function formatOut(out: Out, scrub: Scrub, reveal: Scrub = scrub, width?:
 					: `Now on account "${out.account}" instead of "${out.previous}".`,
 				scrub,
 			);
+		case 'plan-note':
+			return formatPlanNotes(out.notes, scrub);
 		case 'route-block':
 			return formatRouteBlock(routeBlockOf(out.route, out.previous), scrub, width);
 		case 'route':

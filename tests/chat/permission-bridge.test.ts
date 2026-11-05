@@ -505,6 +505,27 @@ test('Skill, TodoWrite and WebSearch run without asking', async () => {
 	assert.equal(prompter.requests.length, 0);
 });
 
+test('TaskCreate and TaskUpdate run without asking, and only those two names', async () => {
+	const {call, prompter} = setup();
+	for (const [name, input] of [
+		['TaskCreate', {subject: 'Write tests', description: 'd'}],
+		['TaskUpdate', {taskId: '1', status: 'completed'}],
+	] as const) {
+		const r = await call(name, input);
+		assert.equal(r?.behavior, 'allow', name);
+		assert.deepEqual((r as {updatedInput?: unknown}).updatedInput, input);
+	}
+	assert.equal(prompter.requests.length, 0);
+	for (const name of ['TaskCreate2', 'taskcreate', 'TaskUpdate ', 'TaskDelete', 'TaskStopAll', 'NotebookEdit', 'EnterPlanMode', 'Monitor', 'ToolSearch', 'Task_Update']) {
+		const r = await call(name, {});
+		assert.equal(r?.behavior, 'deny', name);
+	}
+	assert.equal(prompter.requests.length, 0);
+	prompter.next = {kind: 'deny'};
+	assert.equal((await call('WebFetch', {url: 'https://example.com/', prompt: 'x'}))?.behavior, 'deny');
+	assert.equal(prompter.requests.length, 1, 'WebFetch still asks');
+});
+
 test('WebFetch always asks, showing the URL; bad URLs are denied without asking', async () => {
 	const {call, prompter} = setup();
 	prompter.next = {kind: 'allow'};

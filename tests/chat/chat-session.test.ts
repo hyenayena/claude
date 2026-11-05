@@ -1656,3 +1656,52 @@ test('a missing, failing or hanging getContextUsage leaves the tokens-only meter
 		session.close();
 	}
 });
+
+const planUse = (id: string, name: string, input: unknown) => ({
+	type: 'assistant',
+	parent_tool_use_id: null,
+	message: {id: `m-${id}`, content: [{type: 'tool_use', id, name, input}]},
+});
+const planResult = (id: string, text: string, isError = false) => ({
+	type: 'user',
+	parent_tool_use_id: null,
+	message: {content: [{type: 'tool_result', tool_use_id: id, content: text, is_error: isError}]},
+});
+
+test('the plan event follows the tool result of a plan tool; reset clears the plan', async () => {
+	const {session, queries, events} = setup();
+	session.send('plan it');
+	const q = queries[0]!;
+	q.emit(planUse('t1', 'TaskCreate', {subject: 'Write tests', description: 'd'}));
+	q.emit(planResult('t1', 'Task #1 created successfully: Write tests'));
+	await tick();
+	const ui = events.flatMap(e => (e.type === 'ui' ? [e.event.kind] : []));
+	const at = ui.indexOf('plan');
+	assert.ok(at > 0);
+	assert.equal(ui[at - 1], 'tool-result');
+	const plan = events.flatMap(e => (e.type === 'ui' && e.event.kind === 'plan' ? [e.event.items] : []));
+	assert.deepEqual(plan, [[{id: '1', content: 'Write tests', status: 'pending'}]]);
+	assert.deepEqual(session.plan, [{id: '1', content: 'Write tests', status: 'pending'}]);
+
+	q.emit(planUse('t2', 'TaskUpdate', {taskId: '1', status: 'completed'}));
+	q.emit(planResult('t2', 'boom', true));
+	await tick();
+	assert.equal(events.filter(e => e.type === 'ui' && e.event.kind === 'plan').length, 1);
+
+	q.emit(ok());
+	await tick();
+	session.reset();
+	assert.deepEqual(session.plan, []);
+});
+
+test('plan tools called by a subagent never reach the plan', async () => {
+	const {session, queries, events} = setup();
+	session.send('plan it');
+	const q = queries[0]!;
+	q.emit({type: 'assistant', parent_tool_use_id: 'agent-1', message: {id: 'm-s', content: [{type: 'tool_use', id: 's1', name: 'TaskCreate', input: {subject: 'Inner'}}]}});
+	q.emit({type: 'user', parent_tool_use_id: 'agent-1', message: {content: [{type: 'tool_result', tool_use_id: 's1', content: 'Task #1 created successfully: Inner', is_error: false}]}});
+	await tick();
+	assert.deepEqual(session.plan, []);
+	assert.equal(events.filter(e => e.type === 'ui' && e.event.kind === 'plan').length, 0);
+	session.close();
+});

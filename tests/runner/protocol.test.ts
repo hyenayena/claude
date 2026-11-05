@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createDecoder, encodeFrame, MAX_FRAME_BYTES, ProtocolError, type ClientFrame, type RunnerFrame} from '../../src/runner/protocol.js';
+import {parseTodos} from '../../src/chat/plan.js';
 
 const line = (o: unknown): string => `${JSON.stringify(o)}\n`;
 
@@ -400,4 +401,43 @@ test('a turn-end summary at the caps (200 long escaped paths, largest numbers) f
 	const full = {durationMs: 604_800_000, tools: 1_000_000_000, files, filesTotal: 1_000_000_000, added: 1_000_000_000, removed: 1_000_000_000, outputTokens: 1_000_000_000};
 	const frame: RunnerFrame = {v: 1, type: 'event', event: {type: 'turn-end', outcome: 'error', error: 'e'.repeat(20_000), summary: full}};
 	assert.deepEqual(createDecoder('toClient').push(encodeFrame(frame)), [frame]);
+});
+
+const SNAPSHOT_BODY = {state: 'idle', mode: 'default', needsNewSession: false, pendingPermissions: [], tasks: [], commands: [], queued: [], startedAt: 1};
+const planItems = [{id: '1', content: 'Write tests', activeForm: 'Writing tests', status: 'in_progress'}, {content: 'Docs', status: 'pending'}];
+
+test('plan event and snapshot plan round-trip; both are optional', () => {
+	const ev: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'plan', items: planItems as never}}};
+	assert.deepEqual(toClient(ev), [ev]);
+	const empty: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'plan', items: []}}};
+	assert.deepEqual(toClient(empty), [empty]);
+	const snap = {...SNAPSHOT_BODY, plan: planItems};
+	assert.deepEqual((toClient({type: 'snapshot', ...snap})[0] as {plan?: unknown}).plan, planItems);
+	assert.equal((toClient({type: 'snapshot', ...SNAPSHOT_BODY})[0] as {plan?: unknown}).plan, undefined);
+});
+
+test('plan values over the caps or of a bad shape fail the frame', () => {
+	const bad = (items: unknown) => assert.throws(() => toClient({type: 'event', event: {type: 'ui', event: {kind: 'plan', items}}}), ProtocolError);
+	const one = (patch: object) => [{content: 'x', status: 'pending', ...patch}];
+	bad('nope');
+	bad(Array.from({length: 51}, () => ({content: 'x', status: 'pending'})));
+	bad(one({status: 'done'}));
+	bad(one({content: 'x'.repeat(401)}));
+	bad(one({content: 5}));
+	bad(one({activeForm: 'x'.repeat(401)}));
+	bad(one({id: 'x'.repeat(33)}));
+	bad([null]);
+	assert.throws(() => toClient({type: 'snapshot', ...SNAPSHOT_BODY, plan: one({status: 'bogus'})}), ProtocolError);
+	assert.equal(toClient({type: 'event', event: {type: 'ui', event: {kind: 'plan', items: Array.from({length: 50}, () => ({content: 'x'.repeat(400), status: 'pending'}))}}}).length, 1);
+});
+
+test('whatever the model puts in plan items, the clipped plan is a frame the client accepts', () => {
+	const hostile = ['\u{1F600}'.repeat(900), '漢'.repeat(900), '"\\'.repeat(900), '\u001b[31m\u0007\u0000'.repeat(300) + 'x', 'é'.repeat(900), '‍'.repeat(900) + 'y'];
+	const todos = Array.from({length: 80}, (_, n) => ({content: hostile[n % hostile.length], activeForm: hostile[(n + 1) % hostile.length], status: 'in_progress'}));
+	const items = parseTodos({todos});
+	assert.ok(items.length > 20 && items.length <= 50);
+	const frame: RunnerFrame = {v: 1, type: 'event', event: {type: 'ui', event: {kind: 'plan', items}}};
+	assert.deepEqual(createDecoder('toClient').push(encodeFrame(frame)), [frame]);
+	const snap = {v: 1, type: 'snapshot', ...SNAPSHOT_BODY, plan: items};
+	assert.equal(createDecoder('toClient').push(Buffer.from(line(snap))).length, 1);
 });

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {gallerySections, registerGallerySection, styledCells, stripStyles, withColorDepth, type ColorDepth} from '../../src/kit.js';
-import {chatGallerySection, diffGallerySection, statusGallerySection, toolsGallerySection} from '../../src/ui/gallery.js';
+import {chatGallerySection, diffGallerySection, planGallerySection, statusGallerySection, toolsGallerySection} from '../../src/ui/gallery.js';
 
 const ESC = String.fromCharCode(27);
 
@@ -10,7 +10,7 @@ test('the chat section renders at 39, 79 and 159 columns within the width', asyn
 	for (const width of [39, 79, 159]) {
 		for (const depth of ['truecolor', '256', '16', 'none'] as ColorDepth[]) {
 			const rows = withColorDepth(depth, () => render({width, depth, ascii: false}));
-			assert.ok(rows.length > 15);
+			assert.ok(rows.length > 12);
 			for (const row of rows) assert.ok(styledCells(row) <= width, `${width} ${depth}: ${stripStyles(row)}`);
 		}
 	}
@@ -21,7 +21,7 @@ test('the rows hold only SGR escapes and the sample pieces', async () => {
 	const rows = withColorDepth('256', () => render({width: 79, depth: '256', ascii: false}));
 	const rest = rows.join('\n').replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '');
 	assert.ok(!rest.includes(ESC));
-	for (const part of ['Fix the failing test', 'thinking', 'Edit', '$ npm test', 'Patching parse()', 'Error: ']) assert.ok(rest.includes(part), part);
+	for (const part of ['Fix the failing test', 'thinking', 'Edit', '$ npm test', 'Error: ']) assert.ok(rest.includes(part), part);
 });
 
 test('registering the section is accepted once', () => {
@@ -98,4 +98,21 @@ test('the status section renders within the width at every depth and is register
 	const text = withColorDepth('none', () => render({width: 159, depth: 'none', ascii: false})).map(stripStyles).join('\n');
 	for (const part of ['idle', 'awaiting approval', 'esc to interrupt', 'interrupted', '3 files changed']) assert.ok(text.includes(part), part);
 	assert.equal(registerGallerySection(statusGallerySection), true);
+});
+
+test('the plan section renders within the width in every mode, with notes', async () => {
+	const render = await planGallerySection.load();
+	for (const width of [39, 79, 159]) {
+		for (const depth of ['truecolor', '256', '16', 'none'] as ColorDepth[]) {
+			for (const ascii of [false, true]) {
+				const rows = withColorDepth(depth, () => render({width, depth, ascii}));
+				for (const row of rows) assert.ok(styledCells(row) <= width, `${width} ${depth}: ${stripStyles(row)}`);
+				const text = rows.map(stripStyles).join('\n');
+				assert.match(text, /Plan 2\/6/);
+				assert.match(text, /\+\d+ more/);
+				assert.match(text, /Plan done/);
+				assert.match(text, /Plan · 6 steps/);
+			}
+		}
+	}
 });

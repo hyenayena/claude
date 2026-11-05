@@ -2,6 +2,7 @@ import type {AgentPolicy, CommandConfirmRequest, CommandInfo, CommandInfoSub, Co
 import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import type {SlashCommandInfo, TaskInfo} from '../chat/chat-session.js';
 import {ACCOUNT_REASONS, ROUTE_OUTCOMES, ROUTE_SOURCES, type AgentItem, type ChatEvent, type ChatState, type ContextInfo, type RouteInfo, type ToolPatch, type TurnOutcome, type UiEvent} from '../chat/events.js';
+import {MAX_PLAN_ID, MAX_PLAN_ITEMS, MAX_PLAN_TEXT, PLAN_STATUSES, type PlanItem} from '../chat/plan.js';
 import {TIERS, type Tier} from '../chat/tiers.js';
 import {MAX_TURN_FILES, MAX_TURN_PATH, type TurnFileChange, type TurnSummary} from '../chat/turn-stats.js';
 import type {LimitType, RateLimitInfo} from '../chat/limits.js';
@@ -55,6 +56,7 @@ export type Snapshot = {
 	title?: string;
 	route?: RouteInfo;
 	context?: ContextInfo;
+	plan?: PlanItem[];
 	pendingPermissions: PermissionRequest[];
 	tasks: TaskInfo[];
 	commands: SlashCommandInfo[];
@@ -525,6 +527,8 @@ const readUiEvent = (v: unknown): UiEvent | undefined => {
 			return {kind: 'cli-state', state: oneOf(o.state, ['running', 'idle', 'requires_action'] as const, 'state')};
 		case 'context':
 			return {kind: 'context', ...readContext(o)};
+		case 'plan':
+			return {kind: 'plan', items: readPlan(o.items)};
 		case 'status':
 			return {kind: 'status', status: o.status === null ? null : oneOf(o.status, ['compacting', 'requesting'] as const, 'status')};
 		case 'retry':
@@ -569,6 +573,18 @@ const readContext = (o: Rec): ContextInfo => ({
 	used: nonNeg(o.used, 'used', MAX_CONTEXT_TOKENS),
 	...(has(o, 'limit') && {limit: nonNeg(o.limit, 'limit', MAX_CONTEXT_TOKENS)}),
 });
+
+// UTF-16 units, twice the code point cap the sender clips to
+const readPlan = (v: unknown): PlanItem[] =>
+	arr(v, 'items', MAX_PLAN_ITEMS).map(raw => {
+		const o = rec(raw, 'plan item');
+		return {
+			...(has(o, 'id') && {id: str(o.id, 'id', MAX_PLAN_ID)}),
+			content: str(o.content, 'content', MAX_PLAN_TEXT * 2),
+			...(has(o, 'activeForm') && {activeForm: str(o.activeForm, 'activeForm', MAX_PLAN_TEXT * 2)}),
+			status: oneOf(o.status, PLAN_STATUSES, 'status'),
+		};
+	});
 
 const readTurnSummary = (v: unknown): TurnSummary => {
 	const o = rec(v, 'summary');
@@ -700,6 +716,7 @@ const readSnapshot = (o: Rec): Snapshot => ({
 	...(has(o, 'title') && {title: str(o.title, 'title', 4096)}),
 	...(has(o, 'route') && {route: readRoute(o.route)}),
 	...(has(o, 'context') && {context: readContext(rec(o.context, 'context'))}),
+	...(has(o, 'plan') && {plan: readPlan(o.plan)}),
 	pendingPermissions: arr(o.pendingPermissions, 'pendingPermissions', 100).map(readPermission),
 	tasks: arr(o.tasks, 'tasks', 100).map(readTask),
 	commands: arr(o.commands, 'commands', 300).map(readSlash),

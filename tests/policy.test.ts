@@ -189,7 +189,7 @@ describe('ask policy snapshot', () => {
 		assert.deepEqual(ALLOWED_TOOLS, ['Read', 'Glob', 'Grep']);
 		assert.deepEqual(DISALLOWED_TOOLS, [
 			'Bash', 'BashOutput', 'KillShell', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch',
-			'Agent', 'Task', 'Skill', 'SlashCommand', 'TodoWrite', 'ExitPlanMode', 'mcp__*',
+			'Agent', 'Task', 'Skill', 'SlashCommand', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'ExitPlanMode', 'mcp__*',
 		]);
 		assert.deepEqual(buildAskSettings(paths), {
 			permissions: {
@@ -230,8 +230,9 @@ describe('chat static policy', () => {
 	it('lists the chat tools and disables the rest', () => {
 		assert.deepEqual(CHAT_TOOLS, [
 			'Read', 'Glob', 'Grep', 'Bash', 'Edit', 'Write', 'AskUserQuestion', 'Agent', 'SendMessage', 'Skill', 'TodoWrite', 'WebFetch', 'WebSearch', 'ExitPlanMode',
-			'TaskStop', 'TaskGet', 'TaskList', 'TaskOutput', 'BashOutput', 'KillShell',
+			'TaskStop', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TaskOutput', 'BashOutput', 'KillShell',
 		]);
+		for (const t of ['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList']) assert.ok(DISALLOWED_TOOLS.includes(t), `ask mode: ${t}`);
 		for (const t of ['NotebookEdit', 'EnterPlanMode', 'Monitor', 'ToolSearch']) {
 			assert.ok(CHAT_DISALLOWED_TOOLS.includes(t), t);
 		}

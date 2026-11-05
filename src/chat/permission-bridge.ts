@@ -419,6 +419,8 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 				return r ?? deny(POLICY_DENY.outside, opts.toolUseID);
 			}
 			case 'TaskStop':
+			case 'TaskCreate':
+			case 'TaskUpdate':
 			case 'TaskGet':
 			case 'TaskList':
 			case 'TaskOutput':

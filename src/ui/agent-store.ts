@@ -1,24 +1,8 @@
 import {initialAgents, type AgentsState} from './agents.js';
+import {createStore, type Store} from './store.js';
 
-export type AgentStore = {
-	get(): AgentsState;
-	set(next: AgentsState): void;
-	subscribe(listener: () => void): () => void;
-};
+export type AgentStore = Store<AgentsState>;
 
 export function createAgentStore(initial: AgentsState = initialAgents()): AgentStore {
-	let state = initial;
-	const listeners = new Set<() => void>();
-	return {
-		get: () => state,
-		set: next => {
-			if (next === state) return;
-			state = next;
-			for (const l of [...listeners]) l();
-		},
-		subscribe: listener => {
-			listeners.add(listener);
-			return () => listeners.delete(listener);
-		},
-	};
+	return createStore(initial);
 }

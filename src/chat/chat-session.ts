@@ -11,6 +11,7 @@ import type {Tier} from './tiers.js';
 import {InputQueue} from './input-queue.js';
 import {classifyFailure, type Clock, failureMessage, type FailureKind, type RateLimitInfo, systemClock} from './limits.js';
 import {normalize} from './normalize.js';
+import {PlanTracker, type PlanItem} from './plan.js';
 import {TurnStats} from './turn-stats.js';
 import {type ChatUsage, subtract, UsageMeter} from './usage.js';
 import {
@@ -212,6 +213,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 	private stats: TurnStats | undefined;
 	private turnClockStart = 0;
 	private _context: ContextInfo | undefined;
+	private readonly planTracker = new PlanTracker();
 	private contextLimit: number | undefined;
 	private lastContextMain: object | undefined;
 	private compacting = false;
@@ -271,6 +273,10 @@ export class ChatSession implements ChatController, PermissionPrompter {
 
 	get context(): ContextInfo | undefined {
 		return this._context;
+	}
+
+	get plan(): readonly PlanItem[] {
+		return this.planTracker.items;
 	}
 
 	applyRoute(apply: RouteApply, info: RouteInfo, previous?: Tier, settled?: (applied: boolean) => void): void {
@@ -658,6 +664,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this._needsNewSession = false;
 		this._route = undefined;
 		this._context = undefined;
+		this.planTracker.reset();
 		this.contextLimit = undefined;
 		this.lastContextMain = undefined;
 		this.opts.onReset?.();
@@ -859,6 +866,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		if (ev.kind === 'result' && ev.sessionId) this._sessionId = ev.sessionId;
 		if (ev.kind === 'result' && ev.costUsd !== undefined) this._costUsd = ev.costUsd;
 		this.emit({type: 'ui', event: ev});
+		const plan = this.planTracker.onUi(ev);
+		if (plan !== undefined) this.emit({type: 'ui', event: {kind: 'plan', items: plan}});
 		if (ev.kind === 'result') this.onResult(ev, handle);
 	}
 

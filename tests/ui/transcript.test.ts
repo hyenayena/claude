@@ -320,3 +320,60 @@ test('the context event changes nothing in the transcript', () => {
 	assert.deepEqual(out, []);
 	assert.deepEqual(state, initialTranscript());
 });
+
+const planUi = (items: Array<{id?: string; content: string; status: 'pending' | 'in_progress' | 'completed'}>): ChatEvent => ui({kind: 'plan', items});
+
+test('a plan event sets the plan and prints one note per change', () => {
+	const a = {id: '1', content: 'A', status: 'pending' as const};
+	const b = {id: '2', content: 'B', status: 'pending' as const};
+	const {state, out} = run([
+		planUi([a, b]),
+		planUi([{...a, status: 'in_progress'}, b]),
+		planUi([{...a, status: 'completed'}, b]),
+		planUi([{...a, status: 'completed'}, {...b, status: 'completed'}]),
+	]);
+	assert.deepEqual(out, [
+		{kind: 'plan-note', notes: [{kind: 'new', steps: 2}]},
+		{kind: 'plan-note', notes: [{kind: 'done', text: 'A'}]},
+		{kind: 'plan-note', notes: [{kind: 'done', text: 'B'}, {kind: 'finished', done: 2, total: 2}]},
+	]);
+	assert.equal(state.plan.length, 2);
+	assert.equal(state.planTouched, true);
+});
+
+test('successful plan tool results leave no tool row; failed ones keep theirs', () => {
+	const {out} = run([
+		ui({kind: 'tool-use', toolUseId: 't1', name: 'TaskCreate', input: {subject: 'A'}}),
+		ui({kind: 'tool-result', toolUseId: 't1', isError: false, text: 'Task #1 created successfully: A'}),
+		ui({kind: 'tool-use', toolUseId: 't2', name: 'TaskUpdate', input: {taskId: '1'}}),
+		ui({kind: 'tool-result', toolUseId: 't2', isError: true, text: 'nope'}),
+		ui({kind: 'tool-use', toolUseId: 't3', name: 'TaskList', input: {}}),
+		ui({kind: 'tool-result', toolUseId: 't3', isError: false, text: 'No tasks found'}),
+		ui({kind: 'tool-use', toolUseId: 't4', name: 'Bash', input: {command: 'ls'}}),
+		ui({kind: 'tool-result', toolUseId: 't4', isError: false, text: 'x'}),
+	]);
+	assert.deepEqual(out.map(o => o.kind === 'tool' && `${o.name}:${o.isError}`), ['TaskUpdate:true', 'Bash:false']);
+});
+
+test('the plan turns stale when a turn ends without touching it, and fresh again on a change', () => {
+	const open = [{id: '1', content: 'A', status: 'pending' as const}];
+	let r = run([planUi(open), {type: 'turn-end', outcome: 'ok'}]);
+	assert.equal(r.state.planStale, false, 'the turn touched it');
+	assert.equal(r.state.planTouched, false);
+	let s = reduceTranscript(r.state, {type: 'turn-end', outcome: 'ok'}).state;
+	assert.equal(s.planStale, true, 'a turn that left it alone');
+	s = reduceTranscript(s, planUi([{...open[0]!, status: 'in_progress'}])).state;
+	assert.equal(s.planStale, false);
+	r = run([planUi([{id: '1', content: 'A', status: 'completed'}]), {type: 'turn-end', outcome: 'ok'}, {type: 'turn-end', outcome: 'ok'}]);
+	assert.equal(r.state.planStale, false, 'a finished plan is never stale');
+});
+
+test('a finished plan is dropped when the next turn starts; reset clears the plan', () => {
+	const done = [{id: '1', content: 'A', status: 'completed' as const}];
+	const r = run([{type: 'state', state: 'running'}, planUi(done), {type: 'state', state: 'idle'}, {type: 'state', state: 'running'}]);
+	assert.deepEqual(r.state.plan, []);
+	const open = run([planUi([{id: '1', content: 'A', status: 'pending'}]), {type: 'state', state: 'running'}]);
+	assert.equal(open.state.plan.length, 1);
+	assert.deepEqual(resetTranscript(open.state).plan, []);
+	assert.equal(initialTranscript({plan: open.state.plan}).plan.length, 1);
+});

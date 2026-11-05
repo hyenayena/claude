@@ -88,6 +88,7 @@ class Session {
 	title = undefined;
 	pendingPermissions = [];
 	tasks = [];
+	plan = [];
 	commands = [];
 	rateLimit = undefined;
 	costUsd = undefined;

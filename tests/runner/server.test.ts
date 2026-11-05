@@ -31,6 +31,7 @@ class FakeSession {
 	title: string | undefined;
 	pendingPermissions: PermissionRequest[] = [];
 	tasks = [];
+	plan: unknown[] = [];
 	commands = [];
 	rateLimit = undefined;
 	costUsd = undefined;
@@ -830,4 +831,22 @@ test('setTier goes to the engine and the snapshot carries the route', async () =
 	c.send({type: 'setTier', tier: 'auto'});
 	await until(() => tiers.length === 2, 'setTier dispatched');
 	assert.deepEqual(tiers, ['strong', 'auto']);
+});
+
+test('the snapshot carries the plan only when there is one', async () => {
+	const session = Object.assign(new FakeSession(), {plan: [{id: '1', content: 'A', status: 'pending'}]});
+	const r = await rig({
+		createEngine: async () => ({
+			session: session as unknown as RunnerSession,
+			applyLive: () => undefined,
+			setTier: () => undefined,
+			close: () => session.close(),
+			flush: async () => undefined,
+		}),
+	});
+	const c = await attach(r);
+	const snap = c.frames.find(f => f.type === 'snapshot') as Extract<RunnerFrame, {type: 'snapshot'}>;
+	assert.deepEqual(snap.plan, [{id: '1', content: 'A', status: 'pending'}]);
+	const plain = await attach(await rig());
+	assert.equal((plain.frames.find(f => f.type === 'snapshot') as Extract<RunnerFrame, {type: 'snapshot'}>).plan, undefined);
 });

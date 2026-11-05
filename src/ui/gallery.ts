@@ -2,12 +2,6 @@ import type {GallerySection} from '../kit.js';
 
 const scrub = (s: string): string => s;
 
-const todos = [
-	{content: 'Read the parser', status: 'completed' as const},
-	{content: 'Patch parse()', status: 'in_progress' as const, activeForm: 'Patching parse()'},
-	{content: 'Run the tests', status: 'pending' as const},
-];
-
 const patch = {hunks: [{oldStart: 11, newStart: 11, lines: [' const rows = split(text);', '-return rows[0];', '+return rows.at(0) ?? "";']}]};
 
 // present.ts stays out of the plugin start: it is loaded when the gallery is shown.
@@ -24,7 +18,6 @@ export const chatGallerySection: GallerySection = {
 				p.formatThinking('Looking at the parser first.', scrub),
 				p.formatToolBlock({name: 'Edit', input: {file_path: 'src/parse.ts', old_string: 'return rows[0];', new_string: 'return rows.at(0) ?? "";'}, isError: false, text: '', patch}, scrub, width),
 				p.formatToolBlock({name: 'Bash', input: {command: 'npm test'}, isError: true, text: '1 test failed'}, scrub, width),
-				p.todoLines(todos, scrub, 4).join('\n'),
 				p.formatNotice('Notice: the model is unchanged', scrub),
 				p.formatWarning('Warning: the session is almost full', scrub),
 				p.formatError('The request failed', scrub),
@@ -113,7 +106,7 @@ export const toolsGallerySection: GallerySection = {
 			ok('Agent', {subagent_type: 'coder', description: 'Fix the parser'}, 'done', {durationMs: 95_000}),
 			ok('mcp__yena__run_command', {command: 'mod list'}, 'core 0.19.0\nclaude 0.24.0'),
 			ok('mcp__github__search_issues', {query: 'tool cards'}, '3 results'),
-			ok('TodoWrite', {todos}, ''),
+			fail('TodoWrite', {todos: []}, '<tool_use_error>InputValidationError: todos is required</tool_use_error>'),
 		];
 		return ({width}) => {
 			const running = card.runningToolRow({id: 'r1', name: 'Agent', input: {subagent_type: 'coder', description: 'Fix the parser'}, elapsedSeconds: 0, startedAt: 1000, activity: {name: 'Read', input: {file_path: 'src/parse.ts'}}}, scrub, width, '⠋', 15_000);
@@ -175,6 +168,45 @@ export const statusGallerySection: GallerySection = {
 			}
 			rows.push('turn summary');
 			for (const outcome of outcomes) rows.push(summary.turnSummaryRow(sampleSummary, outcome, width - 1, {depth, ascii}));
+			return rows;
+		};
+	},
+};
+
+const planSteps = ['Read the parser', 'Patch parse()', 'Run the tests', 'Update the docs', 'Write the changelog', 'Tag the release'];
+
+// present.ts stays out of the plugin start: it is loaded when the gallery is shown.
+export const planGallerySection: GallerySection = {
+	name: 'plan',
+	title: 'Plan widget',
+	description: 'The pinned plan checklist, its modes and the transcript notes',
+	load: async () => {
+		const kit = await import('../kit.js');
+		const present = await import('./present.js');
+		const items = (done: number, active: boolean, n = planSteps.length) =>
+			planSteps.slice(0, n).map((text, i) => ({text: i === done && active ? 'Patching parse()' : text, state: i < done ? ('done' as const) : i === done && active ? ('active' as const) : ('open' as const)}));
+		const many = Array.from({length: 24}, (_, i) => ({text: `Step ${i + 1}`, state: i < 9 ? ('done' as const) : i === 9 ? ('active' as const) : ('open' as const)}));
+		return ({width, depth, ascii}) => {
+			const rows: string[] = [];
+			const base = {title: 'Plan', depth, ascii};
+			const widths = [40, 80, 120].filter(w => w <= width);
+			for (const w of widths.length > 0 ? widths : [width]) {
+				rows.push(`summary, running, ${w} columns`, ...kit.checklistRows({...base, items: items(1, true), width: w - 1, mode: 'summary', spinner: ascii ? '|' : '⠹'}));
+				rows.push(`summary, idle, ${w} columns`, ...kit.checklistRows({...base, items: items(1, true), width: w - 1, mode: 'summary'}));
+			}
+			rows.push('line mode', ...kit.checklistRows({...base, items: items(1, true), width: Math.min(width, 80) - 1, mode: 'line', spinner: ascii ? '|' : '⠹'}));
+			rows.push('expanded, windowed', ...kit.checklistRows({...base, items: many, width: width - 1, mode: 'full', maxRows: 8}));
+			rows.push('short highlight', ...kit.checklistRows({...base, items: items(2, true), width: Math.min(width, 80) - 1, mode: 'summary', flash: 'Patch parse()', spinner: ascii ? '|' : '⠹'}));
+			rows.push('all done', ...kit.checklistRows({...base, items: items(planSteps.length, false), width: Math.min(width, 80) - 1, mode: 'summary', doneLabel: 'done'}));
+			rows.push('transcript notes');
+			const notes = [
+				{kind: 'new' as const, steps: 6},
+				{kind: 'added' as const, steps: 2},
+				{kind: 'done' as const, text: 'Read the parser'},
+				{kind: 'more-done' as const, count: 2},
+				{kind: 'finished' as const, done: 6, total: 6},
+			];
+			rows.push(...present.formatPlanNotes(notes, scrub).split('\n'));
 			return rows;
 		};
 	},
