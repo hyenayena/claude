@@ -33,6 +33,7 @@ for (const f of ['yena', 'compose.yaml', 'src/cli.ts']) {
 touch(path.join(yena, '.yena', 'claude', 'accounts.json'));
 touch(path.join(web, 'compose.yaml'));
 touch(path.join(hostState, 'mode.json'));
+touch(path.join(hostState, 'logs', 'yena.log'));
 mkdirSync(path.join(dataDir, 'config'), {recursive: true});
 mkdirSync(docs, {recursive: true});
 
@@ -51,8 +52,8 @@ const base = {
 const imageScope = buildScope({...base, imageReadOnly: true, hostState}, path.join(tmp, 'home'));
 const writableScope = buildScope(base, path.join(tmp, 'home'));
 
-const hookRun = (scope: ReturnType<typeof buildScope>) => {
-	const hook = createPolicyHook(scope, base.configDir);
+const hookRun = (scope: ReturnType<typeof buildScope>, sandboxed = false) => {
+	const hook = createPolicyHook(scope, base.configDir, {sandboxed});
 	return async (tool_name: string, tool_input: Record<string, unknown>) => {
 		const out = (await hook(
 			{hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: image} as never,
@@ -108,6 +109,27 @@ describe('policy with the read-only image', () => {
 		assert.equal(await run('Bash', {command: `echo '{"mode":"dev"}' > ${hostState}/mode.json`}), POLICY_DENY.hostState);
 		assert.equal(await run('Bash', {command: `cp -r x ${hostState}/modules/claude`}), POLICY_DENY.hostState);
 		assert.equal(await run('Bash', {command: 'ls /workplace'}), 'pass');
+	});
+
+	it('the host logs: readable by file tools and sandboxed Bash, nothing else of the host state', async () => {
+		const logs = path.join(hostState, 'logs');
+		const log = path.join(logs, 'yena.log');
+		assert.ok(await isPathAllowed(log, imageScope));
+		assert.ok(await isPathAllowed(logs, imageScope));
+		assert.equal(await classifyEditTarget(log, imageScope), 'deny-outside');
+		const boxed = hookRun(imageScope, true);
+		assert.equal(await boxed('Bash', {command: `grep -c turn ${log} | tail -n 5`}), 'pass');
+		assert.equal(await boxed('Bash', {command: `ls '${logs}'`}), 'pass');
+		for (const command of [
+			`cat ${logs}/../mode.json`,
+			`cat ${log} ${hostState}/mode.json`,
+			`ls ${logs}-old`,
+			`ls ${logs}.bak`,
+			`ls ${hostState}`,
+		]) {
+			assert.equal(await boxed('Bash', {command}), POLICY_DENY.hostState, command);
+		}
+		assert.equal(await hookRun(imageScope)('Bash', {command: `cat ${log}`}), POLICY_DENY.hostState);
 	});
 });
 

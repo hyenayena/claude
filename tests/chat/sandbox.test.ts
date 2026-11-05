@@ -69,6 +69,15 @@ test('the Claude config dir is read-only for Bash except plans, and the hub inst
 	assert.ok(deny.includes('/data/md/SOUL.md'));
 });
 
+test('the sandbox hides the host state but re-opens its logs for reading', () => {
+	const fs = buildSandbox(paths, undefined, list, '/root').filesystem;
+	assert.ok(fs.denyRead.includes('/data/host'));
+	assert.deepEqual(fs.allowRead, ['/data/host/logs']);
+	assert.ok(!fs.allowWrite.some(p => p.startsWith('/data/host')));
+	const {hostState: _, ...noHost} = paths;
+	assert.equal(buildSandbox(noHost, undefined, list, '/root').filesystem.allowRead, undefined);
+});
+
 test('the sandbox hides the secrets from Bash', () => {
 	const read = buildSandbox(paths, undefined, list, '/root').filesystem.denyRead;
 	for (const p of [

@@ -72,6 +72,7 @@ export type Scope = {
 	denied: string[];
 	image?: string;
 	hostStateDenied?: string[];
+	hostStateReadable?: string[];
 	free?: string[];
 	askFiles?: string[];
 	transcriptDirs?: string[];
@@ -100,6 +101,8 @@ export type PolicyPaths = {
 };
 
 export const SESSION_TMP_DENIED = ['bash-edit-diff'];
+
+export const hostLogsDir = (hostState: string): string => path.join(path.resolve(hostState), 'logs');
 
 export const HUB_ASK_FILES = ['CLAUDE.md', 'SOUL.md'];
 
@@ -141,6 +144,7 @@ const absRule = (p: string) => `/${p}`;
 
 export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 	const hub = paths.hubDir ?? paths.mdDir;
+	const readRoots = [...(paths.sessionTmp ? [paths.sessionTmp] : []), ...(paths.hostState ? [hostLogsDir(paths.hostState)] : [])];
 	return {
 		roots: [paths.projectDir, hub, paths.configDir],
 		free: [hub],
@@ -161,11 +165,11 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 			...(paths.accountSecrets?.secretDirs ?? []),
 			...(paths.sessionTmp ? SESSION_TMP_DENIED.map(x => path.join(paths.sessionTmp!, x)) : []),
 		],
-		...(paths.sessionTmp && {readRoots: [paths.sessionTmp]}),
+		...(readRoots.length > 0 && {readRoots}),
 		...(paths.accountSecrets && {shellDenied: accountShellDenied(paths.accountSecrets)}),
 		...(paths.agentSocket && {agentSocket: paths.agentSocket}),
 		...(paths.imageReadOnly && {image: paths.projectDir}),
-		...(paths.hostState && {hostStateDenied: [path.resolve(paths.hostState)]}),
+		...(paths.hostState && {hostStateDenied: [path.resolve(paths.hostState)], hostStateReadable: [hostLogsDir(paths.hostState)]}),
 		...(paths.projects && {projects: () => paths.projects!.read()}),
 		...(paths.projects?.dataDir && {projectDataDir: paths.projects.dataDir}),
 	};

@@ -3,7 +3,7 @@ import {accessSync, constants, readdirSync} from 'node:fs';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import type {ProjectAccess} from '../deps/project.js';
-import {accountPaths, authStatePath, CONFIG_HISTORY, CONFIG_SECRET, CONFIG_TRANSCRIPTS, HUB_ASK_FILES, PLANS_DIR, type PolicyPaths} from '../policy.js';
+import {accountPaths, authStatePath, CONFIG_HISTORY, CONFIG_SECRET, CONFIG_TRANSCRIPTS, hostLogsDir, HUB_ASK_FILES, PLANS_DIR, type PolicyPaths} from '../policy.js';
 
 export const SANDBOX_DOMAINS = ['github.com', '*.github.com', '*.githubusercontent.com', 'registry.npmjs.org'];
 
@@ -13,7 +13,7 @@ export type SandboxSettings = {
 	autoAllowBashIfSandboxed: false;
 	allowUnsandboxedCommands: false;
 	enableWeakerNestedSandbox: true;
-	filesystem: {allowWrite: string[]; denyWrite: string[]; denyRead: string[]};
+	filesystem: {allowWrite: string[]; denyWrite: string[]; denyRead: string[]; allowRead?: string[]};
 	network: {allowedDomains: string[]; allowAllUnixSockets?: true};
 	credentials: {envVars: Array<{name: string; mode: 'deny'}>};
 };
@@ -83,7 +83,12 @@ export function buildSandbox(paths: PolicyPaths, access: ProjectAccess | undefin
 		autoAllowBashIfSandboxed: false,
 		allowUnsandboxedCommands: false,
 		enableWeakerNestedSandbox: true,
-		filesystem: {allowWrite: ['/tmp'], denyWrite: [...new Set(denyWrite)], denyRead: [...new Set(denyRead)]},
+		filesystem: {
+			allowWrite: ['/tmp'],
+			denyWrite: [...new Set(denyWrite)],
+			denyRead: [...new Set(denyRead)],
+			...(paths.hostState && {allowRead: [hostLogsDir(paths.hostState)]}),
+		},
 		network: {allowedDomains: [...SANDBOX_DOMAINS], ...(unixSockets && {allowAllUnixSockets: true as const})},
 		credentials: {envVars: SANDBOX_DENIED_ENV.map(name => ({name, mode: 'deny' as const}))},
 	};

@@ -390,7 +390,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			hooks: policyHooks(scope, paths.configDir, {
 				approved: key => prompter.hasApproved(key),
 				bashTracker: leftovers,
-				...(box && {beforeBash: () => sandbox.refresh(), procHidden: true}),
+				...(box && {beforeBash: () => sandbox.refresh(), procHidden: true, sandboxed: true}),
 				agentRoute: input =>
 					routeAgentInput(input, {
 						routerOn: flags.routerOn,

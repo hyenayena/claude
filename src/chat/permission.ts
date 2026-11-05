@@ -121,7 +121,7 @@ export const POLICY_DENY = {
 	projectState: `The project module's data (its state decides which projects are writable) is not to be touched. ${BASH_TEXT_NOTE}`,
 	image:
 		'Writing there is not allowed: this is the read-only yena image, which changes only with ./yena build. Edit the working copy in /workplace/yena instead (ask the user, then "project isolate yena").',
-	hostState: `yena's host state (the module overlay, the start mode, the logs) is not to be touched from the chat; use the console commands mod and mode. ${BASH_TEXT_NOTE}`,
+	hostState: `yena's host state (the module overlay, the start mode) is not to be touched from the chat; use the console commands mod and mode. Only its logs folder is readable: with Read or Grep, or with a sandboxed Bash command that names that folder. ${BASH_TEXT_NOTE}`,
 	locked: "Writing there is not allowed (yena's Claude data dir). Instructions, agents and skills are edited in the md hub, at its own path.",
 	authFiles: `Access to authentication files is blocked. ${BASH_TEXT_NOTE}`,
 	procEnv: `Reading process environments is blocked: they hold credentials. ${BASH_TEXT_NOTE}`,

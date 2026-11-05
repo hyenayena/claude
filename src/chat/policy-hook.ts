@@ -13,6 +13,18 @@ const usesAgent = (command: string, socket: string | undefined): boolean =>
 
 const PROC_ENV = /\benviron\b/;
 
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// A readable dir counts only as a whole path segment and never with "..": the sandbox enforces the rest.
+function touchesHostState(command: string, scope: Scope, sandboxed: boolean): boolean {
+	let rest = command;
+	if (sandboxed) {
+		for (const dir of scope.hostStateReadable ?? []) rest = rest.replace(new RegExp(`${escapeRe(dir)}(?![\\w.-])`, 'g'), '');
+		if (rest !== command && command.includes('..')) return true;
+	}
+	return (scope.hostStateDenied ?? []).some(s => rest.includes(s));
+}
+
 const allow: HookJSONOutput = {continue: true};
 
 const denyWith = (reason: string): HookJSONOutput => ({
@@ -39,6 +51,7 @@ export type PolicyHookOptions = {
 	approved?: (key: string) => boolean;
 	beforeBash?: () => Promise<void>;
 	procHidden?: boolean;
+	sandboxed?: boolean;
 	bashTracker?: {begin(id: string): void; end(id: string, cwd?: string): Promise<void>};
 	agentRoute?: (input: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
 };
@@ -102,7 +115,7 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 				}
 				if (AUTH_FILE.test(command)) return denyWith(POLICY_DENY.authFiles);
 				if (scope.shellDenied?.some(s => command.includes(s))) return denyWith(POLICY_DENY.accountSecrets);
-				if (scope.hostStateDenied?.some(s => command.includes(s))) return denyWith(POLICY_DENY.hostState);
+				if (touchesHostState(command, scope, hookOpts.sandboxed === true)) return denyWith(POLICY_DENY.hostState);
 				if (!hookOpts.procHidden && PROC_ENV.test(command)) return denyWith(POLICY_DENY.procEnv);
 				if (usesAgent(command, scope.agentSocket)) return denyWith(POLICY_DENY.sshAgent);
 				if (projectData && command.includes(projectData)) return denyWith(POLICY_DENY.projectState);
