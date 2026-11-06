@@ -2,8 +2,8 @@ import {constants} from 'node:fs';
 import {open} from 'node:fs/promises';
 import path from 'node:path';
 import {isPathAllowed, type Scope} from '../policy.js';
-import {diffLines, locateEdit, previewNewFile} from './diff.js';
-import {PAYLOAD_REVIEW_MAX, type Preview, type PreviewRow} from './permission.js';
+import {diffLines, locateEdit, previewNewFile} from '../deps/chat.js';
+import {PAYLOAD_REVIEW_MAX, type Preview, type PreviewRow} from '../deps/chat.js';
 
 export const FILE_READ_MAX = 256 * 1024;
 

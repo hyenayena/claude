@@ -1,8 +1,8 @@
 import {SGR} from '../helpers/sgr16.js';
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import type {ChatEvent, RouteInfo} from '../../src/chat/events.js';
-import type {Tier} from '../../src/chat/tiers.js';
+import type {ChatEvent, RouteInfo} from '../../src/deps/chat.js';
+import type {Tier} from '../../src/deps/chat.js';
 import {formatOut, formatRouteBlock, routeBarText, routeBlockOf, toolHeader} from '../../src/ui/present.js';
 import {runningToolRow} from '../../src/ui/tool-card.js';
 import {initialTranscript, reduceTranscript, ROUTE_TOOL_ID, type Out, type TranscriptState} from '../../src/ui/transcript.js';

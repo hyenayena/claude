@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import type {ToolPatch} from '../../src/chat/events.js';
-import {fileChange, MAX_TURN_FILES, MAX_TURN_TOOL_IDS, TurnStats} from '../../src/chat/turn-stats.js';
+import type {ToolPatch} from '../../src/deps/chat.js';
+import {fileChange, MAX_TURN_FILES, MAX_TURN_TOOL_IDS, TurnStats} from '../../src/deps/chat.js';
 import {fileCardOf} from '../../src/ui/file-card.js';
 
 const hunk = (lines: string[]): ToolPatch => ({hunks: [{oldStart: 1, newStart: 1, lines}]});

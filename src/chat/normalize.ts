@@ -1,6 +1,7 @@
 import type {SDKMessage} from '@anthropic-ai/claude-agent-sdk';
-import type {AgentItem, ToolPatch, UiEvent} from './events.js';
-import {type Clock, parseRateLimit} from './limits.js';
+import type {AgentItem, ToolPatch, UiEvent} from '../deps/chat.js';
+import {parseRateLimit} from './limits.js';
+import {type Clock} from '../deps/chat.js';
 
 type Loose = Record<string, unknown>;
 

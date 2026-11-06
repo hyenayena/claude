@@ -1,5 +1,5 @@
 import {checklistRows, type ChecklistItem} from '../kit.js';
-import type {PlanItem} from '../chat/plan.js';
+import type {PlanItem} from '../deps/chat.js';
 import type {Scrub} from './tool-args.js';
 
 export const PLAN = {

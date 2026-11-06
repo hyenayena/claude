@@ -7,7 +7,7 @@ import type {SDKMessage} from '@anthropic-ai/claude-agent-sdk';
 import {authFile, pinnedAccount, setOrder, useAccount} from '../../src/accounts.js';
 import {loginCredentialsFile} from '../../src/login-slot.js';
 import {createChatEngine, type ChatEngine} from '../../src/chat/engine.js';
-import type {ChatEvent} from '../../src/chat/events.js';
+import type {ChatEvent} from '../../src/deps/chat.js';
 import {accountsCtx, storeSecret, type CredentialOpts} from '../../src/credentials.js';
 import type {ChatQueryFn} from '../../src/types.js';
 import {hostVault} from '../../src/vault.js';

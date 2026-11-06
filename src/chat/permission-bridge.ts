@@ -4,25 +4,10 @@ import path from 'node:path';
 import type {CanUseTool, PermissionResult} from '@anthropic-ai/claude-agent-sdk';
 import {classifyEditTarget, createCanUseTool, type Scope} from '../policy.js';
 import {agentDenial} from './agent-policy.js';
-import {type ConsoleFlags, LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from './console-tools.js';
-import {
-	BASH_REVIEW_MAX,
-	CANCEL_MESSAGE,
-	DENY_MESSAGE,
-	DENY_REASON_PREFIX,
-	DISMISS_MESSAGE,
-	type Highlight,
-	PAYLOAD_REVIEW_MAX,
-	POLICY_DENY,
-	type PermissionDecision,
-	type PermissionPrompter,
-	type PermissionRequest,
-	type Preview,
-	QUESTION_LIMITS,
-	type QuestionSpec,
-	REASON_MAX,
-	toolUnavailableMessage,
-} from './permission.js';
+import {type ConsoleFlags} from './console-tools.js';
+import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../deps/chat.js';
+import {POLICY_DENY, type PermissionPrompter, toolUnavailableMessage} from './permission.js';
+import {BASH_REVIEW_MAX, CANCEL_MESSAGE, DENY_MESSAGE, DENY_REASON_PREFIX, DISMISS_MESSAGE, type Highlight, PAYLOAD_REVIEW_MAX, type PermissionDecision, type PermissionRequest, type Preview, QUESTION_LIMITS, type QuestionSpec, REASON_MAX} from '../deps/chat.js';
 import {sanitizeBlock, sanitizeText} from '../kit.js';
 import {outsideReason, WEB_KEY_PREFIX, webKey} from './policy-hook.js';
 

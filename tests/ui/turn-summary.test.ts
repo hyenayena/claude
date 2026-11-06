@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import type {TurnSummary} from '../../src/chat/turn-stats.js';
+import type {TurnSummary} from '../../src/deps/chat.js';
 import {stringCells, stripStyles, styledCells, withColorDepth} from '../../src/kit.js';
 import {formatOut} from '../../src/ui/present.js';
 import {formatTokens, showSummary, turnFilesRows, turnSummaryRow} from '../../src/ui/turn-summary.js';

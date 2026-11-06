@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach, mock, test} from 'node:test';
 import type {CommandBridge, CommandRunRequest, CommandRunResult} from '../../../../src/api.js';
-import type {ChatEvent} from '../../src/chat/events.js';
+import type {ChatEvent} from '../../src/deps/chat.js';
 import {RemoteChatSession, type RemoteOptions} from '../../src/chat/remote-session.js';
 import {createDecoder, encodeFrame, type ClientFrame, type RunnerFrame, type Snapshot} from '../../src/runner/protocol.js';
 import {makeFakeLog} from '../helpers/fake-log.js';

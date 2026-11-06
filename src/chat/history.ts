@@ -1,6 +1,6 @@
 import {open, readdir, stat} from 'node:fs/promises';
 import path from 'node:path';
-import type {ToolPatch} from './events.js';
+import type {ToolPatch} from '../deps/chat.js';
 import {toolPatch} from './normalize.js';
 import {titleFromPrompt, transcriptFile} from './title.js';
 

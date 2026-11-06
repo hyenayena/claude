@@ -1,10 +1,10 @@
-import {summarizeArgs} from '../chat/truncate.js';
-import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../chat/permission.js';
-import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
-import type {ToolPatch} from '../chat/events.js';
+import {summarizeArgs} from '../deps/chat.js';
+import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE} from '../deps/chat.js';
+import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../deps/chat.js';
+import type {ToolPatch} from '../deps/chat.js';
 import {sgr} from './sgr.js';
 import {mcpParts} from './tool-kind.js';
-import {parseTodos} from '../chat/plan.js';
+import {parseTodos} from '../deps/chat.js';
 import {ROUTE_TOOL_NAME} from './transcript.js';
 
 export type Scrub = (s: string) => string;

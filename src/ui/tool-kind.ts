@@ -1,4 +1,4 @@
-import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../chat/console-tools.js';
+import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../deps/chat.js';
 import type {GlyphName} from '../kit.js';
 
 export type ToolFamily = 'read' | 'search' | 'edit' | 'shell' | 'web' | 'agent' | 'task' | 'other';

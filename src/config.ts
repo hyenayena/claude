@@ -14,7 +14,7 @@ import {
 	GUARD_DENY,
 	MAX_TURNS,
 } from './policy.js';
-import {CONSOLE_SERVER_NAME} from './chat/console-tools.js';
+import {CONSOLE_SERVER_NAME} from './deps/chat.js';
 import {ROUTER_SYSTEM} from './chat/router.js';
 import type {SandboxSettings} from './chat/sandbox.js';
 import {cliTmpOf} from './chat/shell-tmp.js';

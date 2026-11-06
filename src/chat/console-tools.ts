@@ -5,11 +5,9 @@ import type {CommandBridge, CommandConfirmRequest, Logger} from '../../../../src
 import {COMMAND_TOOLS, formatCommandList, formatRunResult, sanitizeText} from '../kit.js';
 import {errClass} from '../log.js';
 import type {PermissionPrompter} from './permission.js';
+import {CONSOLE_SERVER_NAME, LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../deps/chat.js';
 import {makeScrub} from './scrub.js';
 
-export const CONSOLE_SERVER_NAME = 'yena';
-export const LIST_COMMANDS_TOOL = `mcp__${CONSOLE_SERVER_NAME}__list_commands`;
-export const RUN_COMMAND_TOOL = `mcp__${CONSOLE_SERVER_NAME}__run_command`;
 export const CONSOLE_TOOL_NAMES: readonly string[] = [LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL];
 
 export type ConsoleSdk = {

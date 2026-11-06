@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {Options, SDKMessage, SDKUserMessage} from '@anthropic-ai/claude-agent-sdk';
 import {ChatSession, type RouteResult} from '../../src/chat/chat-session.js';
-import type {ChatEvent} from '../../src/chat/events.js';
+import type {ChatEvent} from '../../src/deps/chat.js';
 import type {CacheInfo} from '../../src/chat/router.js';
 import type {ChatQueryFn} from '../../src/types.js';
 import {makeFakeLog} from '../helpers/fake-log.js';

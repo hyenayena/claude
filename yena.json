@@ -1,6 +1,6 @@
 {
 	"name": "claude",
-	"version": "0.29.0",
+	"version": "0.30.0",
 	"description": "Claude Code integration",
 	"runtime": "node",
 	"entry": "src/index.ts",
@@ -10,6 +10,7 @@
 	},
 	"dependencies": {
 		"md": "git@github.com:hyenayena/md.git",
-		"core": "git@github.com:hyenayena/core.git"
+		"core": "git@github.com:hyenayena/core.git",
+		"chat": "git@github.com:hyenayena/chat.git"
 	}
 }

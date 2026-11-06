@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {agentDenial} from '../../src/chat/agent-policy.js';
-import type {AgentItem, UiEvent} from '../../src/chat/events.js';
+import type {AgentItem, UiEvent} from '../../src/deps/chat.js';
 import {AGENT_ITEMS_CAP, AGENT_RESULT_CAP, AGENT_TEXT_CAP, AGENT_TOTAL_CAP, normalize} from '../../src/chat/normalize.js';
 import {POLICY_DENY} from '../../src/chat/permission.js';
 import {DISALLOWED_TOOLS} from '../../src/policy.js';

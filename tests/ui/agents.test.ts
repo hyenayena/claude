@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import type {AgentItem, ChatEvent, UiEvent} from '../../src/chat/events.js';
+import type {AgentItem, ChatEvent, UiEvent} from '../../src/deps/chat.js';
 import {AGENTS_CAPS, focusAgent, initialAgents, reduceAgents, SEED_NOTICE, seedFromTasks, type AgentsState} from '../../src/ui/agents.js';
 
 const ui = (event: UiEvent): ChatEvent => ({type: 'ui', event});

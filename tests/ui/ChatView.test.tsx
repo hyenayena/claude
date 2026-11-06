@@ -5,7 +5,7 @@ import React, {createElement} from 'react';
 void React;
 import {createPinWatch} from '../../src/chat/pin-watch.js';
 import {makeScrub} from '../../src/chat/scrub.js';
-import type {PermissionRequest} from '../../src/chat/permission.js';
+import type {PermissionRequest} from '../../src/deps/chat.js';
 import {makeReveal} from '../../src/chat/reveal.js';
 import {armExpiry, BUSY_HINT, ChatView, clearSentHistory, ESC_AGAIN_MS, ESC_CONFIRM_AFTER_MS, escapeInterrupts, MAX_QUEUED, type ChatViewProps} from '../../src/ui/ChatView.js';
 import {createChatElement} from '../../src/ui/mount.js';

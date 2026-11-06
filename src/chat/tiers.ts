@@ -1,12 +1,6 @@
+import {isTier, type Tier, TIERS, tierRank} from '../deps/chat.js';
 import type {Effort} from '../chat-prefs.js';
 import type {ClaudeState} from '../types.js';
-
-export const TIERS = ['light', 'standard', 'strong', 'max'] as const;
-export type Tier = (typeof TIERS)[number];
-
-export const isTier = (v: unknown): v is Tier => TIERS.includes(v as Tier);
-export const tierRank = (t: Tier): number => TIERS.indexOf(t);
-export const maxTier = (a: Tier, b: Tier): Tier => (tierRank(a) >= tierRank(b) ? a : b);
 
 export type TierRange = {low: Tier; high: Tier};
 

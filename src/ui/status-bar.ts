@@ -1,4 +1,4 @@
-import type {ContextInfo} from '../chat/events.js';
+import type {ContextInfo} from '../deps/chat.js';
 import {colorDepth, formatElapsed, glyph, meterBar, paintTone, sanitizeText, segmentBar, truncateCells, type BarSegment, type ColorDepth, type ThemeTone} from '../kit.js';
 import {QUIET_NOTICE_S, routeBarText, statusLineText, tasksBarText} from './present.js';
 import type {Phase, StatusLine} from './transcript.js';

@@ -6,20 +6,8 @@ import {after, test} from 'node:test';
 import type {CanUseTool} from '@anthropic-ai/claude-agent-sdk';
 import {createConsoleFlags} from '../../src/chat/console-tools.js';
 import {createChatCanUseTool} from '../../src/chat/permission-bridge.js';
-import {
-	CANCEL_MESSAGE,
-	DENY_MESSAGE,
-	DISMISS_MESSAGE,
-	type AuditEntry,
-	type ChatMode,
-	type PermissionDecision,
-	type PermissionPrompter,
-	type PermissionRequest,
-	POLICY_DENY,
-	scratchDenied,
-	QUESTION_LIMITS,
-	toolUnavailableMessage,
-} from '../../src/chat/permission.js';
+import {type PermissionPrompter, POLICY_DENY, scratchDenied, toolUnavailableMessage} from '../../src/chat/permission.js';
+import {CANCEL_MESSAGE, DENY_MESSAGE, DISMISS_MESSAGE, type AuditEntry, type ChatMode, type PermissionDecision, type PermissionRequest, QUESTION_LIMITS} from '../../src/deps/chat.js';
 import {buildScope} from '../../src/policy.js';
 
 const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'claude-bridge-')));

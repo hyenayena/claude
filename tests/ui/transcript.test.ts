@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import type {ChatEvent, UiEvent} from '../../src/chat/events.js';
-import type {ToolRequest} from '../../src/chat/permission.js';
+import type {ChatEvent, UiEvent} from '../../src/deps/chat.js';
+import type {ToolRequest} from '../../src/deps/chat.js';
 import {initialTranscript, reduceTranscript, resetTranscript, type Out, type TranscriptState} from '../../src/ui/transcript.js';
 
 const ui = (event: UiEvent): ChatEvent => ({type: 'ui', event});

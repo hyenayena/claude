@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import type {ChatEvent} from '../../src/chat/events.js';
+import type {ChatEvent} from '../../src/deps/chat.js';
 import {makeScrub} from '../../src/chat/scrub.js';
 import {stringCells} from '../../src/kit.js';
 import {agentViewLines} from '../../src/ui/agent-view.js';

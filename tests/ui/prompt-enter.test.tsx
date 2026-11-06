@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {afterEach, test} from 'node:test';
 import React from 'react';
-import type {ToolRequest} from '../../src/chat/permission.js';
+import type {ToolRequest} from '../../src/deps/chat.js';
 import {makeReveal} from '../../src/chat/reveal.js';
 import {makeScrub} from '../../src/chat/scrub.js';
 import {ChatView} from '../../src/ui/ChatView.js';

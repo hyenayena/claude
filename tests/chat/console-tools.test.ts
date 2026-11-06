@@ -2,19 +2,10 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {z} from 'zod';
 import type {CommandBridge, CommandConfirmRequest, CommandInfo, CommandRunRequest, CommandRunResult} from '../../../../src/api.js';
-import {
-	CONSOLE_MCP_TIMEOUT_MS,
-	CONSOLE_SERVER_NAME,
-	CONSOLE_TIMEOUT_MS,
-	commandKey,
-	createConsoleFlags,
-	createConsoleServer,
-	alwaysAsk,
-	neverAlways,
-	type ConsoleFlags,
-	type ConsoleSdk,
-} from '../../src/chat/console-tools.js';
-import type {AuditEntry, ChatMode, PermissionDecision, PermissionPrompter, PermissionRequest} from '../../src/chat/permission.js';
+import {CONSOLE_MCP_TIMEOUT_MS, CONSOLE_TIMEOUT_MS, commandKey, createConsoleFlags, createConsoleServer, alwaysAsk, neverAlways, type ConsoleFlags, type ConsoleSdk} from '../../src/chat/console-tools.js';
+import {CONSOLE_SERVER_NAME} from '../../src/deps/chat.js';
+import type {PermissionPrompter} from '../../src/chat/permission.js';
+import type {AuditEntry, ChatMode, PermissionDecision, PermissionRequest} from '../../src/deps/chat.js';
 import {noopLog} from '../../src/log.js';
 
 type Handler = (args: Record<string, unknown>, extra: unknown) => Promise<{content: {text: string}[]; isError?: boolean}>;

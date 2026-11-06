@@ -5,27 +5,19 @@ import {clip, errClass, noopLog} from '../log.js';
 import {AUTH_MESSAGE, mapFailure, RESUME_MESSAGE} from '../session.js';
 import type {Effort, LivePatch} from '../chat-prefs.js';
 import type {ChatQueryFn, RewindResult} from '../types.js';
-import type {ChatController, ChatEvent, ChatState, ContextInfo, RouteInfo, TurnOutcome, UiEvent} from './events.js';
+import type {ChatController, ChatEvent, ChatState, ContextInfo, RouteInfo, TurnOutcome, UiEvent} from '../deps/chat.js';
 import type {CacheInfo} from './router.js';
-import type {Tier} from './tiers.js';
+import type {Tier} from '../deps/chat.js';
 import {InputQueue} from './input-queue.js';
-import {classifyFailure, type Clock, failureMessage, type FailureKind, type RateLimitInfo, systemClock} from './limits.js';
+import {classifyFailure, failureMessage, type FailureKind} from './limits.js';
+import {type Clock, type RateLimitInfo, systemClock} from '../deps/chat.js';
 import {normalize} from './normalize.js';
-import {PlanTracker, type PlanItem} from './plan.js';
-import {TurnStats} from './turn-stats.js';
-import {type ChatUsage, subtract, UsageMeter} from './usage.js';
-import {
-	type AuditEntry,
-	type CancelCause,
-	type ChatMode,
-	MAX_QUEUE,
-	MODE_CYCLE,
-	PERMISSION_IDLE_MS,
-	type PermissionDecision,
-	type PermissionPrompter,
-	type PermissionRequest,
-	sdkPermissionMode,
-} from './permission.js';
+import {PlanTracker} from './plan.js';
+import {type PlanItem} from '../deps/chat.js';
+import {TurnStats} from '../deps/chat.js';
+import {type ChatUsage, subtract, UsageMeter} from '../deps/chat.js';
+import {MAX_QUEUE, PERMISSION_IDLE_MS, type PermissionPrompter, sdkPermissionMode} from './permission.js';
+import {type AuditEntry, type CancelCause, type ChatMode, MODE_CYCLE, type PermissionDecision, type PermissionRequest} from '../deps/chat.js';
 
 const FIRST_OUTPUT: ReadonlySet<UiEvent['kind']> = new Set(['text-delta', 'text', 'thinking', 'thinking-tokens', 'tool-input', 'tool-use']);
 

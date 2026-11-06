@@ -1,23 +1,14 @@
 import type {AgentPolicy, CommandConfirmRequest, CommandInfo, CommandInfoSub, CommandRunResult, CommandRunStatus} from '../../../../src/api.js';
 import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import type {SlashCommandInfo, TaskInfo} from '../chat/chat-session.js';
-import {ACCOUNT_REASONS, ROUTE_OUTCOMES, ROUTE_SOURCES, type AgentItem, type ChatEvent, type ChatState, type ContextInfo, type RouteInfo, type ToolPatch, type TurnOutcome, type UiEvent} from '../chat/events.js';
-import {MAX_PLAN_ID, MAX_PLAN_ITEMS, MAX_PLAN_TEXT, PLAN_STATUSES, type PlanItem} from '../chat/plan.js';
-import {TIERS, type Tier} from '../chat/tiers.js';
-import {MAX_TURN_FILES, MAX_TURN_PATH, type TurnFileChange, type TurnSummary} from '../chat/turn-stats.js';
-import type {LimitType, RateLimitInfo} from '../chat/limits.js';
+import {ACCOUNT_REASONS, ROUTE_OUTCOMES, ROUTE_SOURCES, type AgentItem, type ChatEvent, type ChatState, type ContextInfo, type RouteInfo, type ToolPatch, type TurnOutcome, type UiEvent} from '../deps/chat.js';
+import {MAX_PLAN_ID, MAX_PLAN_ITEMS, MAX_PLAN_TEXT, PLAN_STATUSES, type PlanItem} from '../deps/chat.js';
+import {TIERS, type Tier} from '../deps/chat.js';
+import {MAX_TURN_FILES, MAX_TURN_PATH, type TurnFileChange, type TurnSummary} from '../deps/chat.js';
+import type {LimitType, RateLimitInfo} from '../deps/chat.js';
 import {ACCOUNT_NAME_RE} from '../accounts.js';
 import {MAX_ENTRIES, type WireBundle, type WireEntry} from '../vault.js';
-import type {
-	AuditEntry,
-	CancelCause,
-	ChatMode,
-	PermissionDecision,
-	PermissionRequest,
-	Preview,
-	QuestionRequest,
-	ToolRequest,
-} from '../chat/permission.js';
+import type {AuditEntry, CancelCause, ChatMode, PermissionDecision, PermissionRequest, Preview, QuestionRequest, ToolRequest} from '../deps/chat.js';
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_FRAME_BYTES = 1024 * 1024;

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {afterEach, test} from 'node:test';
 import React, {createElement, type ReactElement} from 'react';
 import {makeScrub} from '../../src/chat/scrub.js';
-import type {PlanItem} from '../../src/chat/plan.js';
+import type {PlanItem} from '../../src/deps/chat.js';
 import {stripStyles} from '../../src/kit.js';
 import {ChatView, clearSentHistory, type ChatViewProps} from '../../src/ui/ChatView.js';
 import {fakeController, mountHarness, toolReq, type FakeController} from './testkit.js';

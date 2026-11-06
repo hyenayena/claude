@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {clampTier, DEFAULT_TIERS, isTier, maxTier, parseTierModel, tierMapFromState, tierRank} from '../../src/chat/tiers.js';
+import {clampTier, DEFAULT_TIERS, parseTierModel, tierMapFromState} from '../../src/chat/tiers.js';
+import {isTier, maxTier, tierRank} from '../../src/deps/chat.js';
 
 test('model tier syntax: one tier, or an ascending range with a default', () => {
 	assert.deepEqual(parseTierModel('strong'), {low: 'strong', high: 'strong', default: 'strong'});

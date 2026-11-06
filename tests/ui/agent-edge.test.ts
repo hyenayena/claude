@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import type {ChatEvent, UiEvent} from '../../src/chat/events.js';
+import type {ChatEvent, UiEvent} from '../../src/deps/chat.js';
 import {makeScrub} from '../../src/chat/scrub.js';
 import {stringCells, type SpanRow} from '../../src/kit.js';
 import {layoutPanel, PANEL} from '../../src/ui/agent-panel.js';

@@ -1,4 +1,4 @@
-import {BASH_REVIEW_MAX, type Highlight} from './permission.js';
+import {BASH_REVIEW_MAX, type Highlight} from '../deps/chat.js';
 
 type Segment = {words: string[]; sep: string};
 

@@ -1,7 +1,8 @@
 import React, {useEffect, useState} from 'react';
 import {Box, Text} from 'ink';
 import type {ViewHost} from '../../../../src/api.js';
-import type {ShellSnapshot, ShellWatch} from '../chat/shell-watch.js';
+import type {ShellWatch} from '../chat/shell-watch.js';
+import type {ShellSnapshot} from '../deps/chat.js';
 import {OutputTail, SPINNERS, useSpinnerFrame, useViewHost} from './kit.js';
 
 export type ShellActivityProps = {

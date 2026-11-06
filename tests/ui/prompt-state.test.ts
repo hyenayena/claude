@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {Key} from 'ink';
-import type {PermissionRequest, ToolRequest} from '../../src/chat/permission.js';
+import type {PermissionRequest, ToolRequest} from '../../src/deps/chat.js';
 import {
 	ARM_MS,
 	choicesFor,

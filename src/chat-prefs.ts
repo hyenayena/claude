@@ -1,6 +1,7 @@
 import type {Options} from '@anthropic-ai/claude-agent-sdk';
 import type {Logger, Setting, SettingInline, SettingOption} from '../../../src/api.js';
-import {DEFAULT_TIERS, TIER_MODELS, TIER_STATE_KEYS, TIERS, type Tier, type TierModel} from './chat/tiers.js';
+import {DEFAULT_TIERS, TIER_MODELS, TIER_STATE_KEYS, type TierModel} from './chat/tiers.js';
+import {TIERS, type Tier} from './deps/chat.js';
 import type {ClaudeState} from './types.js';
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;

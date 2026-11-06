@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import type {HookCallback, Options, SDKMessage, SDKUserMessage} from '@anthropic-ai/claude-agent-sdk';
 import {createChatEngine} from '../../src/chat/engine.js';
-import type {ChatEvent} from '../../src/chat/events.js';
+import type {ChatEvent} from '../../src/deps/chat.js';
 import {storeSecret, type CredentialOpts} from '../../src/credentials.js';
 import type {ChatQueryFn, ClaudeState} from '../../src/types.js';
 import {hostVault} from '../../src/vault.js';

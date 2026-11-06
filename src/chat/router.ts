@@ -1,4 +1,4 @@
-import {isTier, maxTier, tierRank, type Tier} from './tiers.js';
+import {isTier, maxTier, tierRank, type Tier} from '../deps/chat.js';
 
 export const CACHE_TTL_MS = 300_000;
 export const SMALL_CONTEXT = 20_000;

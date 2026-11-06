@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {inspect} from 'node:util';
 import {afterEach, test} from 'node:test';
-import type {ChatEvent} from '../../src/chat/events.js';
+import type {ChatEvent} from '../../src/deps/chat.js';
 import {createDecoder, encodeFrame, MAX_FRAME_BYTES, ProtocolError, validateFrame, type ClientFrame, type RunnerFrame} from '../../src/runner/protocol.js';
 import {runRunner, type RunnerControl, type RunnerHandle, type RunnerSession} from '../../src/runner/server.js';
 import {bundleVault, decodeBundle, encodeBundle, makeEntry, type CredentialBundle, type WireBundle} from '../../src/vault.js';

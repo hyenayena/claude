@@ -1,6 +1,6 @@
 import React from 'react';
 import {Box, Text} from 'ink';
-import type {QuestionRequest} from '../chat/permission.js';
+import type {QuestionRequest} from '../deps/chat.js';
 import {hangingRows, truncateCells, wrapRows} from '../kit.js';
 import {Frame, LabeledInput, labeledInputRows} from './kit.js';
 import {headerPrefix} from './PermissionPrompt.js';

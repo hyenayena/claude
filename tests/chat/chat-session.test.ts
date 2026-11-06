@@ -4,9 +4,10 @@ import type {Options, SDKMessage, SDKUserMessage} from '@anthropic-ai/claude-age
 import {AUTH_MESSAGE, RESUME_MESSAGE} from '../../src/session.js';
 import type {ChatQueryFn} from '../../src/types.js';
 import {ChatSession} from '../../src/chat/chat-session.js';
-import type {ChatEvent} from '../../src/chat/events.js';
-import {MAX_QUEUE, PERMISSION_IDLE_MS, type PermissionDecision, type PermissionPrompter, type PermissionRequest} from '../../src/chat/permission.js';
-import type {Clock} from '../../src/chat/limits.js';
+import type {ChatEvent} from '../../src/deps/chat.js';
+import {MAX_QUEUE, PERMISSION_IDLE_MS, type PermissionPrompter} from '../../src/chat/permission.js';
+import {type PermissionDecision, type PermissionRequest} from '../../src/deps/chat.js';
+import type {Clock} from '../../src/deps/chat.js';
 import {makeFakeLog} from '../helpers/fake-log.js';
 
 const SECRET = 'sk-ant-oat-TESTVALUE0123456789abcdef';

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createDecoder, encodeFrame, MAX_FRAME_BYTES, ProtocolError, type ClientFrame, type RunnerFrame} from '../../src/runner/protocol.js';
-import {parseTodos} from '../../src/chat/plan.js';
+import {parseTodos} from '../../src/deps/chat.js';
 
 const line = (o: unknown): string => `${JSON.stringify(o)}\n`;
 

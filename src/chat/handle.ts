@@ -1,9 +1,9 @@
 import type {LivePatch} from '../chat-prefs.js';
 import type {RewindResult} from '../types.js';
 import type {SlashCommandInfo, TaskInfo} from './chat-session.js';
-import type {ChatController} from './events.js';
-import type {Tier} from './tiers.js';
-import type {ChatUsage} from './usage.js';
+import type {ChatController} from '../deps/chat.js';
+import type {Tier} from '../deps/chat.js';
+import type {ChatUsage} from '../deps/chat.js';
 
 export interface ChatHandle extends ChatController {
 	readonly commands: readonly SlashCommandInfo[];

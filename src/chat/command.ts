@@ -21,7 +21,7 @@ import {editInEditor} from '../terminal.js';
 import type {ConsoleSdk} from './console-tools.js';
 import {createChatEngine, type EngineDeps} from './engine.js';
 import type {ChatHandle} from './handle.js';
-import type {Tier} from './tiers.js';
+import type {Tier} from '../deps/chat.js';
 import {RemoteChatSession} from './remote-session.js';
 import {makeReveal} from './reveal.js';
 import {makeScrub} from './scrub.js';

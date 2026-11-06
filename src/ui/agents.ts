@@ -1,5 +1,5 @@
-import {HANDBACK_TOOL, SPAWN_TOOLS} from '../chat/agent-policy.js';
-import type {AgentItem, ChatEvent, TaskStatus, ToolPatch, UiEvent} from '../chat/events.js';
+import {HANDBACK_TOOL, SPAWN_TOOLS} from '../deps/chat.js';
+import type {AgentItem, ChatEvent, TaskStatus, ToolPatch, UiEvent} from '../deps/chat.js';
 
 export type AgentStatus = TaskStatus;
 

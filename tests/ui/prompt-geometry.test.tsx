@@ -4,7 +4,7 @@ import React from 'react';
 import {stringCells} from '../../src/kit.js';
 import {makeReveal} from '../../src/chat/reveal.js';
 import {makeScrub} from '../../src/chat/scrub.js';
-import type {PermissionRequest} from '../../src/chat/permission.js';
+import type {PermissionRequest} from '../../src/deps/chat.js';
 import {ChatView} from '../../src/ui/ChatView.js';
 import {fakeController, mountHarness, questionReq, toolReq} from './testkit.js';
 

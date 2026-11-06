@@ -1,7 +1,7 @@
 import {mkdirSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import type {Logger} from '../../../../src/api.js';
-import type {ChatState} from './events.js';
+import type {ChatState} from '../deps/chat.js';
 
 export type StatusSnapshot = {
 	state: ChatState;

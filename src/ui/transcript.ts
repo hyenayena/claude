@@ -1,9 +1,9 @@
-import type {AccountReason, ChatEvent, RouteInfo, ToolPatch, TurnOutcome, UiEvent} from '../chat/events.js';
-import type {RateLimitInfo} from '../chat/limits.js';
-import {PLAN_TOOLS, planChanges, type PlanItem, type PlanNote} from '../chat/plan.js';
-import type {AuditEntry, ChatMode} from '../chat/permission.js';
-import type {Tier} from '../chat/tiers.js';
-import type {TurnSummary} from '../chat/turn-stats.js';
+import type {AccountReason, ChatEvent, RouteInfo, ToolPatch, TurnOutcome, UiEvent} from '../deps/chat.js';
+import type {RateLimitInfo} from '../deps/chat.js';
+import {PLAN_TOOLS, planChanges, type PlanItem, type PlanNote} from '../deps/chat.js';
+import type {AuditEntry, ChatMode} from '../deps/chat.js';
+import type {Tier} from '../deps/chat.js';
+import type {TurnSummary} from '../deps/chat.js';
 import {isFoldable} from './tool-kind.js';
 import {showSummary} from './turn-summary.js';
 

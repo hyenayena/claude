@@ -1,5 +1,5 @@
-import type {TurnOutcome} from '../chat/events.js';
-import type {TurnSummary} from '../chat/turn-stats.js';
+import type {TurnOutcome} from '../deps/chat.js';
+import type {TurnSummary} from '../deps/chat.js';
 import {colorDepth, formatElapsed, glyph, paintTone, sanitizeText, segmentBar, stringCells, truncateCells, type BarSegment, type ColorDepth} from '../kit.js';
 
 export const SUMMARY_MIN_MS = 30_000;

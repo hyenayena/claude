@@ -1,8 +1,8 @@
 import {PassThrough} from 'node:stream';
 import type {ReactElement} from 'react';
 import {render} from 'ink';
-import type {ChatController, ChatEvent, ChatState, UiEvent} from '../../src/chat/events.js';
-import type {ChatMode, PermissionDecision, PermissionRequest, QuestionRequest, ToolRequest} from '../../src/chat/permission.js';
+import type {ChatController, ChatEvent, ChatState, UiEvent} from '../../src/deps/chat.js';
+import type {ChatMode, PermissionDecision, PermissionRequest, QuestionRequest, ToolRequest} from '../../src/deps/chat.js';
 
 export const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 

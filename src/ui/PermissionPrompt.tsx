@@ -1,6 +1,6 @@
 import React from 'react';
 import {Box, Text} from 'ink';
-import type {ToolRequest} from '../chat/permission.js';
+import type {ToolRequest} from '../deps/chat.js';
 import {
 	choicesFor,
 	clipBody,

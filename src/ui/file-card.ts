@@ -1,6 +1,6 @@
-import {diffLines} from '../chat/diff.js';
-import type {ToolPatch} from '../chat/events.js';
-import type {Preview} from '../chat/permission.js';
+import {diffLines} from '../deps/chat.js';
+import type {ToolPatch} from '../deps/chat.js';
+import type {Preview} from '../deps/chat.js';
 import {prepareDiffCard, renderDiffCard, colorDepth, formatElapsed, glyph, type DiffCard, type DiffCardRow, type PreparedDiffCard} from '../kit.js';
 import {highlighterFor, highlighterReady, languageFor} from './highlight.js';
 import {sgr} from './sgr.js';

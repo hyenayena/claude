@@ -1,7 +1,8 @@
 import type {Logger} from '../../../../src/api.js';
 import {noopLog} from '../log.js';
 import {agentFiles, peekAgentFile} from './agent-defs.js';
-import {clampTier, parseTierModel, type Tier, type TierMap, type TierSpec} from './tiers.js';
+import {clampTier, parseTierModel, type TierMap, type TierSpec} from './tiers.js';
+import {type Tier} from '../deps/chat.js';
 
 export type AgentRouteCtx = {
 	routerOn: boolean;

@@ -29,9 +29,10 @@ import {projectSlug, readSessionTitle, titleFromPrompt, transcriptFile} from './
 import {buildAgentDefinitions} from './agent-defs.js';
 import {routeAgentInput} from './agent-route.js';
 import {createClassifier} from './classifier.js';
-import type {RouteInfo} from './events.js';
+import type {RouteInfo} from '../deps/chat.js';
 import {applyVerdict, classifierPrompt, decideMain, noteContinuing, Router} from './router.js';
-import {tierMapFromState, type Tier, type TierMap} from './tiers.js';
+import {tierMapFromState, type TierMap} from './tiers.js';
+import {type Tier} from '../deps/chat.js';
 
 const TITLE_RETRY_MS = [3_000, 10_000];
 

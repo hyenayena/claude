@@ -1,6 +1,6 @@
 import type {Key} from 'ink';
-import {BASH_REVIEW_MAX, PAYLOAD_REVIEW_MAX, QUESTION_LIMITS, REASON_MAX} from '../chat/permission.js';
-import type {PermissionDecision, Preview, QuestionRequest, QuestionSpec, ToolRequest} from '../chat/permission.js';
+import {BASH_REVIEW_MAX, PAYLOAD_REVIEW_MAX, QUESTION_LIMITS, REASON_MAX} from '../deps/chat.js';
+import type {PermissionDecision, Preview, QuestionRequest, QuestionSpec, ToolRequest} from '../deps/chat.js';
 import {previewCardRows} from './file-card.js';
 import {sanitizeMultilineInput, wrapRows, type FrameRow, type Tone} from '../kit.js';
 

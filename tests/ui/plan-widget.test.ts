@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import type {PlanItem} from '../../src/chat/plan.js';
+import type {PlanItem} from '../../src/deps/chat.js';
 import {styledCells, stripStyles, withColorDepth} from '../../src/kit.js';
 import {formatOut, formatToolBlock, toolHeader} from '../../src/ui/present.js';
 import {PLAN, planDone, planViewerRows, planVisible, planWidgetRows, type PlanView} from '../../src/ui/plan-widget.js';

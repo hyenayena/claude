@@ -1,15 +1,15 @@
-import {BLOCK_DISPLAY_CAP, clampChars} from '../chat/truncate.js';
-import type {AuditEntry, ChatMode} from '../chat/permission.js';
+import {BLOCK_DISPLAY_CAP, clampChars} from '../deps/chat.js';
+import type {AuditEntry, ChatMode} from '../deps/chat.js';
 import {SGR_ATTR, formatElapsed, glyph, sliceCells, stringCells, truncateCells} from '../kit.js';
 import {sgr} from './sgr.js';
 import type {PrintAction, PrintOptions} from '../../../../src/api.js';
-import type {RouteInfo} from '../chat/events.js';
-import type {PlanNote} from '../chat/plan.js';
+import type {RouteInfo} from '../deps/chat.js';
+import type {PlanNote} from '../deps/chat.js';
 import {CODE_BLOCK_ROWS, openFenceLine, renderMarkdownRows} from './markdown.js';
 import {formatToolCard, formatToolGroup, resultLines} from './tool-card.js';
 import type {Scrub} from './tool-args.js';
 import {LIVE, ROUTE_TOOL_NAME, type Out, type Phase, type StatusLine} from './transcript.js';
-import type {Tier} from '../chat/tiers.js';
+import type {Tier} from '../deps/chat.js';
 import {turnSummaryRow} from './turn-summary.js';
 
 export {CODE_BLOCK_ROWS};

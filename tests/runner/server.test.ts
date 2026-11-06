@@ -5,9 +5,9 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {afterEach, test} from 'node:test';
 import type {CommandInfo, Logger} from '../../../../src/api.js';
-import type {ChatEvent} from '../../src/chat/events.js';
+import type {ChatEvent} from '../../src/deps/chat.js';
 import type {EngineIo, EngineOpen} from '../../src/chat/engine.js';
-import type {PermissionRequest} from '../../src/chat/permission.js';
+import type {PermissionRequest} from '../../src/deps/chat.js';
 import {createDecoder, encodeFrame, type ClientFrame, type RunnerFrame} from '../../src/runner/protocol.js';
 import {runRunner, type RunnerControl, type RunnerEngine, type RunnerHandle, type RunnerOptions, type RunnerSession} from '../../src/runner/server.js';
 

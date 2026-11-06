@@ -4,7 +4,7 @@ import path from 'node:path';
 import {StringDecoder} from 'node:string_decoder';
 import type {Logger} from '../../../../src/api.js';
 import {noopLog} from '../log.js';
-import type {ChatEvent} from './events.js';
+import type {ChatEvent, ShellCall, ShellFeed, ShellSnapshot} from '../deps/chat.js';
 
 export const MAX_CALLS = 4;
 export const MAX_LINES = 200;
@@ -21,21 +21,8 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const OUTPUT = /^[A-Za-z0-9_-]{1,64}\.output$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export type ShellCall = {
-	toolUseId: string;
-	command: string;
-	startedAt: number;
-	lines: readonly string[];
-	bytes: number;
-	bound: 'file' | 'task';
-};
-
-export type ShellSnapshot = {calls: readonly ShellCall[]};
-
-export interface ShellWatch {
+export interface ShellWatch extends ShellFeed {
 	feed(event: ChatEvent): void;
-	get(): ShellSnapshot;
-	subscribe(cb: () => void): () => void;
 	readonly totalBytes: number;
 	close(): void;
 }

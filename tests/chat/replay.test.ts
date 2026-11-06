@@ -4,7 +4,7 @@ import {test} from 'node:test';
 import type {Options, SDKMessage, SDKUserMessage} from '@anthropic-ai/claude-agent-sdk';
 import type {ChatQueryFn} from '../../src/types.js';
 import {ChatSession} from '../../src/chat/chat-session.js';
-import type {ChatEvent, UiEvent} from '../../src/chat/events.js';
+import type {ChatEvent, UiEvent} from '../../src/deps/chat.js';
 import {normalize} from '../../src/chat/normalize.js';
 
 const messages = JSON.parse(

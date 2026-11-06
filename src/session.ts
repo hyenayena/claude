@@ -1,6 +1,7 @@
 import type {Options} from '@anthropic-ai/claude-agent-sdk';
 import type {Logger} from '../../../src/api.js';
-import {classifyFailure, failureMessage, parseRateLimit, systemClock, type Clock, type FailureKind, type RateLimitInfo} from './chat/limits.js';
+import {classifyFailure, failureMessage, parseRateLimit, type FailureKind} from './chat/limits.js';
+import {systemClock, type Clock, type RateLimitInfo} from './deps/chat.js';
 import {errClass, noopLog} from './log.js';
 import type {QueryFn, TurnResult} from './types.js';
 
