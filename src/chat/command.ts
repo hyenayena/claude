@@ -11,20 +11,14 @@ import {clip, errClass, noopLog} from '../log.js';
 import type {spawnRunner} from '../runner/spawn.js';
 import type {LockInfo} from '../sessions/lock.js';
 import type {ClaudeState, ChatQueryFn, Credential, CredentialInfo} from '../types.js';
-import type {ChatViewProps, ListPickerProps, WaitingViewProps} from '../ui/mount.js';
-import {formatBanner} from '../ui/banner.js';
-import {formatFileCard} from '../ui/file-card.js';
-import {assistantPrint, assistantRows, formatNotice, formatUserLine} from '../ui/present.js';
+import type {ChatUiHelpers, ChatViewProps, ListPickerProps, WaitingViewProps} from '../deps/chat-ui.js';
 import {readHistory, readTranscriptDetail} from './history.js';
-import {listProjectFiles} from './files.js';
 import {editInEditor} from '../terminal.js';
 import type {ConsoleSdk} from './console-tools.js';
 import {createChatEngine, type EngineDeps} from './engine.js';
 import type {ChatHandle} from './handle.js';
-import type {Tier} from '../deps/chat.js';
+import {makeReveal, makeScrub, type ShellFeed, type Tier} from '../deps/chat.js';
 import {RemoteChatSession} from './remote-session.js';
-import {makeReveal} from './reveal.js';
-import {makeScrub} from './scrub.js';
 import {ensureShellTmp} from './shell-tmp.js';
 import {transcriptFile} from './title.js';
 import {createShellPanel} from './shell-panel.js';
@@ -35,10 +29,10 @@ import {readGitBranch} from './git-head.js';
 export const CHAT_USAGE = 'Usage: claude chat [--new]';
 export const NEEDS_MOUNT_MESSAGE = '"claude chat" needs an interface that can show views';
 
-export type ChatUi = {
+export type ChatUi = ChatUiHelpers & {
 	createChatElement: (props: ChatViewProps) => UiElement;
 	createPickerElement?: (props: ListPickerProps) => UiElement;
-	createShellElement?: (watch: ShellWatch, host?: ViewHost) => UiElement;
+	createShellElement?: (feed: ShellFeed, host?: ViewHost) => UiElement;
 	createWaitingElement?: (props: WaitingViewProps) => UiElement;
 };
 
@@ -308,7 +302,7 @@ const openRemote = async (
 		log,
 		cwd: paths.projectDir,
 		stateUpdate: patch => deps.store.update(patch),
-		onLost: reason => ctx.print(formatNotice(reason, scrub)),
+		onLost: reason => ctx.print(chatUi.formatNotice(reason, scrub)),
 		credentials: vaultOf(credOpts),
 		...(ctx.commandBridge && {commandBridge: ctx.commandBridge}),
 		...(spawned && {
@@ -392,6 +386,7 @@ const runLocked = async (
 		}
 	}
 	const {chatUi, session, cred, scrub, reveal, paths, state, resume, shellRoot, applyLive, initialModel, draft, historyUntil, send} = source;
+	const {formatBanner, formatFileCard, assistantPrint, assistantRows, formatNotice, formatUserLine, listProjectFiles} = chatUi;
 	const startedAt = Date.now();
 
 	let projectFiles: readonly string[] = [];

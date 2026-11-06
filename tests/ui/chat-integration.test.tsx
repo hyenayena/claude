@@ -3,15 +3,15 @@ import {existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync} 
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach, test} from 'node:test';
-import React from 'react';
+import React, {type ReactElement} from 'react';
+void React;
 import type {CanUseTool, Options} from '@anthropic-ai/claude-agent-sdk';
 import {ChatSession} from '../../src/chat/chat-session.js';
 import {createChatCanUseTool} from '../../src/chat/permission-bridge.js';
-import {makeReveal} from '../../src/chat/reveal.js';
-import {makeScrub} from '../../src/chat/scrub.js';
+import {makeReveal, makeScrub} from '../../src/deps/chat.js';
 import {buildScope} from '../../src/policy.js';
-import {ChatView} from '../../src/ui/ChatView.js';
-import {mountHarness} from './testkit.js';
+import {createChatElement} from '../../src/deps/chat-ui.js';
+import {mountHarness} from '../helpers/harness.js';
 
 const reveal = makeReveal(s => s);
 const scrub = makeScrub(s => s);
@@ -77,15 +77,15 @@ function build(script: Script) {
 	});
 	const printed: string[] = [];
 	const h = mountHarness(
-		<ChatView
-			controller={session}
-			print={s => printed.push(s.replace(SGR, '').trim())}
-			close={() => {}}
-			scrub={scrub}
-			reveal={reveal}
-			armMs={ARM}
-			projectDir={proj}
-		/>,
+		createChatElement({
+			controller: session,
+			print: s => printed.push(s.replace(SGR, '').trim()),
+			close: () => {},
+			scrub,
+			reveal,
+			armMs: ARM,
+			projectDir: proj,
+		}) as ReactElement,
 	);
 	cleanup.push(() => {
 		h.unmount();

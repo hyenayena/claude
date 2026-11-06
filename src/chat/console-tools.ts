@@ -6,7 +6,7 @@ import {COMMAND_TOOLS, formatCommandList, formatRunResult, sanitizeText} from '.
 import {errClass} from '../log.js';
 import type {PermissionPrompter} from './permission.js';
 import {CONSOLE_SERVER_NAME, LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../deps/chat.js';
-import {makeScrub} from './scrub.js';
+import {makeScrub} from '../deps/chat.js';
 
 export const CONSOLE_TOOL_NAMES: readonly string[] = [LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL];
 

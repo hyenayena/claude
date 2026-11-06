@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {uiHelpers} from '../helpers/chat-ui.js';
 import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import net from 'node:net';
 import {tmpdir} from 'node:os';
@@ -80,6 +81,7 @@ const setup = async (opts: {deps?: Partial<ClaudeDeps>} = {}) => {
 		loadQuery: async () => (() => { throw new Error('unused'); }) as unknown as QueryFn,
 		loadChatQuery: async () => query,
 		loadUi: async () => ({
+			...uiHelpers,
 			createChatElement: p => (props.push(p), {}),
 			createWaitingElement: p => (waits.push(p), {}),
 		}),

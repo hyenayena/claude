@@ -5,25 +5,13 @@ import {test} from 'node:test';
 
 const hostRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const src = (name: string) => pathToFileURL(fileURLToPath(new URL('../../src/ui/' + name, import.meta.url))).href;
-const testkit = pathToFileURL(fileURLToPath(new URL('./testkit.ts', import.meta.url))).href;
+const harness = pathToFileURL(fileURLToPath(new URL('../helpers/harness.ts', import.meta.url))).href;
 
 const script = `
-import React from 'react';
-const {mountHarness, fakeController} = await import(${JSON.stringify(testkit)});
-const {StatusBar, ListPicker, Frame, Spinner, SPINNERS} = await import(${JSON.stringify(src('kit.ts'))});
-const {InputLine} = await import(${JSON.stringify(src('InputLine.tsx'))});
-const {LiveTools} = await import(${JSON.stringify(src('LiveTools.tsx'))});
-const {ChatView} = await import(${JSON.stringify(src('ChatView.tsx'))});
-const {AgentPanel} = await import(${JSON.stringify(src('AgentPanel.tsx'))});
-const {ChatHeader} = await import(${JSON.stringify(src('ChatHeader.tsx'))});
-const {PlanWidget} = await import(${JSON.stringify(src('PlanWidget.tsx'))});
-const {createStore} = await import(${JSON.stringify(src('store.ts'))});
-const {createAgentStore} = await import(${JSON.stringify(src('agent-store.ts'))});
-const {initialAgents, reduceAgents} = await import(${JSON.stringify(src('agents.ts'))});
-const {PermissionPrompt} = await import(${JSON.stringify(src('PermissionPrompt.tsx'))});
-const {QuestionPrompt} = await import(${JSON.stringify(src('QuestionPrompt.tsx'))});
-const {initToolPrompt, initQuestionPrompt, layoutPrompt} = await import(${JSON.stringify(src('prompt-state.ts'))});
-const {toolReq, questionReq} = await import(${JSON.stringify(testkit)});
+const {mountHarness} = await import(${JSON.stringify(harness)});
+const {secretPrompt} = await import(${JSON.stringify(src('secret-prompt.tsx'))});
+const {namePrompt} = await import(${JSON.stringify(src('name-prompt.tsx'))});
+const control = {close() {}};
 const frames = {};
 const show = async (name, el) => {
 	const h = mountHarness(el);
@@ -31,32 +19,13 @@ const show = async (name, el) => {
 	frames[name] = h.lastFrame();
 	h.unmount();
 };
-await show('StatusBar', React.createElement(StatusBar, {text: 'status-ok'}));
-await show('ListPicker', React.createElement(ListPicker, {title: 'picker-title', empty: 'none', action: 'resume', items: [{id: '1', label: 'picker-ok'}], onPick() {}, close() {}}));
-await show('Frame', React.createElement(Frame, {rows: [{text: 'frame-ok', tone: 'plain'}], width: 40}));
-await show('Spinner', React.createElement(Spinner, {frames: SPINNERS.squareCorners, intervalMs: 180}));
-await show('InputLine', React.createElement(InputLine, {text: 'input-ok', cursor: 2, columns: 80, running: false, maxRows: 5}));
-await show('LiveTools', React.createElement(LiveTools, {tools: [{id: 't', name: 'Bash', input: {command: 'tools-ok'}, elapsedSeconds: 0}], fold: [], scrub: s => s, maxRows: 4, width: 79}));
-await show('ChatView', React.createElement(ChatView, {controller: fakeController(), print() {}, close() {}, scrub: s => s}));
-const agentStore = createAgentStore(reduceAgents(initialAgents(), {type: 'ui', event: {kind: 'tool-use', toolUseId: 'a', name: 'Agent', input: {subagent_type: 'panel-ok'}}}));
-await show('AgentPanel', React.createElement(AgentPanel, {store: agentStore, scrub: s => s}));
-const planStore = createStore({items: [{id: '1', content: 'plan-ok', status: 'pending'}], running: false, stale: false, expanded: false});
-await show('PlanWidget', React.createElement(PlanWidget, {store: planStore, scrub: s => s, rows: 30}));
-await show('ChatHeader', React.createElement(ChatHeader, {plan: planStore, agents: agentStore, scrub: s => s, rows: 30}));
-const reveal = s => s;
-const layout = layoutPrompt(24, 80);
-const tr = toolReq({input: {command: 'perm-ok'}});
-const qr = questionReq();
-await show('PermissionPrompt', React.createElement(PermissionPrompt, {request: tr, state: initToolPrompt(tr, 0), layout, reveal, position: 1, total: 1, approvals: 0}));
-await show('QuestionPrompt', React.createElement(QuestionPrompt, {request: qr, state: initQuestionPrompt(qr, 0), layout, reveal, position: 1, total: 1}));
-const pending = fakeController();
-pending.pendingPermissions.push(toolReq({input: {command: 'modal-ok'}}));
-await show('ChatViewModal', React.createElement(ChatView, {controller: pending, print() {}, close() {}, scrub: s => s, reveal}));
+await show('secret', secretPrompt(control, 'secret-ok', () => {}));
+await show('name', namePrompt(control, 'name-ok', 'suggested-ok', () => undefined, () => {}));
 process.stdout.write('FRAMES:' + JSON.stringify(frames));
 process.exit(0);
 `;
 
-test('ui components render under tsx run from the host root', () => {
+test('the prompts render under tsx run from the host root', () => {
 	const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
 		cwd: hostRoot,
 		encoding: 'utf8',
@@ -65,19 +34,7 @@ test('ui components render under tsx run from the host root', () => {
 	assert.equal(result.status, 0, result.stderr);
 	assert.doesNotMatch(result.stderr, /ReferenceError|React is not defined/);
 	const frames = JSON.parse(result.stdout.slice(result.stdout.indexOf('FRAMES:') + 7)) as Record<string, string>;
-	assert.match(frames['StatusBar'] as string, /status-ok/);
-	assert.match(frames['ListPicker'] as string, /picker-ok/);
-	assert.match(frames['Frame'] as string, /frame-ok/);
-	assert.match(frames['Spinner'] as string, /[◰◳◲◱]/);
-	assert.match(frames['InputLine'] as string, /input-ok/);
-	assert.match(frames['LiveTools'] as string, /tools-ok/);
-	assert.match(frames['ChatView'] as string, /idle/);
-	assert.match(frames['AgentPanel'] as string, /panel-ok/);
-	assert.match(frames['PlanWidget'] as string, /plan-ok/);
-	assert.match(frames['ChatHeader'] as string, /plan-ok/);
-	assert.match(frames['ChatHeader'] as string, /panel-ok/);
-	assert.match(frames['PermissionPrompt'] as string, /perm-ok/);
-	assert.match(frames['QuestionPrompt'] as string, /Which color\?/);
-	assert.match(frames['ChatViewModal'] as string, /modal-ok/);
-	assert.match(frames['ChatViewModal'] as string, /awaiting approval/);
+	assert.match(frames['secret'] as string, /secret-ok/);
+	assert.match(frames['name'] as string, /name-ok/);
+	assert.match(frames['name'] as string, /suggested-ok/);
 });

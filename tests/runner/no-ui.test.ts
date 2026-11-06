@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
 
 const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
+const chatSrc = path.resolve(srcDir, '..', '..', 'chat', 'src') + path.sep;
 const FROM = /(?:^|\n)\s*(?:import|export)\b[^'";]*?\bfrom\s*['"]([^'"]+)['"]|(?:^|\n)\s*import\s*['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/g;
 
 function resolveLocal(from: string, spec: string): string | undefined {
@@ -31,7 +32,9 @@ test('the background runner never reaches the chat UI or the theme tables', () =
 		for (const m of source.matchAll(FROM)) {
 			const spec = (m[1] ?? m[2] ?? m[3]) as string;
 			const next = resolveLocal(file, spec);
-			if (!next || !next.startsWith(srcDir)) continue;
+			if (!next) continue;
+			if (next === path.join(srcDir, 'deps', 'chat-ui.ts') || next.startsWith(chatSrc + 'ui' + path.sep) || next === chatSrc + 'public-ui.ts') bad.push(`${path.relative(srcDir, file)} -> ${spec}`);
+			if (!next.startsWith(srcDir)) continue;
 			if (next.startsWith(path.join(srcDir, 'ui') + path.sep)) bad.push(`${path.relative(srcDir, file)} -> ${spec}`);
 			queue.push(next);
 		}

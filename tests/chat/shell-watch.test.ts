@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import type {ChatEvent, UiEvent} from '../../src/deps/chat.js';
-import {makeScrub} from '../../src/chat/scrub.js';
+import {makeScrub} from '../../src/deps/chat.js';
 import {createShellWatch, MAX_CALLS, MAX_DIR_ENTRIES, MAX_LINES} from '../../src/chat/shell-watch.js';
 import {makeFakeLog} from '../helpers/fake-log.js';
 

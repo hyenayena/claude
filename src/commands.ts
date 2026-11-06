@@ -46,7 +46,7 @@ import {editFile, readHidden, readLine, runInteractive, runInteractiveStatus, wa
 import {loadRetiredCredentials} from './deps/account.js';
 import {clip, errClass, noopLog} from './log.js';
 import {openChat, runChat, type ChatOpen, type ChatRoute, type ChatRouteRequest, type ChatRunDeps, type ChatUi} from './chat/command.js';
-import {makeScrub} from './chat/scrub.js';
+import {makeScrub} from './deps/chat.js';
 import {runTurn, TurnFailure} from './session.js';
 import {queryStatus, serveControl, type ControlServer, type ControlStatus, type SessionState} from './sessions/control.js';
 import {acquireLock, isSessionId, readHolder, type LockInfo, type LockKind, type SessionLock} from './sessions/lock.js';

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {uiHelpers} from '../helpers/chat-ui.js';
 import {existsSync, readFileSync} from 'node:fs';
 import {mkdir, mkdtemp, readFile, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -75,6 +76,7 @@ const setup = async (opts: {mount?: boolean; failFirst?: boolean; failMessage?: 
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => q.query,
 		loadUi: async () => ({
+			...uiHelpers,
 			createChatElement: p => {
 				props.push(p);
 				return {};
@@ -381,7 +383,7 @@ test('closing line carries no control bytes or secret from the model name', asyn
 			throw new Error('unused');
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => q,
-		loadUi: async () => ({createChatElement: p => (s.props.push(p), {})}),
+		loadUi: async () => ({...uiHelpers, createChatElement: p => (s.props.push(p), {})}),
 	});
 	const ctx: CommandContext = {
 		print: t => s.printed.push(t),
@@ -586,6 +588,7 @@ const setupChat = async (opts: Parameters<typeof setup>[0] = {}, extra: Partial<
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => s.q.query,
 		loadUi: async () => ({
+			...uiHelpers,
 			createChatElement: p => {
 				s.props.push(p);
 				return {};
@@ -806,6 +809,7 @@ test('claude <command> runs a Claude Code command in the open chat', async () =>
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => s.q.query,
 		loadUi: async () => ({
+			...uiHelpers,
 			createChatElement: p => {
 				s.props.push(p);
 				return {};
@@ -908,6 +912,7 @@ const claudeWithPicker = (s: Awaited<ReturnType<typeof setupChat>>, pick?: (p: {
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => s.q.query,
 		loadUi: async () => ({
+			...uiHelpers,
 			createChatElement: p => {
 				s.props.push(p);
 				return {};
@@ -997,6 +1002,7 @@ test('model, effort, thinking, fast mode and output style apply to the open chat
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => wrapped,
 		loadUi: async () => ({
+			...uiHelpers,
 			createChatElement: p => {
 				s.props.push(p);
 				return {};
@@ -1128,6 +1134,7 @@ test('claude rewind restores files and reopens the chat before the picked messag
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => query,
 		loadUi: async () => ({
+			...uiHelpers,
 			createChatElement: p => {
 				s.props.push(p);
 				return {};
@@ -1197,6 +1204,7 @@ test('claude tasks lists the chat tasks and stops the picked running one; claude
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => query,
 		loadUi: async () => ({
+			...uiHelpers,
 			createChatElement: p => {
 				s.props.push(p);
 				return {};
@@ -1450,6 +1458,7 @@ test('auth use and auth auto refresh the pin watch of the open chat', async () =
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => s.q.query,
 		loadUi: async () => ({
+			...uiHelpers,
 			createChatElement: p => {
 				s.props.push(p);
 				return {};
@@ -1482,6 +1491,7 @@ test('claude tier pins the open chat, shows the pin, returns it to the router an
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => s.q.query,
 		loadUi: async () => ({
+			...uiHelpers,
 			createChatElement: p => {
 				s.props.push(p);
 				return {};

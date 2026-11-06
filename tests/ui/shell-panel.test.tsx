@@ -6,8 +6,8 @@ import type {MountControl} from '../../../../src/api.js';
 import {createShellPanel} from '../../src/chat/shell-panel.js';
 import type {ShellWatch} from '../../src/chat/shell-watch.js';
 import type {ShellCall, ShellSnapshot} from '../../src/deps/chat.js';
-import {createShellElement} from '../../src/ui/mount.js';
-import {mountHarness, wait} from './testkit.js';
+import {createShellElement} from '../../src/deps/chat-ui.js';
+import {mountHarness, wait} from '../helpers/harness.js';
 import {makeFakeLog} from '../helpers/fake-log.js';
 
 const call = (id: string, startedAt: number, extra: Partial<ShellCall> = {}): ShellCall => ({
