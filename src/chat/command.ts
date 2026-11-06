@@ -1,29 +1,21 @@
-import {sessionSubscription} from '../session-accounts.js';
 import type {BuildInfo, CommandContext, Logger, PrintOptions, UiElement, ViewHost} from '../../../../src/api.js';
 import {tuningFromState, type ChatTuning, type LivePatch} from '../chat-prefs.js';
 import type {LoginProbe} from '../claude-login.js';
 import {clockTime} from '../clock-time.js';
-import {resolvePaths, type ClaudePaths} from '../config.js';
-import {accountsCtx, liveSecrets, makeRedactor, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
 import type {ClaudeVault} from '../vault.js';
-import {pinnedAccount} from '../accounts.js';
-import {clip, errClass, noopLog} from '../log.js';
+import {noopLog} from '../log.js';
 import type {spawnRunner} from '../runner/spawn.js';
-import type {LockInfo} from '../sessions/lock.js';
-import type {ClaudeState, ChatQueryFn, Credential, CredentialInfo} from '../types.js';
+import type {ClaudeState, ChatQueryFn, CredentialInfo} from '../types.js';
 import type {ChatUiHelpers, ChatViewProps, ListPickerProps, WaitingViewProps} from '../deps/chat-ui.js';
 import {readHistory, readTranscriptDetail} from './history.js';
 import {editInEditor} from '../terminal.js';
 import type {ConsoleSdk} from './console-tools.js';
-import {createChatEngine, type EngineDeps} from './engine.js';
-import type {ChatHandle} from './handle.js';
-import {makeReveal, makeScrub, type ShellFeed, type Tier} from '../deps/chat.js';
-import {RemoteChatSession} from './remote-session.js';
-import {ensureShellTmp} from './shell-tmp.js';
+import type {EngineDeps} from './engine.js';
+import type {ClaudeChatHandle} from './handle.js';
+import type {ChatMode, OpenEnv, ShellFeed, Tier} from '../deps/chat.js';
 import {transcriptFile} from './title.js';
 import {createShellPanel} from './shell-panel.js';
-import {createShellWatch, type ShellWatch} from './shell-watch.js';
-import {createPinWatch} from './pin-watch.js';
+import {openSource, type ClaudeSource} from './open.js';
 import {readGitBranch} from './git-head.js';
 
 export const CHAT_USAGE = 'Usage: claude chat [--new]';
@@ -58,12 +50,12 @@ export type ChatRunDeps = {
 	loadUi: () => Promise<ChatUi>;
 	registerAbort?: (c: AbortController) => () => void;
 	store: {read: () => Promise<ClaudeState>; update: (patch: Partial<ClaudeState>) => Promise<unknown>};
-	showNoticeOnce: (cred: CredentialInfo, ctx: CommandContext) => Promise<void>;
+	showNoticeOnce: (cred: CredentialInfo, ctx: Pick<CommandContext, 'print'>) => Promise<void>;
 	probeLogin?: LoginProbe;
 	isMissingModule: (err: unknown) => boolean;
 	acquire: () => () => void;
 	onMount?: (close: () => void) => void;
-	onSession?: (session: ChatHandle | undefined) => void;
+	onSession?: (session: ClaudeChatHandle | undefined) => void;
 	onLive?: (apply: ((patch: LivePatch) => void) | undefined) => void;
 	onTier?: (set: ((tier: Tier | 'auto') => void) | undefined) => void;
 	onPin?: (refresh: (() => void) | undefined) => void;
@@ -93,7 +85,16 @@ export type ChatOpen = {
 	draft?: string;
 	send?: string;
 	attach?: boolean;
+	mode?: ChatMode;
+	keep?: boolean;
 };
+
+// What a chat opens with from the saved settings, until the chat module passes them in.
+export const openPrefs = (state: ClaudeState): Pick<ChatOpen, 'tuning' | 'mode' | 'keep'> => ({
+	tuning: tuningFromState(state),
+	...(state.chatPermissionMode && {mode: state.chatPermissionMode}),
+	keep: state.chatKeepRunning === 'on',
+});
 
 export const runChat = async (args: string[], ctx: CommandContext, deps: ChatRunDeps): Promise<void> => {
 	let fresh = false;
@@ -104,288 +105,53 @@ export const runChat = async (args: string[], ctx: CommandContext, deps: ChatRun
 	if (!ctx.mount) throw new Error(NEEDS_MOUNT_MESSAGE);
 
 	const state = await deps.store.read();
-	await openChat({fresh, attach: !fresh, ...(state.chatModel && {model: state.chatModel}), tuning: tuningFromState(state)}, ctx, deps);
+	await openChat({fresh, attach: !fresh, ...(state.chatModel && {model: state.chatModel}), ...openPrefs(state)}, ctx, deps);
 };
 
 export const openChat = async (open: ChatOpen, ctx: CommandContext, deps: ChatRunDeps): Promise<void> => {
 	if (!ctx.mount) throw new Error(NEEDS_MOUNT_MESSAGE);
 	const mount = ctx.mount;
-	if (!deps.route) {
-		const release = deps.acquire();
-		try {
-			await runLocked(open, ctx, mount, deps, {kind: 'local', release});
-		} finally {
-			release();
-		}
-		return;
-	}
-	const keep = (await deps.store.read()).chatKeepRunning === 'on';
-	const route = await resolveRoute(open, keep, mount, deps);
-	if (!route) return;
-	try {
-		await runLocked(open, ctx, mount, deps, route, keep);
-	} finally {
-		route.release();
-	}
-};
-
-const resolveRoute = async (
-	open: ChatOpen,
-	keep: boolean,
-	mount: NonNullable<CommandContext['mount']>,
-	deps: ChatRunDeps,
-): Promise<Exclude<ChatRoute, {kind: 'wait'}> | undefined> => {
-	for (;;) {
-		const route = deps.route!({attach: open.attach === true, keep});
-		if (route.kind !== 'wait') return route;
-		const ui = deps.peek ? await deps.loadUi() : undefined;
-		if (!deps.peek || !ui?.createWaitingElement) throw new Error(route.message);
-		const peek = deps.peek;
-		const create = ui.createWaitingElement;
-		let freed = false;
-		await mount(control => {
-			deps.onMount?.(control.close);
-			return create({
-				check: peek,
-				pollMs: deps.waitPollMs ?? 1000,
-				onFree: () => {
-					freed = true;
-					control.close();
-				},
-				onCancel: control.close,
-				...(control.host && {host: control.host}),
-			});
-		});
-		if (!freed) return undefined;
-	}
-};
-
-type ViewSource = {
-	chatUi: ChatUi;
-	session: ChatHandle;
-	cred: Credential;
-	scrub: (s: string) => string;
-	reveal: (s: string) => string;
-	paths: ClaudePaths;
-	state: ClaudeState;
-	resume: string | undefined;
-	shellRoot: string | undefined;
-	applyLive: (patch: LivePatch) => void;
-	setTier: (tier: Tier | 'auto') => void;
-	initialModel: string | undefined;
-	draft: string | undefined;
-	send?: string;
-	fork: boolean;
-	historyUntil: string | undefined;
-	remote: RemoteChatSession | undefined;
-	close: () => void;
-	flush: () => Promise<void>;
-};
-
-class SpawnFailure extends Error {
-	override name = 'SpawnFailure';
-}
-
-const openLocal = async (open: ChatOpen, ctx: CommandContext, deps: ChatRunDeps): Promise<ViewSource> => {
-	const {fresh, model, tuning, resume: chosen, fork, resumeAt, historyUntil, draft} = open;
 	let ui: ChatUi | undefined;
-	const engine = await createChatEngine(
-		{
-			fresh,
-			...(model !== undefined && {model}),
-			...(tuning && {tuning}),
-			...(chosen && {resume: chosen}),
-			...(fork && {fork}),
-			...(resumeAt && {resumeAt}),
-			...(open.apiKeyOnly && {apiKeyOnly: true}),
+	const io: OpenEnv = {
+		print: text => ctx.print(text),
+		notice: text => {
+			if (ui) ctx.print(ui.formatNotice(text, s => s));
+			else void deps.loadUi().then(u => ctx.print(u.formatNotice(text, s => s)), () => ctx.print(text));
 		},
-		{
-			...deps,
-			onCredential: cred => deps.showNoticeOnce(cred, ctx),
-			preload: async () => {
-				ui = await deps.loadUi();
-			},
+		wait: async check => {
+			const create = (await deps.loadUi()).createWaitingElement!;
+			let freed = false;
+			await mount(control => {
+				deps.onMount?.(control.close);
+				return create({
+					check,
+					pollMs: deps.waitPollMs ?? 1000,
+					onFree: () => {
+						freed = true;
+						control.close();
+					},
+					onCancel: control.close,
+					...(control.host && {host: control.host}),
+				});
+			});
+			return freed;
 		},
-		{
-			...(ctx.commandBridge && {commandBridge: ctx.commandBridge}),
-			stateUpdate: patch => deps.store.update(patch),
-			warn: text => ctx.print(text),
-		},
-	);
-	const {state} = engine;
-	return {
-		chatUi: ui!,
-		session: engine.session,
-		cred: engine.cred,
-		scrub: engine.scrub,
-		reveal: engine.reveal,
-		paths: engine.paths,
-		state,
-		resume: engine.resume,
-		shellRoot: engine.shellRoot,
-		applyLive: engine.applyLive,
-		setTier: engine.setTier,
-		initialModel: model !== undefined ? model : !fresh ? state.lastModel : undefined,
-		draft,
-		...(open.send && {send: open.send}),
-		fork: fork === true,
-		historyUntil,
-		remote: undefined,
-		close: engine.close,
-		flush: engine.flush,
-	};
-};
-
-const openRemote = async (
-	open: ChatOpen,
-	route: Extract<ChatRoute, {kind: 'attach' | 'spawn'}>,
-	keep: boolean,
-	ctx: CommandContext,
-	deps: ChatRunDeps,
-): Promise<ViewSource> => {
-	const log = deps.log ?? noopLog;
-	const credOpts: CredentialOpts = {env: deps.env, dataDir: deps.dataDir, log, ...(deps.vault && {vault: deps.vault})};
-	let cred: Credential;
-	try {
-		cred = await requireCredential(
-			{...credOpts, ...(deps.probeLogin && {probeLogin: deps.probeLogin})},
-			open.apiKeyOnly ? {apiKeyOnly: true} : {},
-			sessionSubscription(deps.dataDir, open.resume),
-		);
-	} catch (err) {
-		log.warn('no credential');
-		throw err;
-	}
-	registerLogRedaction(log, cred);
-	const redact = makeRedactor(cred, liveSecrets(credOpts), deps.redactExtra);
-	const scrub = makeScrub(redact);
-	await deps.showNoticeOnce(cred, ctx);
-	let chatUi: ChatUi;
-	try {
-		chatUi = await deps.loadUi();
-	} catch (err) {
-		const raw = err instanceof Error ? err.message : String(err);
-		log.error('chat dependencies failed to load', {missingModule: deps.isMissingModule(err), err: clip(scrub(raw))});
-		if (deps.isMissingModule(err)) {
-			throw new Error('The chat interface dependencies (ink, react) are not installed in the yena host. Run "./yena install".');
-		}
-		throw new Error(`Claude request failed: ${scrub(raw)}`);
-	}
-	const state = await deps.store.read();
-	const paths = resolvePaths(deps.dataDir, deps.moduleDir);
-	let shellRoot: string | undefined;
-	try {
-		shellRoot = (deps.shellTmp ?? ensureShellTmp)();
-	} catch (err) {
-		log.warn('shell tmp unavailable', {error: errClass(err)});
-	}
-
-	let socketPath: string;
-	let spawned = false;
-	if (route.kind === 'spawn') {
-		const spawn = deps.spawnRunner;
-		if (!spawn) throw new SpawnFailure('Could not start the background chat');
-		try {
-			socketPath = (await spawn({moduleDir: paths.moduleDir, sessionDir: route.sessionDir, env: deps.env, log})).socketPath;
-		} catch (err) {
-			throw new SpawnFailure(err instanceof Error ? err.message : 'Could not start the background chat');
-		}
-		spawned = true;
-		log.info('chat remote', {action: 'spawned'});
-	} else {
-		socketPath = route.socketPath;
-	}
-
-	const resumeId = open.resume ?? (open.fresh ? undefined : state.lastSessionId);
-	const remote = await RemoteChatSession.connect({
-		socketPath,
-		log,
-		cwd: paths.projectDir,
-		stateUpdate: patch => deps.store.update(patch),
-		onLost: reason => ctx.print(chatUi.formatNotice(reason, scrub)),
-		credentials: vaultOf(credOpts),
 		...(ctx.commandBridge && {commandBridge: ctx.commandBridge}),
-		...(spawned && {
-			open: {
-				open: {
-					fresh: open.fresh,
-					...(open.model !== undefined && {model: open.model}),
-					...(open.resume && {resume: open.resume}),
-					...(open.fork && {fork: true}),
-					...(open.resumeAt && {resumeAt: open.resumeAt}),
-					...(open.apiKeyOnly && {apiKeyOnly: true}),
-					...(open.historyUntil && {historyUntil: open.historyUntil}),
-					...(open.draft && {draft: open.draft}),
-				},
-				tuning: open.tuning ?? {},
-				...(state.chatPermissionMode && {mode: state.chatPermissionMode}),
-				keep,
-			},
-		}),
-		...deps.remote,
-	}).catch((err: unknown) => {
-		const raw = err instanceof Error ? err.message : String(err);
-		throw new Error(
-			raw === 'attached elsewhere'
-				? 'The background chat is attached to another yena. Close it there or run "claude stop".'
-				: scrub(raw),
-		);
-	});
-	if (!spawned) log.info('chat remote', {action: 'attached'});
-	remote.refreshCommands();
-	return {
-		chatUi,
-		session: remote,
-		cred,
-		scrub,
-		reveal: makeReveal(redact),
-		paths,
-		state,
-		resume: spawned ? resumeId : remote.sessionId,
-		shellRoot,
-		applyLive: patch => remote.applyLive(patch),
-		setTier: tier => remote.setTier(tier),
-		initialModel: spawned ? open.model : remote.model,
-		draft: spawned ? open.draft : undefined,
-		...(open.send && {send: open.send}),
-		fork: spawned && open.fork === true,
-		historyUntil: spawned ? open.historyUntil : undefined,
-		remote,
-		close: () => remote.close(),
-		flush: () => Promise.resolve(),
 	};
+	const source = await openSource(open, io, deps);
+	if (!source) return;
+	ui = source.chatUi;
+	await runLocked(source, ctx, mount, deps);
 };
 
 const runLocked = async (
-	open: ChatOpen,
+	source: ClaudeSource,
 	ctx: CommandContext,
 	mount: NonNullable<CommandContext['mount']>,
 	deps: ChatRunDeps,
-	route: Exclude<ChatRoute, {kind: 'wait'}>,
-	keep = false,
 ): Promise<void> => {
 	const log = deps.log ?? noopLog;
-	let source: ViewSource;
-	if (route.kind === 'local') source = await openLocal(open, ctx, deps);
-	else {
-		try {
-			source = await openRemote(open, route, keep, ctx, deps);
-		} catch (err) {
-			if (!(err instanceof SpawnFailure)) throw err;
-			log.warn('chat remote', {action: 'fallback'});
-			ctx.print('Warning: could not start the chat in the background; it runs in this yena and ends when you leave.');
-			route.release();
-			const again = deps.route!({attach: false, keep: false});
-			if (again.kind !== 'local') throw new Error(again.kind === 'wait' ? again.message : 'Could not start the chat');
-			try {
-				await runLocked(open, ctx, mount, deps, again);
-			} finally {
-				again.release();
-			}
-			return;
-		}
-	}
-	const {chatUi, session, cred, scrub, reveal, paths, state, resume, shellRoot, applyLive, initialModel, draft, historyUntil, send} = source;
+	const {chatUi, session, cred, scrub, reveal, paths, resume, shellRoot, applyLive, initialModel, draft, historyUntil, send, pin} = source;
 	const {formatBanner, formatFileCard, assistantPrint, assistantRows, formatNotice, formatUserLine, listProjectFiles} = chatUi;
 	const startedAt = Date.now();
 
@@ -404,35 +170,30 @@ const runLocked = async (
 		return projectFiles;
 	};
 
-	const shellWatch = createShellWatch({root: shellRoot, sessionId: () => session.sessionId, scrub, log});
-	const unfeed = session.subscribe(e => shellWatch.feed(e));
-	const credOpts: CredentialOpts = {env: deps.env, dataDir: deps.dataDir, log, ...(deps.vault && {vault: deps.vault})};
-	const pin = createPinWatch(() => pinnedAccount(accountsCtx(credOpts))?.name);
-	const unpin = session.subscribe(e => {
-		if (e.type === 'account' || e.type === 'turn-end') pin.refresh();
-	});
 	let chatHost: ViewHost | undefined;
-	const shellPanel =
-		ctx.mount && chatUi.createShellElement
-			? createShellPanel({
-					watch: shellWatch,
-					mount: ctx.mount,
-					isFocused: () => chatHost?.isFocused() ?? false,
-					build: (w, control) => chatUi.createShellElement!(w, control.host),
-					hasTmp: shellRoot !== undefined,
-					log,
-				})
-			: undefined;
-
-	const lifetime = new AbortController();
-	const unregister = deps.registerAbort?.(lifetime);
-	lifetime.signal.addEventListener('abort', () => session.close());
-
-	deps.onSession?.(session);
-	deps.onLive?.(applyLive);
-	deps.onTier?.(source.setTier);
-	deps.onPin?.(pin.refresh);
+	let shellPanel: ReturnType<typeof createShellPanel> | undefined;
+	let unregister: (() => void) | undefined;
 	try {
+		shellPanel =
+			ctx.mount && chatUi.createShellElement
+				? createShellPanel({
+						watch: source.watch,
+						mount: ctx.mount,
+						isFocused: () => chatHost?.isFocused() ?? false,
+						build: (w, control) => chatUi.createShellElement!(w, control.host),
+						hasTmp: shellRoot !== undefined,
+						log,
+					})
+				: undefined;
+
+		const lifetime = new AbortController();
+		unregister = deps.registerAbort?.(lifetime);
+		lifetime.signal.addEventListener('abort', () => session.close());
+
+		deps.onSession?.(session);
+		deps.onLive?.(applyLive);
+		deps.onTier?.(source.setTier);
+		deps.onPin?.(pin.refresh);
 		let printHistory: ((text: string, options?: PrintOptions) => void) | undefined;
 		const mounted = mount(control => {
 			printHistory = control.print ?? ctx.print;
@@ -502,12 +263,12 @@ const runLocked = async (
 		deps.onTier?.(undefined);
 		deps.onPin?.(undefined);
 		shellPanel?.dispose();
-		unfeed();
-		unpin();
-		shellWatch.close();
-		source.close();
-		unregister?.();
-		await source.flush();
+		try {
+			source.close();
+		} finally {
+			unregister?.();
+			await source.flush();
+		}
 		log.info('chat closed', {ms: Date.now() - startedAt, session8: sessionId?.slice(0, 8), model});
 		const left = source.remote?.detachedWhileRunning === true;
 		ctx.print(
@@ -519,4 +280,3 @@ const runLocked = async (
 		);
 	}
 };
-

@@ -29,7 +29,7 @@ import {projectSlug, readSessionTitle, titleFromPrompt, transcriptFile} from './
 import {buildAgentDefinitions} from './agent-defs.js';
 import {routeAgentInput} from './agent-route.js';
 import {createClassifier} from './classifier.js';
-import type {RouteInfo} from '../deps/chat.js';
+import type {ChatMode, RouteInfo} from '../deps/chat.js';
 import {applyVerdict, classifierPrompt, decideMain, noteContinuing, Router} from './router.js';
 import {tierMapFromState, type TierMap} from './tiers.js';
 import {type Tier} from '../deps/chat.js';
@@ -44,6 +44,7 @@ export type EngineOpen = {
 	fork?: boolean;
 	resumeAt?: string;
 	apiKeyOnly?: boolean;
+	mode?: ChatMode;
 };
 
 export type EngineDeps = {
@@ -352,7 +353,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 				})
 				.catch(() => io.warn('Warning: could not save the permission rule'));
 		},
-		...(state.chatPermissionMode && {initialMode: state.chatPermissionMode}),
+		...(open.mode && {initialMode: open.mode}),
 		buildOptions: (abortController, id, prompter) => {
 			noteKept(subOf(id));
 			cred = prepareCredential(credOpts, sel, subOf(id));

@@ -7,7 +7,7 @@ import type {Effort, LivePatch} from '../chat-prefs.js';
 import type {ChatQueryFn, RewindResult} from '../types.js';
 import type {ChatController, ChatEvent, ChatState, ContextInfo, RouteInfo, TurnOutcome, UiEvent} from '../deps/chat.js';
 import type {CacheInfo} from './router.js';
-import type {Tier} from '../deps/chat.js';
+import type {ProviderCommand, TaskInfo, Tier} from '../deps/chat.js';
 import {InputQueue} from './input-queue.js';
 import {classifyFailure, failureMessage, type FailureKind} from './limits.js';
 import {type Clock, type RateLimitInfo, systemClock} from '../deps/chat.js';
@@ -82,18 +82,8 @@ const within = <T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> 
 type Routing = {ac: AbortController; steers: string[]; done: Promise<void>};
 
 
-export type SlashCommandInfo = {name: string; description?: string; argumentHint?: string};
-export type TaskInfo = {
-	id: string;
-	status: 'running' | 'completed' | 'failed' | 'stopped';
-	description: string;
-	background: boolean;
-	startedAt: number;
-	summary?: string;
-	taskType?: string;
-	toolUseId?: string;
-	subagentType?: string;
-};
+export type SlashCommandInfo = ProviderCommand;
+export type {TaskInfo};
 const MAX_TASKS = 100;
 const MAX_TOOL_STARTS = 256;
 

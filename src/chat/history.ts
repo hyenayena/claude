@@ -1,6 +1,6 @@
 import {open, readdir, stat} from 'node:fs/promises';
 import path from 'node:path';
-import type {ToolPatch} from '../deps/chat.js';
+import type {DetailFile, DetailLine, DetailText, HistoryMessage, PromptEntry, SessionSummary, ToolPatch} from '../deps/chat.js';
 import {toolPatch} from './normalize.js';
 import {titleFromPrompt, transcriptFile} from './title.js';
 
@@ -8,9 +8,7 @@ const MAX_BYTES = 8 * 1024 * 1024;
 const TITLE_MAX = 120;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export type SessionSummary = {sessionId: string; title: string; modified: number; prompts: number};
-export type HistoryMessage = {role: 'user' | 'assistant'; text: string};
-export type PromptEntry = {uuid: string; parentUuid: string | null; text: string};
+export type {HistoryMessage, PromptEntry, SessionSummary};
 
 type Entry = {
 	uuid?: unknown;
@@ -160,9 +158,7 @@ const capLines = (text: string, max: number): string[] => {
 	return lines.length > max ? [...lines.slice(0, max), `… ${lines.length - max} more lines`] : lines;
 };
 
-export type DetailFile = {kind: 'file'; name: string; input: unknown; patch?: ToolPatch; isError: boolean};
-export type DetailText = {kind: 'text'; text: string};
-export type DetailLine = string | DetailFile | DetailText;
+export type {DetailFile, DetailLine, DetailText};
 
 const DETAIL_FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 

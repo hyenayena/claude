@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import type {CommandContext, StyledBlock, StyledSpan} from '../../../../src/api.js';
-import {createClaudeCommand} from '../../src/commands.js';
+import {createClaude, createClaudeCommand} from '../../src/commands.js';
 import {serveControl} from '../../src/sessions/control.js';
 import {acquireLock} from '../../src/sessions/lock.js';
 import type {QueryFn} from '../../src/types.js';
@@ -117,4 +117,47 @@ test('sessions prints one styled line with toned parts', async () => {
 	assert.equal(find(' · ')?.tone, 'muted');
 	assert.ok(spans.find(s => s.text.startsWith('pid '))?.tone === 'muted');
 	assert.match(spans.map(s => s.text).join(''), /^chat \(background\) · running · "Fix it" · session abcdef01 · since \d\d:\d\d · pid \d+ · 2 permissions waiting · attached$/);
+});
+
+const makeProvider = (withDir = true) => {
+	const sessionDir = mkdtempSync(join(tmpdir(), 'session-prov-'));
+	const dataDir = mkdtempSync(join(tmpdir(), 'session-data-'));
+	const {provider} = createClaude({
+		dataDir,
+		env: {ANTHROPIC_API_KEY: 'sk-ant-api03-TESTVALUE0123456789abcdef'},
+		loadQuery: async () => (() => (async function* () {})()) as unknown as QueryFn,
+		login: {probe: async () => undefined},
+		...(withDir && {sessionDir: () => sessionDir}),
+	});
+	return {provider, sessionDir};
+};
+
+test('the provider reports running and stop as data when no lock is held, and refuses without a run directory', async () => {
+	const {provider} = makeProvider();
+	assert.deepEqual(await provider.running(), {sessions: [], starting: false});
+	assert.equal(await provider.stop(), undefined);
+	const bare = makeProvider(false).provider;
+	await assert.rejects(bare.running(), {message: 'Session control is not available (no private run directory)'});
+	await assert.rejects(bare.stop(), {message: 'Session control is not available (no private run directory)'});
+});
+
+test('the provider returns the running session as data and validates the stop argument', async () => {
+	const {provider, sessionDir} = makeProvider();
+	const got = acquireLock({dir: sessionDir, kind: 'chat', where: 'runner', sessionId: '11111111-aaaa-4bbb-8ccc-222222222222'});
+	assert.ok(got.ok);
+	const server = await serveControl({
+		dir: sessionDir,
+		handlers: {
+			status: () => ({kind: 'chat', where: 'runner', state: 'waiting-permission', title: 'Fix it', sessionId8: 'abcdef01', startedAt: 1, pending: 1, queued: 2, attached: false}),
+			stop: () => {},
+		},
+	});
+	const {sessions, starting} = await provider.running();
+	assert.equal(starting, false);
+	assert.deepEqual(sessions.map(({pid, startedAt, ...rest}) => ({...rest, pid: typeof pid, startedAt: typeof startedAt})), [
+		{kind: 'chat', where: 'background', state: 'waiting-permission', title: 'Fix it', session8: 'abcdef01', pid: 'number', startedAt: 'number', pending: 1, queued: 2, attached: false},
+	]);
+	await assert.rejects(provider.stop('ffff'), /No running session matches "ffff"/);
+	await server.close();
+	got.lock.release();
 });

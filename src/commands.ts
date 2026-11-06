@@ -1,42 +1,33 @@
 import {accessSync, constants} from 'node:fs';
-import {appendFile, mkdir, writeFile} from 'node:fs/promises';
+import {mkdir, writeFile} from 'node:fs/promises';
 import path, {join} from 'node:path';
 import type {ArgumentDoc, BuildInfo, Command, CommandContext, DevFailure, Logger, OptionDoc, SettingsTab, SpanTone, StyledBlock, StyledCell, StyledSpan, Subcommand} from '../../../src/api.js';
 import {line, printStyled, span, table, textBlock} from './kit.js';
 import {createFixCommand} from './fix.js';
-import {chatSettings, tuningFromState, type LivePatch} from './chat-prefs.js';
-import {isCommandName, type SlashCommandInfo} from './chat/chat-session.js';
+import {chatSettings} from './chat-prefs.js';
+import {isCommandName} from './chat/chat-session.js';
 import {type AccountView, checkAccountName, chooseAccount, clearPin, listAccounts, newAccountNameProblem, pinnedAccount, removeAccount, setOrder, suggestSecretName, useAccount} from './accounts.js';
 import {legacyCount} from './migrate.js';
-import {bindSession, sessionSubscription} from './session-accounts.js';
 import {degradedReason, type ClaudeVault} from './vault.js';
-import type {ChatHandle} from './chat/handle.js';
-import {isTier, type Tier} from './deps/chat.js';
-import {usageLines} from './deps/chat.js';
+import {isTier, makeScrub, usageLines, type ChatProvider, type Origin, type RunningInfo} from './deps/chat.js';
+import {createSessionHub, unavailable} from './session-hub.js';
+import {createClaudeProvider} from './provider.js';
 import {clockTime} from './clock-time.js';
-import {runnerSocketPath} from './runner/spawn.js';
-import {diskCommands} from './disk-commands.js';
-import {listPrompts, listSessions, readHistory} from './chat/history.js';
-import {readSessionTitle, transcriptFile} from './chat/title.js';
 import {ago, type PickerItem} from './ui/picker-model.js';
-import {buildEnv, buildOptions, cliEnv, ensureMdLinks, resolvePaths, restrictDataDirs, runtimeInfo, withProjects} from './config.js';
-import {parseLoginArgs, probeLogin, runLogout, type LoginProbe, type LoginRequest, type LoginStatus} from './claude-login.js';
+import {cliEnv, resolvePaths, runtimeInfo} from './config.js';
+import {parseLoginArgs, probeLogin, runLogout, type LoginProbe, type LoginRequest} from './claude-login.js';
 import {
-	accountOfCredential,
 	accountsCtx,
 	allSecrets,
 	type CredentialOpts,
 	describeCredential,
 	inspectFileMode,
-	isSubscription,
 	loadBundle,
 	noteLoginStatus,
 	refreshLoginInfo,
 	makeRedactor,
 	API_KEY_ONLY,
 	noCredentials,
-	prepareCredential,
-	registerLogRedaction,
 	requireCredential,
 	resolveCredential,
 	storeSecret,
@@ -44,14 +35,9 @@ import {
 } from './credentials.js';
 import {editFile, readHidden, readLine, runInteractive, runInteractiveStatus, waitForEnter} from './terminal.js';
 import {loadRetiredCredentials} from './deps/account.js';
-import {clip, errClass, noopLog} from './log.js';
-import {openChat, runChat, type ChatOpen, type ChatRoute, type ChatRouteRequest, type ChatRunDeps, type ChatUi} from './chat/command.js';
-import {makeScrub} from './deps/chat.js';
-import {runTurn, TurnFailure} from './session.js';
-import {queryStatus, serveControl, type ControlServer, type ControlStatus, type SessionState} from './sessions/control.js';
-import {acquireLock, isSessionId, readHolder, type LockInfo, type LockKind, type SessionLock} from './sessions/lock.js';
-import {createTurnLock, type TurnLock} from './sessions/turn-lock.js';
-import {stopHolder} from './sessions/stop.js';
+import {errClass, noopLog} from './log.js';
+import {openChat, openPrefs, runChat, type ChatOpen, type ChatRunDeps, type ChatUi} from './chat/command.js';
+import {readHolder} from './sessions/lock.js';
 import {createStore, isModelId} from './store.js';
 import type {ChatQueryFn, Credential, CredentialInfo, QueryFn} from './types.js';
 
@@ -63,11 +49,6 @@ const ruleKind = (rule: string): string =>
 			: rule.startsWith('web:')
 				? 'Host WebFetch may reach without asking'
 				: 'Bash command allowed with "always"';
-
-const LIMIT_KINDS = new Set(['usage-limit', 'rate-limit', 'billing', 'context']);
-
-const limitKind = (err: unknown): string | undefined =>
-	err instanceof TurnFailure && err.kind !== undefined && LIMIT_KINDS.has(err.kind) ? err.kind : undefined;
 
 export type ClaudeDeps = {
 	dataDir: string;
@@ -144,18 +125,7 @@ const passthroughDescription = (text: string | undefined): string => {
 };
 
 export {MODEL_OPTIONS} from './chat-prefs.js';
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
-
-const SUBSCRIPTION_NOTICE_VERSION = 2;
-const SUBSCRIPTION_NOTICE =
-	"Notice: you are using your own Claude subscription through Claude Code's own sign-in (or CLAUDE_CODE_OAUTH_TOKEN from your environment). Anthropic allows this for ordinary, individual use of Claude Code and the Agent SDK by the plan's purchaser; yena does not store or pass on Claude.ai credentials and does not switch accounts at a usage limit. Use only accounts that are your own (Anthropic's Consumer Terms do not allow sharing accounts). Do not share this setup or run it for others; see README \"Policy caveat\". API keys are recommended for everyone and for anything else (\"claude auth add\" or ANTHROPIC_API_KEY).";
-
 const unattended = (ctx: CommandContext): boolean => ctx.signal !== undefined && ctx.caller !== 'yena';
-
-const kindLabel = (info: CredentialInfo): string => {
-	if (info.source === 'claude-login') return isSubscription(info) ? 'subscription login' : 'API key (login)';
-	return isSubscription(info) ? 'subscription token' : 'API key';
-};
 
 const takeName = (args: string[]): {name: string | undefined; rest: string[]} => {
 	const at = args.indexOf('--name');
@@ -186,14 +156,13 @@ const UNUSABLE_LABELS: Record<NonNullable<AccountView['unusable']>, string> = {
 
 const LOGOUT_USAGE = 'Usage: claude auth logout';
 
-const isMissingModule = (err: unknown): boolean => {
-	const code = (err as {code?: unknown} | null)?.code;
-	return code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND' || code === 'ERR_PACKAGE_PATH_NOT_EXPORTED';
-};
-
 export const createClaudeCommand = (deps: ClaudeDeps): Command => createClaudeCommands(deps).find(c => c.name === 'claude')!;
 
-export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
+export const createClaudeCommands = (deps: ClaudeDeps): Command[] => createClaude(deps).commands;
+
+const originOf = (ctx: CommandContext): Origin => (unattended(ctx) ? 'unattended' : ctx.signal !== undefined ? 'assistant' : 'user');
+
+export const createClaude = (deps: ClaudeDeps): {commands: Command[]; provider: ChatProvider} => {
 	const {dataDir, env} = deps;
 	const log = deps.log ?? noopLog;
 	const store = createStore(dataDir, log);
@@ -217,211 +186,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const readSecret = deps.login?.readSecret ?? readHidden;
 	const readName = deps.login?.readName ?? readLine;
 	const logoutCli = deps.login?.logout ?? ((bin, e) => runLogout({bin, env: e}));
-	let chatOpen = false;
-	let askRunning = false;
-	let askAbort: (() => void) | undefined;
+	const hub = createSessionHub(deps, store, credOpts, log);
+	const provider = createClaudeProvider(hub, deps);
 
-	const sessionsDir = (): string | undefined => {
-		if (!deps.sessionDir) return undefined;
-		try {
-			return deps.sessionDir();
-		} catch (err) {
-			log.warn('session directory unavailable', {error: errClass(err)});
-			return undefined;
-		}
-	};
-
-	const busyMessage = (holder: LockInfo | undefined): string => {
-		if (!holder) return 'A session is starting. Wait a moment or run "claude sessions".';
-		const what = holder.sessionId ? `${holder.kind} ${holder.sessionId.slice(0, 8)}` : holder.kind;
-		return `A session is running (${what} since ${clockTime(holder.startedAt)}). Wait for it or run "claude stop".`;
-	};
-
-	const localStatus = (kind: LockKind, startedAt: number): ControlStatus => {
-		const s = kind === 'chat' && openSession && openSession.state !== 'closed' ? openSession : undefined;
-		const pending = s?.pendingPermissions.length ?? 0;
-		const id = s?.sessionId;
-		return {
-			kind,
-			where: 'local',
-			state: pending > 0 ? 'waiting-permission' : kind === 'ask' || s?.state === 'running' ? 'running' : 'idle',
-			startedAt,
-			pending,
-			queued: 0,
-			attached: true,
-			...(s?.title && {title: s.title}),
-			...(id && {sessionId8: id.slice(0, 8)}),
-		};
-	};
-
-	const claimBusy = (kind: LockKind): (() => void) => {
-		if (kind === 'chat') chatOpen = true;
-		else askRunning = true;
-		let released = false;
-		return () => {
-			if (released) return;
-			released = true;
-			if (kind === 'chat') chatOpen = false;
-			else askRunning = false;
-		};
-	};
-
-	type Acquired = {ok: true; release: () => void} | {ok: false; holder?: LockInfo; unknown?: true};
-
-	const tryAcquire = (kind: LockKind): Acquired => {
-		if (askRunning) throw new Error('An ask is already running');
-		if (kind === 'chat' && chatOpen) throw new Error('A chat is already open');
-		const dir = sessionsDir();
-		let lock: SessionLock | undefined;
-		if (dir) {
-			try {
-				const got = acquireLock({dir, kind, where: 'local', log});
-				if (!got.ok) return {ok: false, ...(got.holder && {holder: got.holder}), ...(got.unknown && {unknown: true as const})};
-				lock = got.lock;
-			} catch (err) {
-				log.warn('session lock unavailable', {error: errClass(err)});
-			}
-		}
-		const unbusy = claimBusy(kind);
-		let released = false;
-		let server: ControlServer | undefined;
-		if (dir && lock) {
-			const held = lock;
-			const syncId = (): void => {
-				const id = kind === 'chat' ? openSession?.sessionId : undefined;
-				if (id && isSessionId(id) && id !== held.info.sessionId) held.update({sessionId: id});
-			};
-			void serveControl({
-				dir,
-				log,
-				handlers: {
-					status: () => {
-						syncId();
-						return localStatus(kind, held.info.startedAt);
-					},
-					stop: async () => {
-						if (kind === 'ask') return askAbort?.();
-						await openSession?.interrupt().catch(() => {});
-						openHandle?.close();
-					},
-				},
-			}).then(
-				s => {
-					if (released) void s.close();
-					else {
-						server = s;
-						held.update({socket: s.path});
-					}
-				},
-				err => log.warn('control socket unavailable', {error: errClass(err)}),
-			);
-		}
-		return {
-			ok: true,
-			release: () => {
-				if (released) return;
-				released = true;
-				unbusy();
-				void server?.close();
-				lock?.release();
-			},
-		};
-	};
-
-	const acquireShared = (kind: LockKind): (() => void) => {
-		const got = tryAcquire(kind);
-		if (!got.ok) throw new Error(busyMessage(got.holder));
-		return got.release;
-	};
-
-	const acquireAsk = async (): Promise<() => void> => {
-		const got = tryAcquire('ask');
-		if (got.ok) return got.release;
-		const dir = sessionsDir();
-		const status = dir && got.holder ? await queryStatus(dir, 500).catch(() => undefined) : undefined;
-		const title = status?.title ? makeScrub(s => s)(status.title).slice(0, 80) : '';
-		throw new Error(title ? `A session is running (${title}). Wait for it or run "claude stop".` : busyMessage(got.holder));
-	};
-
-	const routeChat = (req: ChatRouteRequest): ChatRoute => {
-		if (askRunning) throw new Error('An ask is already running');
-		if (chatOpen) throw new Error('A chat is already open');
-		const dir = sessionsDir();
-		if (dir) {
-			let seen: ReturnType<typeof readHolder> = {};
-			try {
-				seen = readHolder(dir);
-			} catch (err) {
-				log.warn('session lock unreadable', {error: errClass(err)});
-			}
-			const h = seen.holder;
-			if (h) {
-				if (req.attach && h.where === 'runner' && h.kind === 'chat' && h.socket) {
-					return {kind: 'attach', socketPath: runnerSocketPath(dir), release: claimBusy('chat')};
-				}
-				return {kind: 'wait', message: busyMessage(h)};
-			}
-			if (seen.unknown) return {kind: 'wait', message: busyMessage(undefined)};
-			if (req.keep && deps.spawnRunner) return {kind: 'spawn', sessionDir: dir, release: claimBusy('chat')};
-		}
-		return {kind: 'local', release: claimBusy('chat')};
-	};
-
-	const turnBusy = (holder: LockInfo | undefined): string =>
-		`${busyMessage(holder).replace(/ Wait for it or run "claude stop"\.$/, '')} Your message stays in the input; send it when that session is done.`;
-
-	const chatTurnLock = (): TurnLock =>
-		createTurnLock({
-			dir: sessionsDir(),
-			kind: 'chat',
-			where: 'local',
-			sessionId: () => openSession?.sessionId,
-			status: startedAt => localStatus('chat', startedAt),
-			stop: async () => {
-				await openSession?.interrupt().catch(() => {});
-			},
-			busy: turnBusy,
-			log,
-		});
-
-	const peekLock = async (): Promise<{free: boolean; title?: string}> => {
-		const dir = sessionsDir();
-		if (!dir) return {free: true};
-		let seen: ReturnType<typeof readHolder>;
-		try {
-			seen = readHolder(dir);
-		} catch {
-			return {free: false};
-		}
-		const h = seen.holder;
-		if (!h) return seen.unknown ? {free: false} : {free: true};
-		const status = await queryStatus(dir, 500).catch(() => undefined);
-		const title = status?.title ?? (h.sessionId ? `${h.kind} ${h.sessionId.slice(0, 8)}` : h.kind);
-		return {free: false, title: makeScrub(s => s)(title).slice(0, 80)};
-	};
-
-	const showRetiredOnce = async (ctx: CommandContext): Promise<void> => {
-		let record;
-		try {
-			record = await (deps.loadRetired ?? loadRetiredCredentials)(dataDir);
-		} catch (err) {
-			log.warn('retired credentials record unavailable', {errClass: errClass(err)});
-			return;
-		}
-		if (!record || (await store.read()).retiredNoticeAt === record.at) return;
-		ctx.print(
-			`yena no longer stores Claude logins or subscription tokens (Anthropic's rules: sign-in to a Claude account must complete through Claude Code's own flow). Removed from the account module: ${record.logins} login(s), ${record.tokens} token(s). The Claude Code login in use stays; "claude auth login" signs in to another account. A usage limit now ends the turn; yena no longer switches accounts on its own ("claude auth use <account>" picks one).`,
-		);
-		await store.update({retiredNoticeAt: record.at});
-	};
-
-	const showNoticeOnce = async (cred: CredentialInfo, ctx: CommandContext): Promise<void> => {
-		await showRetiredOnce(ctx);
-		if (!isSubscription(cred)) return;
-		if (((await store.read()).subscriptionNotice ?? 0) >= SUBSCRIPTION_NOTICE_VERSION) return;
-		ctx.print(SUBSCRIPTION_NOTICE);
-		await store.update({subscriptionNotice: SUBSCRIPTION_NOTICE_VERSION});
-	};
 
 	const ask = async (args: string[], ctx: CommandContext): Promise<void> => {
 		let fresh = false;
@@ -439,180 +206,10 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const text = args.slice(i).join(' ').trim();
 		if (!text) throw new Error(ASK_USAGE);
 		if (text.startsWith('/')) throw new Error('Slash commands are not supported in "claude ask"');
-		const release = await acquireAsk();
-		try {
-			await runAsk(text, fresh, ctx);
-		} finally {
-			release();
-		}
+		await provider.ask({origin: originOf(ctx), text, fresh}, {print: t => ctx.print(t)});
 	};
 
-	const prepareAsk = async (resume: string | undefined): Promise<Credential> => {
-		await loadBundle(credOpts);
-		return prepareCredential(credOpts, {}, sessionSubscription(dataDir, resume));
-	};
-
-	const bindAsk = (sessionId: string, cred: Credential): void => {
-		const account = accountOfCredential(credOpts, cred);
-		if (account === undefined) return;
-		try {
-			if (!bindSession(dataDir, sessionId, account)) log.warn('session subscription mismatch');
-		} catch (err) {
-			log.warn('session account not saved', {errClass: errClass(err)});
-		}
-	};
-
-	const runAsk = async (text: string, fresh: boolean, ctx: CommandContext): Promise<void> => {
-		const resume = fresh ? undefined : (await store.read()).lastSessionId;
-		let cred: Credential;
-		try {
-			cred = await prepareAsk(resume);
-		} catch (err) {
-			log.warn('no credential');
-			throw err;
-		}
-		registerLogRedaction(log, cred);
-		log.info('credential resolved', {kind: cred.kind, source: cred.source});
-		const redact = redactor(cred);
-		const scrub = makeScrub(redact);
-		await showNoticeOnce(cred, ctx);
-		ctx.print('Asking yena…');
-		log.info('ask started', {fresh, promptChars: text.length});
-
-		let query: QueryFn;
-		try {
-			query = await deps.loadQuery();
-		} catch (err) {
-			const reason = scrub(err instanceof Error ? err.message : String(err));
-			if (isMissingModule(err)) {
-				log.error('sdk load failed', {missingModule: true, err: clip(reason)});
-				throw new Error('The Claude Agent SDK is not installed. Run modules/claude/bin/install.');
-			}
-			log.error('sdk load failed', {missingModule: false, err: clip(reason)});
-			throw new Error(`Claude request failed: ${reason}`);
-		}
-
-		const state = await store.read();
-		const controller = new AbortController();
-		const unregister = deps.registerAbort?.(controller);
-		const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-		let timedOut = false;
-		askAbort = () => controller.abort();
-		const timer = setTimeout(() => {
-			timedOut = true;
-			log.warn('ask timed out', {timeoutMs});
-			controller.abort();
-		}, timeoutMs);
-		timer.unref();
-		const startedAt = Date.now();
-
-		try {
-			const paths = await withProjects(resolvePaths(dataDir, deps.moduleDir));
-			ensureMdLinks(paths);
-			restrictDataDirs(paths);
-			let result;
-			const options = buildOptions({paths, cred, abortController: controller, resume, env: buildEnv(env, paths, cred)});
-			try {
-				result = await runTurn({query, prompt: text, options, signal: controller.signal, redact, log});
-			} catch (err) {
-				const failure = timedOut ? new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds`) : err;
-				if (err instanceof TurnFailure && err.sessionId && err.kind !== 'resume') {
-					bindAsk(err.sessionId, cred);
-					await store
-						.update({lastSessionId: err.sessionId, ...(err.model && {lastModel: err.model})})
-						.catch(() => log.warn('ask state save failed'));
-				}
-				log.warn('ask failed', {
-					outcome: timedOut ? 'timeout' : 'error',
-					ms: Date.now() - startedAt,
-					errClass: errClass(failure),
-					...(limitKind(err) !== undefined
-						? {failure: limitKind(err)}
-						: {reason: clip(scrub(failure instanceof Error ? failure.message : String(failure)))}),
-				});
-				throw failure;
-			}
-			bindAsk(result.sessionId, cred);
-			await store.update({lastSessionId: result.sessionId, ...(result.model && {lastModel: result.model})});
-			ctx.print(scrub(result.text));
-			const model = result.model ?? 'unknown';
-			ctx.print(scrub(`[session ${result.sessionId.slice(0, 8)} · model ${model} · ${kindLabel(cred)}]`));
-			log.info('ask finished', {
-				outcome: 'ok',
-				ms: Date.now() - startedAt,
-				model,
-				numTurns: result.numTurns,
-				session8: result.sessionId.slice(0, 8),
-			});
-		} finally {
-			askAbort = undefined;
-			clearTimeout(timer);
-			unregister?.();
-		}
-	};
-
-	const unavailable = async (): Promise<never> => {
-		throw new Error('The chat is not available in this build');
-	};
-
-	const chatDeps = (onMount: (close: () => void) => void): ChatRunDeps => ({
-		dataDir,
-		...(deps.build && {build: deps.build}),
-		env,
-		moduleDir: deps.moduleDir,
-		log,
-		loadChatQuery: deps.loadChatQuery ?? unavailable,
-		...(deps.loadConsoleSdk && {loadConsoleSdk: deps.loadConsoleSdk}),
-		...(deps.shellTmp && {shellTmp: deps.shellTmp}),
-		loadUi: deps.loadUi ?? unavailable,
-		registerAbort: deps.registerAbort,
-		store,
-		showNoticeOnce,
-		probeLogin: probe,
-		isMissingModule,
-		vault,
-		...(deps.redactExtra && {redactExtra: deps.redactExtra}),
-		onMount,
-		onSession: s => {
-			openSession = s;
-		},
-		route: routeChat,
-		turnLock: chatTurnLock,
-		peek: peekLock,
-		...(deps.spawnRunner && {spawnRunner: deps.spawnRunner}),
-		...deps.chatTiming,
-		onPin: refresh => {
-			refreshOpenPin = refresh;
-		},
-		onLive: apply => {
-			applyOpenChat = apply;
-		},
-		onTier: set => {
-			setOpenTier = set;
-		},
-		onInbox: deliver => {
-			deliverToOpenChat = deliver;
-		},
-		onRulesChanged: () => void refreshRules(),
-		inputMode: () => inputMode,
-		acquire: () => acquireShared('chat'),
-	});
-
-	let openHandle: {close: () => void; done: Promise<void>} | undefined;
-	let openSession: ChatHandle | undefined;
-	let applyOpenChat: ((patch: LivePatch) => void) | undefined;
-	let setOpenTier: ((tier: Tier | 'auto') => void) | undefined;
-	let refreshOpenPin: (() => void) | undefined;
-	let deliverToOpenChat: ((text: string) => void) | undefined;
-	let openKeyOnly = false;
-
-	let inputMode: 'normal' | 'vim' = 'normal';
-	void store.read().then(
-		s => {
-			inputMode = s.chatInputMode === 'vim' ? 'vim' : 'normal';
-		},
-		() => {},
-	);
+	const chatDeps = (onMount: (close: () => void) => void): ChatRunDeps => hub.runDeps(onMount);
 
 	let rules: string[] = [];
 	const refreshRules = async (): Promise<void> => {
@@ -623,6 +220,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 	};
 	void refreshRules();
+	hub.onRulesChanged = () => void refreshRules();
 
 	const permissionsTab = (): SettingsTab | undefined => {
 		if (rules.length === 0) return undefined;
@@ -641,7 +239,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 					if (value !== 'remove') return;
 					const now = (await store.read()).allowedCommands ?? [];
 					await store.update({allowedCommands: now.filter(c => c !== rule)});
-					openSession?.forget(rule);
+					hub.openSession?.forget(rule);
 					log.info('permission rule removed');
 					await refreshRules();
 				},
@@ -650,14 +248,14 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	const replaceChat = async (start: (d: ChatRunDeps) => Promise<void>, endIdleRemote = true, onOpened?: () => void, keyOnly = false): Promise<void> => {
-		if (askRunning) throw new Error('An ask is already running');
-		if (endIdleRemote && openSession?.state === 'idle') openSession.end?.();
-		const previous = openHandle;
+		if (hub.askRunning) throw new Error('An ask is already running');
+		if (endIdleRemote && hub.openSession?.state === 'idle') hub.openSession.end?.();
+		const previous = hub.openHandle;
 		if (previous) {
 			previous.close();
 			await previous.done.catch(() => {});
 		}
-		openKeyOnly = keyOnly;
+		hub.openKeyOnly = keyOnly;
 		let close: (() => void) | undefined;
 		let closeRequested = false;
 		const done = start(
@@ -674,11 +272,11 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			},
 			done,
 		};
-		openHandle = handle;
+		hub.openHandle = handle;
 		try {
 			await done;
 		} finally {
-			if (openHandle === handle) openHandle = undefined;
+			if (hub.openHandle === handle) hub.openHandle = undefined;
 		}
 	};
 
@@ -692,7 +290,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (text.length > START_MAX) throw new Error(`The message is longer than ${START_MAX} characters`);
 		const keyOnly = unattended(ctx);
 		if (keyOnly) await requireCredential(credOpts, {apiKeyOnly: true});
-		if (openSession?.state === 'running') throw new Error('A chat is answering; start the new one when it is done (or press Esc in it).');
+		if (hub.openSession?.state === 'running') throw new Error('A chat is answering; start the new one when it is done (or press Esc in it).');
 		const view = ctx.signal ? mainCtx : ctx;
 		if (!view?.mount) throw new Error('No chat view is available; open the chat once with "chat".');
 		const state = await store.read();
@@ -701,7 +299,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			opened = resolve;
 		});
 		const running = replaceChat(
-			d => openChat({fresh: true, ...(state.chatModel && {model: state.chatModel}), tuning: tuningFromState(state), send: text, ...(keyOnly && {apiKeyOnly: true})}, view, d),
+			d => openChat({fresh: true, ...(state.chatModel && {model: state.chatModel}), ...openPrefs(state), send: text, ...(keyOnly && {apiKeyOnly: true})}, view, d),
 			true,
 			opened,
 			keyOnly,
@@ -716,9 +314,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const text = args.join(' ').trim();
 		if (text === '') throw new Error(SEND_USAGE);
 		if (text.length > START_MAX) throw new Error(`The message is longer than ${START_MAX} characters`);
-		const deliver = deliverToOpenChat;
+		const deliver = hub.deliverToOpenChat;
 		if (!deliver) return startChat(args, ctx);
-		if (unattended(ctx) && !openKeyOnly) throw new Error(API_KEY_ONLY);
+		if (unattended(ctx) && !hub.openKeyOnly) throw new Error(API_KEY_ONLY);
 		deliver(text);
 		log.info('message sent to the open chat', {chars: text.length, byCaller: ctx.signal !== undefined});
 		ctx.print('Sent the message to the open chat.');
@@ -733,7 +331,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 		const state = await store.read();
 		const model = requested ?? state.chatModel;
-		await replaceChat(d => openChat({fresh: true, attach, ...(model && {model}), tuning: tuningFromState(state)}, ctx, d), !attach);
+		await replaceChat(d => openChat({fresh: true, attach, ...(model && {model}), ...openPrefs(state)}, ctx, d), !attach);
 	};
 
 	const pick = async (
@@ -760,25 +358,19 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		return picked;
 	};
 
-	const openWith = async (ctx: CommandContext, open: Omit<ChatOpen, 'model' | 'tuning'>): Promise<void> => {
+	const openWith = async (ctx: CommandContext, open: Omit<ChatOpen, 'model' | 'tuning' | 'mode' | 'keep'>): Promise<void> => {
 		const state = await store.read();
 		await replaceChat(d =>
-			openChat({...open, ...(state.chatModel && {model: state.chatModel}), tuning: tuningFromState(state)}, ctx, d),
+			openChat({...open, ...(state.chatModel && {model: state.chatModel}), ...openPrefs(state)}, ctx, d),
 		);
 	};
 
 	const currentSessionId = async (): Promise<string | undefined> =>
-		(openSession && openSession.state !== 'closed' ? openSession.sessionId : undefined) ?? (await store.read()).lastSessionId;
-
-	const transcriptOf = (sessionId: string): string => {
-		const paths = resolvePaths(dataDir, deps.moduleDir);
-		return transcriptFile(paths.configDir, paths.projectDir, sessionId);
-	};
+		(hub.openSession && hub.openSession.state !== 'closed' ? hub.openSession.sessionId : undefined) ?? (await store.read()).lastSessionId;
 
 	const resumeChat = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 1) throw new Error(RESUME_USAGE);
-		const paths = resolvePaths(dataDir, deps.moduleDir);
-		const sessions = await listSessions(paths.configDir, paths.projectDir);
+		const sessions = await provider.sessions();
 		const start = (sessionId: string) => {
 			log.info('chat resume requested', {session8: sessionId.slice(0, 8)});
 			return openWith(ctx, {fresh: false, resume: sessionId});
@@ -810,11 +402,11 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	const rewindChat = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 0) throw new Error('Usage: claude rewind');
-		const session = openSession && openSession.state !== 'closed' ? openSession : undefined;
+		const session = hub.openSession && hub.openSession.state !== 'closed' ? hub.openSession : undefined;
 		const id = session?.sessionId;
 		if (!session || !id) throw new Error('There is no open chat to rewind yet.');
 		if (session.state === 'running') throw new Error('yena is still answering; wait or press Esc in the chat.');
-		const prompts = (await listPrompts(transcriptOf(id))).reverse();
+		const prompts = (await provider.prompts(id)).reverse();
 		const picked = await pick(ctx, {
 			title: 'Rewind to before…',
 			empty: 'Nothing to rewind to yet',
@@ -843,8 +435,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (!name || name.length > 120 || /[\u0000-\u001f\u007f]/.test(name)) throw new Error('Usage: claude rename <name> (up to 120 characters)');
 		const id = await currentSessionId();
 		if (!id) throw new Error('There is no chat to rename yet; send a message first.');
-		await appendFile(transcriptOf(id), `${JSON.stringify({type: 'custom-title', customTitle: name, sessionId: id})}\n`);
-		if (openSession?.sessionId === id) openSession.setTitle(name);
+		await provider.rename(id, name);
 		ctx.print(`Renamed the chat to "${name}"`);
 	};
 
@@ -852,17 +443,16 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (args.length > 1) throw new Error('Usage: claude export [file]');
 		const id = await currentSessionId();
 		if (!id) throw new Error('There is no chat to export yet.');
-		const paths = resolvePaths(dataDir, deps.moduleDir);
+		const projectDir = provider.projectDir();
 		const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
 		const target = args[0]
-			? path.resolve(paths.projectDir, args[0])
+			? path.resolve(projectDir, args[0])
 			: path.join(dataDir, 'exports', `${stamp}-${id.slice(0, 8)}.md`);
-		const inside = [paths.projectDir, dataDir].some(root => target.startsWith(path.resolve(root) + path.sep));
+		const inside = [projectDir, dataDir].some(root => target.startsWith(path.resolve(root) + path.sep));
 		if (!inside) throw new Error('Export files go inside the project or the claude data directory');
-		const file = transcriptOf(id);
-		const messages = await readHistory(file, Number.MAX_SAFE_INTEGER);
+		const messages = await provider.history(id, {limit: Number.MAX_SAFE_INTEGER});
 		if (messages.length === 0) throw new Error('The chat has no messages to export yet.');
-		const title = (await readSessionTitle(file)) ?? 'Chat';
+		const title = (await provider.title(id)) ?? 'Chat';
 		const body = [`# ${title}`, '', `Session \`${id}\`, exported ${new Date().toISOString()}.`, ''];
 		for (const m of messages) body.push(m.role === 'user' ? '## You' : '## yena', '', m.text, '');
 		await mkdir(path.dirname(target), {recursive: true});
@@ -879,7 +469,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		if (!ctx.copyToClipboard) throw new Error('This interface cannot reach the clipboard');
 		const id = await currentSessionId();
 		if (!id) throw new Error('There is no answer to copy yet.');
-		const answers = (await readHistory(transcriptOf(id), Number.MAX_SAFE_INTEGER)).filter(m => m.role === 'assistant');
+		const answers = (await provider.history(id, {limit: Number.MAX_SAFE_INTEGER})).filter(m => m.role === 'assistant');
 		const answer = answers.at(-n);
 		if (!answer) throw new Error(n === 1 ? 'There is no answer to copy yet.' : `There are only ${answers.length} answers.`);
 		if (!ctx.copyToClipboard(answer.text)) throw new Error('The answer is too long for the terminal clipboard');
@@ -887,17 +477,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	const session = async (ctx: CommandContext): Promise<void> => {
-		const state = await store.read();
-		const rt = runtimeInfo(resolvePaths(dataDir, deps.moduleDir));
-		const active = await resolveCredential(credOpts);
-		const scrub = makeScrub(redactor(active));
-		ctx.print(scrub(`Session: ${state.lastSessionId ?? '(none)'}`));
-		ctx.print(scrub(`Model: ${state.lastModel ?? '(unknown)'}`));
-		ctx.print(scrub(`Chat model: ${state.chatModel ?? 'default'}`));
-		ctx.print(scrub(`Claude Code runtime: ${rt.cli ?? '(not installed)'}`));
-		ctx.print(scrub(`Agent SDK: ${rt.sdk}`));
-		ctx.print(scrub(`Binary in use: ${rt.binary}`));
-		const usage = openSession && openSession.state !== 'closed' ? openSession.usage : undefined;
+		for (const row of await provider.describe(hub.openSession)) ctx.print(`${row.label}: ${row.value}`);
+		const usage = hub.openSession && hub.openSession.state !== 'closed' ? hub.openSession.usage : undefined;
 		if (usage) {
 			ctx.print('Tokens in this chat (since it opened):');
 			for (const line of usageLines(usage)) ctx.print(`  ${line}`);
@@ -910,8 +491,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	const chatRunning = (): boolean => {
-		if (openSession?.state === 'running') return true;
-		const dir = sessionsDir();
+		if (hub.openSession?.state === 'running') return true;
+		const dir = hub.sessionsDir();
 		return dir !== undefined && readHolder(dir).holder !== undefined;
 	};
 
@@ -969,8 +550,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		}
 		for (const warning of await inspectFileMode(dataDir)) blocks.push(line(span(`Warning: ${warning}`, {tone: 'warn'})));
 		printStyled(ctx, blocks);
-		if (active) await showNoticeOnce(active, ctx);
-		else await showRetiredOnce(ctx);
+		if (active) await hub.showNoticeOnce(active, ctx);
+		else await hub.showRetiredOnce(ctx);
 	};
 
 	const authOrder = async (args: string[], ctx: CommandContext): Promise<void> => {
@@ -991,7 +572,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		const list = useAccount(accountsCtx(credOpts), name);
 		log.info('auth use', {count: list.length});
 		printStyled(ctx, [line(`"${name}" is pinned: new turns use it until "claude auth auto".`), accountTable(list)]);
-		refreshOpenPin?.();
+		hub.refreshOpenPin?.();
 	};
 
 	const authAuto = async (args: string[], ctx: CommandContext): Promise<void> => {
@@ -1003,7 +584,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			line(cleared ? 'No account is pinned any more; new turns use the first account in the order.' : 'No account was pinned.'),
 			accountTable(listAccounts(accountsCtx(credOpts))),
 		]);
-		refreshOpenPin?.();
+		hub.refreshOpenPin?.();
 	};
 
 	const authRemove = async (args: string[], ctx: CommandContext): Promise<void> => {
@@ -1012,9 +593,9 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		await removeAccount(accountsCtx(credOpts), vault, args[0]!);
 		log.info('auth remove');
 		ctx.print(`Account "${args[0]}" removed.`);
-		if (chatOpen) ctx.print('The open chat keeps its current account until Claude Code restarts.');
+		if (hub.chatOpen) ctx.print('The open chat keeps its current account until Claude Code restarts.');
 		await printActive(ctx);
-		refreshOpenPin?.();
+		hub.refreshOpenPin?.();
 	};
 
 	const promptSecret =
@@ -1077,7 +658,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 		log.info('credential stored', {type: account.type});
 		ctx.print(`API key stored as account "${account.name}" in the account module (account list shows it).`);
 		await noteIfShadowed(account.name, ctx);
-		await showRetiredOnce(ctx);
+		await hub.showRetiredOnce(ctx);
 	};
 
 	const noteIfShadowed = async (name: string, ctx: CommandContext): Promise<void> => {
@@ -1104,7 +685,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 				ctx.print('Warning: Claude Code still reports a login. Run "claude auth logout" in the Claude Code CLI, or remove it from the Claude Code config directory.');
 			} else {
 				ctx.print('Claude Code is signed out.');
-				if (chatOpen) ctx.print('The open chat keeps running with its credentials until you close it.');
+				if (hub.chatOpen) ctx.print('The open chat keeps running with its credentials until you close it.');
 			}
 		} else {
 			ctx.print('Claude Code was not signed in.');
@@ -1163,12 +744,12 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			`Signed in with Claude Code (${status.method === 'claude.ai' ? 'claude.ai' : 'Console'} account). yena does not store this login; Claude Code keeps it in its own config.`,
 		);
 		await noteIfShadowed('login', ctx);
-		await showNoticeOnce({kind: status.method === 'claude.ai' ? 'oauth' : 'api-key', source: 'claude-login'}, ctx);
+		await hub.showNoticeOnce({kind: status.method === 'claude.ai' ? 'oauth' : 'api-key', source: 'claude-login'}, ctx);
 	};
 
 	const tasksCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 0) throw new Error('Usage: claude tasks');
-		const session = openSession && openSession.state !== 'closed' ? openSession : undefined;
+		const session = hub.openSession && hub.openSession.state !== 'closed' ? hub.openSession : undefined;
 		if (!session) throw new Error(NO_CHAT);
 		const now = Date.now();
 		const tasks = [...session.tasks].sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running'));
@@ -1193,7 +774,7 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	const mcpCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
-		const session = openSession && openSession.state !== 'closed' ? openSession : undefined;
+		const session = hub.openSession && hub.openSession.state !== 'closed' ? hub.openSession : undefined;
 		const scrub = makeScrub(s => s);
 		if (args[0] === 'reconnect') {
 			if (args.length !== 2) throw new Error('Usage: claude mcp [reconnect <server>]');
@@ -1255,34 +836,30 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	const sessionsCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 0) throw new Error('Usage: claude sessions');
-		const dir = sessionsDir();
-		if (!dir) throw new Error('Session control is not available (no private run directory)');
-		const {holder, unknown} = readHolder(dir);
-		if (!holder) {
-			ctx.print(unknown ? 'A session is starting.' : 'No session is running.');
+		const {sessions, starting} = await provider.running();
+		const info = sessions[0];
+		if (!info) {
+			ctx.print(starting ? 'A session is starting.' : 'No session is running.');
 			return;
 		}
-		const scrub = makeScrub(s => s);
-		const status = await queryStatus(dir).catch(() => undefined);
-		const id8 = status?.sessionId8 ?? holder.sessionId?.slice(0, 8);
-		const stateTone: Record<SessionState, SpanTone> = {running: 'ok', idle: 'muted', 'waiting-permission': 'warn'};
+		const stateTone: Record<NonNullable<RunningInfo['state']>, SpanTone> = {running: 'ok', idle: 'muted', 'waiting-permission': 'warn'};
 		const parts: (StyledSpan | StyledSpan[])[] = [
-			span(`${holder.kind} (${holder.where === 'runner' ? 'background' : 'in yena'})`, {bold: true}),
-			status ? span(status.state, {tone: stateTone[status.state]}) : span('unresponsive', {tone: 'error'}),
-			...(status?.title ? [span(`"${scrub(status.title).slice(0, 80)}"`)] : []),
-			...(id8 ? [[span('session '), span(id8, {tone: 'accent'})]] : []),
-			span(`since ${clockTime(holder.startedAt)}`, {tone: 'muted'}),
-			span(`pid ${holder.pid}`, {tone: 'muted'}),
+			span(`${info.kind} (${info.where === 'background' ? 'background' : 'in yena'})`, {bold: true}),
+			info.state ? span(info.state, {tone: stateTone[info.state]}) : span('unresponsive', {tone: 'error'}),
+			...(info.title ? [span(`"${info.title}"`)] : []),
+			...(info.session8 ? [[span('session '), span(info.session8, {tone: 'accent'})]] : []),
+			span(`since ${clockTime(info.startedAt)}`, {tone: 'muted'}),
+			span(`pid ${info.pid}`, {tone: 'muted'}),
 		];
-		if (status && status.pending > 0) parts.push(span(`${status.pending} permission${status.pending === 1 ? '' : 's'} waiting`, {tone: 'warn'}));
-		if (status && status.queued > 0) parts.push(span(`${status.queued} queued`));
-		if (status && holder.where === 'runner') parts.push(status.attached ? span('attached', {tone: 'ok'}) : span('detached', {tone: 'muted'}));
+		if (info.pending > 0) parts.push(span(`${info.pending} permission${info.pending === 1 ? '' : 's'} waiting`, {tone: 'warn'}));
+		if (info.queued > 0) parts.push(span(`${info.queued} queued`));
+		if (info.attached !== undefined) parts.push(info.attached ? span('attached', {tone: 'ok'}) : span('detached', {tone: 'muted'}));
 		printStyled(ctx, [line(...parts.flatMap((p, i) => [...(i > 0 ? [span(' · ', {tone: 'muted'})] : []), ...(Array.isArray(p) ? p : [p])]))]);
 	};
 
 	const tierCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 1) throw new Error(TIER_USAGE);
-		const session = openSession && openSession.state !== 'closed' ? openSession : undefined;
+		const session = hub.openSession && hub.openSession.state !== 'closed' ? hub.openSession : undefined;
 		const routerOn = (await store.read()).chatRouter === 'on';
 		if (args.length === 0) {
 			if (!session) {
@@ -1305,8 +882,8 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			throw new Error(`Unknown tier "${makeScrub(s => s)(args[0]!).slice(0, 40)}"; use auto, light, standard, strong or max. ${TIER_USAGE}`);
 		}
 		if (!routerOn) throw new Error('The model router is off; turn it on in the Chat settings');
-		if (!session || !setOpenTier) throw new Error('No chat is open. Start one with "chat".');
-		setOpenTier(wanted);
+		if (!session || !hub.setOpenTier) throw new Error('No chat is open. Start one with "chat".');
+		hub.setOpenTier(wanted);
 		ctx.print(
 			wanted === 'auto'
 				? 'The chat follows the router again from the next message.'
@@ -1316,21 +893,12 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 
 	const stopCmd = async (args: string[], ctx: CommandContext): Promise<void> => {
 		if (args.length > 1) throw new Error(STOP_USAGE);
-		const dir = sessionsDir();
-		if (!dir) throw new Error('Session control is not available (no private run directory)');
-		const {holder} = readHolder(dir);
-		if (!holder) {
+		const result = await provider.stop(args[0]);
+		if (!result) {
 			ctx.print('No session is running.');
 			return;
 		}
-		const wanted = args[0]?.toLowerCase();
-		if (wanted !== undefined && !(holder.sessionId ?? '').startsWith(wanted)) {
-			throw new Error(`No running session matches "${makeScrub(s => s)(args[0]!).slice(0, 40)}". ${STOP_USAGE}`);
-		}
-		const result = await stopHolder(dir, holder, {log});
-		if (result.ok) ctx.print(`Stopped the ${holder.kind} (${result.via === 'socket' ? 'asked to stop' : 'process ended'}).`);
-		else if (holder.where === 'local') throw new Error(`The ${holder.kind} runs in another yena (pid ${holder.pid}) and did not stop; close that yena.`);
-		else throw new Error(`The background ${holder.kind} (pid ${holder.pid}) did not stop.`);
+		ctx.print(`Stopped the ${result.kind} (${result.via === 'socket' ? 'asked to stop' : 'process ended'}).`);
 	};
 
 	const ACCOUNT_ARG: ArgumentDoc = {name: 'account', description: 'Account name, as "claude auth status" lists it'};
@@ -1504,18 +1072,15 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	const ownNames = new Set([...OWN_SUBCOMMANDS.map(s => s.name), 'help']);
 
 	const claudeCodeSubcommands = (): Subcommand[] => {
-		const known: SlashCommandInfo[] =
-			openSession && openSession.state !== 'closed' && openSession.commands.length > 0
-				? [...openSession.commands]
-				: diskCommands(resolvePaths(dataDir, deps.moduleDir).configDir);
-		return known
+		return provider
+			.commandHints()
 			.filter(c => !ownNames.has(c.name))
 			.map(c => ({name: c.name, description: passthroughDescription(c.description), ...passthroughUsage(c.name, c.argumentHint)}));
 	};
 
 	const runClaudeCodeCommand = async (name: string, args: string[], ctx: CommandContext): Promise<void> => {
 		if (!isCommandName(name)) throw new Error(`Unknown subcommand "${makeScrub(s => s)(name).slice(0, 64)}". ${USAGE}`);
-		const session = openSession;
+		const session = hub.openSession;
 		if (!session || session.state === 'closed') throw new Error(NO_CHAT);
 		const known = session.commands;
 		if (known.length > 0 && !known.some(c => c.name === name)) {
@@ -1607,12 +1172,12 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 			title: 'Chat',
 			settings: chatSettings(store, isModelId, log, {
 				applyMode: mode => {
-					if (openSession && openSession.state !== 'closed') openSession.setMode(mode);
+					if (hub.openSession && hub.openSession.state !== 'closed') hub.openSession.setMode(mode);
 				},
-				applyLive: patch => applyOpenChat?.(patch),
-				applyKeep: keep => openSession?.setKeep?.(keep),
+				applyLive: patch => hub.applyOpenChat?.(patch),
+				applyKeep: keep => hub.openSession?.setKeep?.(keep),
 				applyInputMode: mode => {
-					inputMode = mode;
+					hub.inputMode = mode;
 				},
 			}),
 		},
@@ -1620,5 +1185,5 @@ export const createClaudeCommands = (deps: ClaudeDeps): Command[] => {
 	};
 
 	const fix = createFixCommand({...(deps.devFailure && {devFailure: deps.devFailure}), start: (message, ctx) => startChat([message], ctx)});
-	return [chatCommand, claude, fix];
+	return {commands: [chatCommand, claude, fix], provider};
 };

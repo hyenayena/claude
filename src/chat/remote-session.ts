@@ -13,7 +13,7 @@ import {type CredentialBundle, encodeBundle} from '../vault.js';
 import type {SlashCommandInfo, TaskInfo} from './chat-session.js';
 import type {ChatEvent, ChatState, ContextInfo, RouteInfo} from '../deps/chat.js';
 import type {PlanItem} from '../deps/chat.js';
-import type {ChatHandle} from './handle.js';
+import type {ClaudeChatHandle} from './handle.js';
 import type {Tier} from '../deps/chat.js';
 import type {RateLimitInfo} from '../deps/chat.js';
 import {PERMISSION_IDLE_MS} from './permission.js';
@@ -54,7 +54,7 @@ let seq = 0;
 
 export const BUSY_SEND = 'Another session is working right now. Your message stays in the input; send it when that session is done.';
 
-export class RemoteChatSession implements ChatHandle {
+export class RemoteChatSession implements ClaudeChatHandle {
 	readonly detachesOnClose = true;
 	reattached = false;
 	detachedWhileRunning = false;

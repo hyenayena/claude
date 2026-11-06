@@ -1,5 +1,6 @@
 import type {Logger, ModulePlugin} from '../../../src/api.js';
-import {createClaudeCommands} from './commands.js';
+import {createClaude} from './commands.js';
+import {registerChatProvider} from './deps/chat.js';
 import type {ChatUi} from './chat/command.js';
 import type {ConsoleSdk} from './chat/console-tools.js';
 import {ensureSessionDir} from './chat/shell-tmp.js';
@@ -46,15 +47,25 @@ const loadConsoleSdk = async (): Promise<ConsoleSdk> => {
 
 const loadUi = (): Promise<ChatUi> => import('./deps/chat-ui.js');
 
+let unregisterProvider: (() => void) | undefined;
+
+// For a reload of the module, and for tests: only the registration made here is removed.
+export const releaseProvider = (): void => {
+	unregisterProvider?.();
+	unregisterProvider = undefined;
+};
+
 const plugin: ModulePlugin = host => {
 	const log = host.log ?? noopLog;
 	exitLog = log;
 	log.info('plugin loaded');
 	const vault = hostVault(host.credentials, log);
 	const redactExtra = log.redact?.bind(log);
-	return [
-		...createClaudeCommands({dataDir: host.dataDir, env: process.env, log, vault, ...(redactExtra && {redactExtra}),...(host.build && {build: host.build}), ...(host.devFailure && {devFailure: host.devFailure}), loadQuery, loadChatQuery, loadConsoleSdk, loadUi, registerAbort, spawnRunner, sessionDir: () => ensureSessionDir()}),
-	];
+	const {commands, provider} = createClaude({dataDir: host.dataDir, env: process.env, log, vault, ...(redactExtra && {redactExtra}),...(host.build && {build: host.build}), ...(host.devFailure && {devFailure: host.devFailure}), loadQuery, loadChatQuery, loadConsoleSdk, loadUi, registerAbort, spawnRunner, sessionDir: () => ensureSessionDir()});
+	const off = registerChatProvider(provider);
+	if (off) unregisterProvider = off;
+	else log.warn('chat provider not registered');
+	return commands;
 };
 
 export default plugin;

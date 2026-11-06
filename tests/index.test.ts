@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import {test} from 'node:test';
+import {after, test} from 'node:test';
 import type {CommandContext} from '../../../src/api.js';
-import plugin from '../src/index.js';
+import {chatProvider, chatProviders} from '../src/deps/chat.js';
+import plugin, {releaseProvider} from '../src/index.js';
 import {makeFakeLog} from './helpers/fake-log.js';
 
 const setup = async () => {
@@ -64,4 +65,30 @@ test('plugin load logs info', async () => {
 	const log = makeFakeLog();
 	await plugin({dataDir: '/tmp/claude-test', events: {emit: () => {}, on: () => () => {}}, log});
 	assert.deepEqual(log.records.filter(r => r.level === 'info').map(r => [r.level, r.msg]), [['info', 'plugin loaded']]);
+});
+
+after(() => releaseProvider());
+
+test('the plugin registers the claude chat provider once; a second registration is refused and logged', async () => {
+	releaseProvider();
+	const first = makeFakeLog();
+	await plugin({dataDir: '/tmp/claude-test', events: {emit: () => {}, on: () => () => {}}, log: first});
+	assert.equal(chatProvider('claude')?.label, 'Claude Code');
+	assert.deepEqual(chatProviders().filter(p => p.id === 'claude'), [{id: 'claude', label: 'Claude Code'}]);
+	assert.deepEqual(first.records.filter(r => r.msg === 'chat provider not registered'), []);
+	const registered = chatProvider('claude');
+	const second = makeFakeLog();
+	await plugin({dataDir: '/tmp/claude-test', events: {emit: () => {}, on: () => () => {}}, log: second});
+	assert.deepEqual(second.records.filter(r => r.level === 'warn').map(r => r.msg), ['chat provider not registered']);
+	assert.equal(chatProvider('claude'), registered, 'the first registration stays');
+});
+
+test('releaseProvider removes the registration this module made', async () => {
+	await plugin({dataDir: '/tmp/claude-test', events: {emit: () => {}, on: () => () => {}}, log: makeFakeLog()});
+	releaseProvider();
+	assert.equal(chatProvider('claude'), undefined);
+	const log = makeFakeLog();
+	await plugin({dataDir: '/tmp/claude-test', events: {emit: () => {}, on: () => () => {}}, log});
+	assert.deepEqual(log.records.filter(r => r.level === 'warn'), []);
+	assert.ok(chatProvider('claude'));
 });

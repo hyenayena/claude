@@ -1,6 +1,7 @@
 import type {Options, SDKMessage, SDKUserMessage} from '@anthropic-ai/claude-agent-sdk';
 import type {Effort} from './chat-prefs.js';
 import type {TierModel} from './chat/tiers.js';
+import type {RewindResult} from './deps/chat.js';
 
 export type CredentialKind = 'api-key' | 'oauth';
 export type CredentialSource = 'env' | 'claude-login' | 'stored';
@@ -72,4 +73,4 @@ export type ChatQueryFn = (p: {
 	getContextUsage?: (opts?: {detail?: 'summary' | 'full'}) => Promise<unknown>;
 };
 
-export type RewindResult = {canRewind: boolean; error?: string; filesChanged?: string[]; insertions?: number; deletions?: number};
+export type {RewindResult};
