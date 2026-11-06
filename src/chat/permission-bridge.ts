@@ -24,7 +24,7 @@ import {
 	toolUnavailableMessage,
 } from './permission.js';
 import {sanitizeBlock, sanitizeText} from '../kit.js';
-import {WEB_KEY_PREFIX, webKey} from './policy-hook.js';
+import {outsideReason, WEB_KEY_PREFIX, webKey} from './policy-hook.js';
 
 export type PermissionBridgeDeps = {
 	scope: Scope;
@@ -274,7 +274,7 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		const resolved = await resolveTarget(lexical);
 		const resolvedPath = resolved === lexical ? undefined : resolved;
 		const summaryPath = resolvedPath === undefined ? lexical : `${lexical} -> ${resolvedPath}`;
-		if (cls === 'deny-outside') return policyDeny(toolName, POLICY_DENY.outside, summaryPath, b.id);
+		if (cls === 'deny-outside') return policyDeny(toolName, await outsideReason(scope, filePath), summaryPath, b.id);
 		if (cls === 'deny-locked') return policyDeny(toolName, POLICY_DENY.locked, summaryPath, b.id);
 		if (cls === 'deny-readonly') return policyDeny(toolName, POLICY_DENY.readonly, summaryPath, b.id);
 		if (cls === 'deny-image') return policyDeny(toolName, POLICY_DENY.image, summaryPath, b.id);
@@ -416,6 +416,8 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 				const r = await readTool(toolName, input, opts);
 				if (r?.behavior === 'allow') return r;
 				prompter.audit({outcome: 'denied-by-policy', toolName, summary: 'outside scope'});
+				const reason = await outsideReason(scope, toolName === 'Read' ? input.file_path : input.path);
+				if (reason !== POLICY_DENY.outside) return deny(reason, opts.toolUseID);
 				return r ?? deny(POLICY_DENY.outside, opts.toolUseID);
 			}
 			case 'TaskStop':

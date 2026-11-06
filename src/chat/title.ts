@@ -5,8 +5,10 @@ const MAX_BYTES = 8 * 1024 * 1024;
 const TITLE_MAX = 120;
 const FALLBACK_MAX = 60;
 
+export const projectSlug = (projectDir: string): string => projectDir.replace(/[^a-zA-Z0-9]/g, '-');
+
 export const transcriptFile = (configDir: string, projectDir: string, sessionId: string): string =>
-	path.join(configDir, 'projects', projectDir.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`);
+	path.join(configDir, 'projects', projectSlug(projectDir), `${sessionId}.jsonl`);
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 

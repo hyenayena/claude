@@ -1,9 +1,9 @@
 import type {HookCallback, HookCallbackMatcher, HookEvent, HookJSONOutput} from '@anthropic-ai/claude-agent-sdk';
 import path from 'node:path';
-import {classifyEditTarget, createCanUseTool, isAskFile, PLANS_DIR, resolveReal, type Scope} from '../policy.js';
+import {classifyEditTarget, createCanUseTool, inSharedTmp, isAskFile, PLANS_DIR, resolveReal, type Scope} from '../policy.js';
 import {agentDenial} from './agent-policy.js';
 import {addsPrivilegedFrontmatter, isDefinitionPath} from './definition-guard.js';
-import {POLICY_ASK, POLICY_DENY} from './permission.js';
+import {POLICY_ASK, POLICY_DENY, scratchDenied} from './permission.js';
 
 const AUTH_FILE = /credentials\.json|\.claude\.json|config\/backups|accounts\.json|claude\/accounts\b|claude\/auth\.json/;
 
@@ -23,6 +23,13 @@ function touchesHostState(command: string, scope: Scope, sandboxed: boolean): bo
 		if (rest !== command && command.includes('..')) return true;
 	}
 	return (scope.hostStateDenied ?? []).some(s => rest.includes(s));
+}
+
+export async function outsideReason(scope: Scope, target: unknown): Promise<string> {
+	if (scope.scratch !== undefined && typeof target === 'string' && (await inSharedTmp(target, scope))) {
+		return scratchDenied(scope.scratch);
+	}
+	return POLICY_DENY.outside;
 }
 
 const allow: HookJSONOutput = {continue: true};
@@ -72,13 +79,13 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 			case 'Glob':
 			case 'Grep': {
 				const r = await readTool(tool, args, opts);
-				return r?.behavior === 'allow' ? allow : denyWith(POLICY_DENY.outside);
+				return r?.behavior === 'allow' ? allow : denyWith(await outsideReason(scope, tool === 'Read' ? args.file_path : args.path));
 			}
 			case 'Edit':
 			case 'Write': {
 				if (typeof args.file_path !== 'string') return denyWith(POLICY_DENY.invalidInput);
 				const cls = await classifyEditTarget(args.file_path, scope);
-				if (cls === 'deny-outside') return denyWith(POLICY_DENY.outside);
+				if (cls === 'deny-outside') return denyWith(await outsideReason(scope, args.file_path));
 				if (cls === 'deny-locked') return denyWith(POLICY_DENY.locked);
 				if (cls === 'deny-readonly') return denyWith(POLICY_DENY.readonly);
 				if (cls === 'deny-image') return denyWith(POLICY_DENY.image);

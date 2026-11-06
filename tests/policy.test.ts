@@ -16,8 +16,10 @@ import {
 	GUARD_DENY,
 	isAskFile,
 	isGuardedPath,
+	inSharedTmp,
 	isPathAllowed,
 } from '../src/policy.js';
+import {projectSlug} from '../src/chat/title.js';
 
 const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'claude-policy-')));
 after(() => rmSync(tmp, {recursive: true, force: true}));
@@ -61,16 +63,82 @@ describe('isPathAllowed', () => {
 		assert.ok(await isPathAllowed(paths.configDir, scope));
 	});
 
-	it('lets Read into the session tmp dir but not Edit, and keeps bash-edit-diff closed', async () => {
+	describe('session tmp and scratch', () => {
 		const sessionTmp = path.join(tmp, 'shell', 'claude-0');
-		mkdirSync(path.join(sessionTmp, 'bash-edit-diff'), {recursive: true});
-		writeFileSync(path.join(sessionTmp, 'icon.png'), 'png');
-		const withTmp = buildScope({...paths, sessionTmp}, home);
-		assert.ok(await isPathAllowed(path.join(sessionTmp, 'icon.png'), withTmp));
-		assert.ok(!(await isPathAllowed(path.join(sessionTmp, 'bash-edit-diff', 'x'), withTmp)));
-		assert.ok(!(await isPathAllowed(path.join(sessionTmp, 'icon.png'), scope)));
-		assert.equal(await classifyEditTarget(path.join(sessionTmp, 'icon.png'), withTmp), 'deny-outside');
+		const scratch = path.join(sessionTmp, 'scratch', 'aaaaaaaa');
+		const slug = projectSlug(projectDir);
+		const sid = '11111111-1111-1111-1111-111111111111';
+		const tasks = path.join(sessionTmp, slug, sid, 'tasks');
+		const otherTasks = path.join(sessionTmp, slug, '22222222-2222-2222-2222-222222222222', 'tasks');
+		const file = (p: string) => {
+			mkdirSync(path.dirname(p), {recursive: true});
+			writeFileSync(p, 'x');
+			return p;
+		};
+		file(path.join(scratch, 'out.txt'));
+		file(path.join(scratch, '.env'));
+		file(path.join(sessionTmp, 'scratch', 'deadbeef', 'x'));
+		file(path.join(sessionTmp, 'root.txt'));
+		file(path.join(sessionTmp, 'claude-settings-abc.json'));
+		file(path.join(sessionTmp, 'claude-authstate-X', 'y'));
+		file(path.join(sessionTmp, 'bash-edit-diff', 'x'));
+		file(path.join(sessionTmp, 'bundled-skills', 'claude-api', 'doc.md'));
+		file(path.join(tasks, 't1.output'));
+		file(path.join(otherTasks, 't2.output'));
+		const withTmp = buildScope({...paths, sessionTmp, scratch, sessionTasks: () => [tasks]}, home);
+
+		it('treats own scratch as a free root', async () => {
+			const f = path.join(scratch, 'out.txt');
+			assert.ok(await isPathAllowed(f, withTmp));
+			assert.equal(await classifyEditTarget(f, withTmp), 'free');
+			assert.equal(await classifyEditTarget(path.join(scratch, 'new', 'n.txt'), withTmp), 'free');
+			assert.equal(await classifyEditTarget(path.join(scratch, '.env'), withTmp), 'deny-secret');
+		});
+
+		it('closes everything else in the session tmp dir', async () => {
+			for (const p of [
+				path.join(sessionTmp, 'scratch', 'deadbeef', 'x'),
+				path.join(sessionTmp, 'root.txt'),
+				path.join(sessionTmp, 'claude-settings-abc.json'),
+				path.join(sessionTmp, 'claude-authstate-X', 'y'),
+				path.join(sessionTmp, 'bash-edit-diff', 'x'),
+				path.join(otherTasks, 't2.output'),
+				'/tmp/x',
+			]) {
+				assert.ok(!(await isPathAllowed(p, withTmp)), p);
+				assert.equal(await classifyEditTarget(p, withTmp), 'deny-outside', p);
+			}
+			assert.ok(!(await isPathAllowed(path.join(scratch, 'out.txt'), scope)));
+		});
+
+		it('lets Read the own session tasks and bundled skills but never Edit', async () => {
+			for (const p of [path.join(tasks, 't1.output'), path.join(sessionTmp, 'bundled-skills', 'claude-api', 'doc.md')]) {
+				assert.ok(await isPathAllowed(p, withTmp), p);
+				assert.equal(await classifyEditTarget(p, withTmp), 'deny-outside', p);
+			}
+		});
+
+		it('refuses a scratch replaced by a symlink and symlinks leaving it', async () => {
+			const swapped = path.join(sessionTmp, 'scratch', 'bbbbbbbb');
+			symlinkSync(outside, swapped);
+			const swappedScope = buildScope({...paths, sessionTmp, scratch: swapped}, home);
+			const target = path.join(swapped, 'x.txt');
+			assert.ok(!(await isPathAllowed(target, swappedScope)));
+			assert.equal(await classifyEditTarget(target, swappedScope), 'deny-outside');
+			symlinkSync(outside, path.join(scratch, 'escape'));
+			assert.ok(!(await isPathAllowed(path.join(scratch, 'escape', 'x.txt'), withTmp)));
+			assert.equal(await classifyEditTarget(path.join(scratch, 'escape', 'x.txt'), withTmp), 'deny-outside');
+		});
+
+		it('reports shared tmp paths only', async () => {
+			assert.ok(await inSharedTmp(path.join(sessionTmp, 'root.txt'), withTmp));
+			assert.ok(await inSharedTmp('/tmp/x', withTmp));
+			assert.ok(!(await inSharedTmp(path.join(scratch, 'out.txt'), withTmp)));
+			assert.ok(!(await inSharedTmp('/etc/passwd', withTmp)));
+			assert.ok(!(await inSharedTmp('/tmp/x', scope)));
+		});
 	});
+
 
 	it('denies outside paths, traversal and symlink escapes', async () => {
 		assert.ok(!(await isPathAllowed('/etc/passwd', scope)));

@@ -135,6 +135,8 @@ export const POLICY_DENY = {
 	invalidInput: 'The tool input is invalid.',
 	unknownTool: 'That tool is not available in the chat.',
 } as const;
+export const scratchDenied = (scratch: string): string =>
+	`Access to that path is not allowed: Claude Code's temporary folder and /tmp are shared by every chat. Put scratch files and script outputs in this chat's scratch folder, ${scratch} (also $YENA_SCRATCH); Read, Edit and Write work there.`;
 export const POLICY_ASK = {
 	instructions: 'CLAUDE.md and SOUL.md are loaded into every session: changes to them always need approval.',
 	newHost: 'First fetch from this host: a URL can carry data out.',

@@ -6,7 +6,7 @@ import {after, test} from 'node:test';
 import {createPolicyHook, policyHooks, webKey} from '../../src/chat/policy-hook.js';
 import {createLeftoverSweeper} from '../../src/chat/sandbox-leftovers.js';
 import {noopLog} from '../../src/log.js';
-import {POLICY_ASK, POLICY_DENY} from '../../src/chat/permission.js';
+import {POLICY_ASK, POLICY_DENY, scratchDenied} from '../../src/chat/permission.js';
 import {buildScope} from '../../src/policy.js';
 
 const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'claude-hook-')));
@@ -413,4 +413,28 @@ test('an Agent call routed by agentRoute is allowed with the updated input; isol
 
 test('without agentRoute an Agent call passes as before', async () => {
 	assert.deepEqual(await run('Agent', {subagent_type: 'coder', prompt: 'x', model: 'haiku'}), {continue: true});
+});
+
+test('the hook allows the own scratch and points shared tmp denials at it', async () => {
+	const sessionTmp = path.join(tmp, 'shell', 'claude-0');
+	const scratch = path.join(sessionTmp, 'scratch', 'aaaaaaaa');
+	mkdirSync(scratch, {recursive: true});
+	const withScratch = buildScope({...paths, sessionTmp, scratch}, path.join(tmp, 'home'));
+	const scratchHook = createPolicyHook(withScratch, paths.configDir);
+	const ask = async (tool: string, input: Record<string, unknown>) => {
+		const out = (await scratchHook(
+			{hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: projectDir} as never,
+			't',
+			opts,
+		)) as {hookSpecificOutput?: {permissionDecision?: string; permissionDecisionReason?: string}};
+		return out.hookSpecificOutput ? `${out.hookSpecificOutput.permissionDecision}:${out.hookSpecificOutput.permissionDecisionReason}` : 'pass';
+	};
+	const message = `deny:${scratchDenied(scratch)}`;
+	assert.equal(await ask('Write', {file_path: path.join(scratch, 'n.txt'), content: 'x'}), 'pass');
+	assert.equal(await ask('Write', {file_path: path.join(sessionTmp, 'n.txt'), content: 'x'}), message);
+	assert.equal(await ask('Read', {file_path: path.join(sessionTmp, 'claude-settings-abc.json')}), message);
+	assert.equal(await ask('Write', {file_path: '/tmp/n.txt', content: 'x'}), message);
+	assert.equal(await ask('Read', {file_path: '/etc/passwd'}), `deny:${POLICY_DENY.outside}`);
+	assert.equal(await decision('Write', {file_path: path.join(sessionTmp, 'n.txt'), content: 'x'}), `deny:${POLICY_DENY.outside}`);
+	assert.equal(await decision('Read', {file_path: '/tmp/n.txt'}), `deny:${POLICY_DENY.outside}`);
 });

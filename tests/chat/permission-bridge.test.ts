@@ -16,6 +16,7 @@ import {
 	type PermissionPrompter,
 	type PermissionRequest,
 	POLICY_DENY,
+	scratchDenied,
 	QUESTION_LIMITS,
 	toolUnavailableMessage,
 } from '../../src/chat/permission.js';
@@ -620,4 +621,30 @@ test('reading and stopping own background tasks runs without asking', async () =
 		assert.equal((await call(name, {task_id: 't1'}))?.behavior, 'allow', name);
 	}
 	assert.equal(prompter.requests.length, 0);
+});
+
+test('Write in the own scratch is accepted without a prompt and the shared session tmp is refused with the scratch text', async () => {
+	const sessionTmp = path.join(tmp, 'shell', 'claude-0');
+	const scratch = path.join(sessionTmp, 'scratch', 'aaaaaaaa');
+	mkdirSync(scratch, {recursive: true});
+	const withScratch = buildScope(
+		{
+			projectDir,
+			mdDir,
+			configDir: path.join(tmp, 'config'),
+			stateFile: path.join(projectDir, '.yena', 'claude', 'state.json'),
+			credentialsFile: path.join(tmp, 'creds'),
+			sessionTmp,
+			scratch,
+		},
+		path.join(tmp, 'home'),
+	);
+	const {call, prompter} = setup({scope: withScratch});
+	const ok = await call('Write', {file_path: path.join(scratch, 'n.txt'), content: 'x'});
+	assert.equal(ok?.behavior, 'allow');
+	assert.equal(prompter.requests.length, 0);
+	const bad = await call('Write', {file_path: path.join(sessionTmp, 'n.txt'), content: 'x'});
+	assert.equal(bad?.behavior === 'deny' && bad.message, scratchDenied(scratch));
+	const read = await call('Read', {file_path: path.join(sessionTmp, 'claude-settings-abc.json')});
+	assert.equal(read?.behavior === 'deny' && read.message, scratchDenied(scratch));
 });

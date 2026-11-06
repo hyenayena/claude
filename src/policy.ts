@@ -88,6 +88,9 @@ export type Scope = {
 	projectDataDir?: string;
 	shellDenied?: string[];
 	agentSocket?: string;
+	sessionTmp?: string;
+	scratch?: string;
+	sessionRead?: () => string[];
 };
 
 export type PolicyPaths = {
@@ -104,9 +107,12 @@ export type PolicyPaths = {
 	imageReadOnly?: boolean;
 	hostState?: string;
 	sessionTmp?: string;
+	scratch?: string;
+	sessionTasks?: () => string[];
 };
 
 export const SESSION_TMP_DENIED = ['bash-edit-diff'];
+export const SESSION_TMP_READ = ['bundled-skills'];
 
 export const hostLogsDir = (hostState: string): string => path.join(path.resolve(hostState), 'logs');
 
@@ -150,7 +156,10 @@ const absRule = (p: string) => `/${p}`;
 
 export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 	const hub = paths.hubDir ?? paths.mdDir;
-	const readRoots = [...(paths.sessionTmp ? [paths.sessionTmp] : []), ...(paths.hostState ? [hostLogsDir(paths.hostState)] : [])];
+	const readRoots = [
+		...(paths.sessionTmp ? SESSION_TMP_READ.map(x => path.join(paths.sessionTmp!, x)) : []),
+		...(paths.hostState ? [hostLogsDir(paths.hostState)] : []),
+	];
 	return {
 		roots: [paths.projectDir, hub, paths.configDir],
 		free: [hub],
@@ -172,6 +181,9 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 			...(paths.sessionTmp ? SESSION_TMP_DENIED.map(x => path.join(paths.sessionTmp!, x)) : []),
 		],
 		...(readRoots.length > 0 && {readRoots}),
+		...(paths.sessionTmp && {sessionTmp: paths.sessionTmp}),
+		...(paths.scratch && {scratch: paths.scratch}),
+		...(paths.sessionTasks && {sessionRead: paths.sessionTasks}),
 		...(paths.accountSecrets && {shellDenied: accountShellDenied(paths.accountSecrets)}),
 		...(paths.agentSocket && {agentSocket: paths.agentSocket}),
 		...(paths.imageReadOnly && {image: paths.projectDir}),
@@ -301,6 +313,31 @@ async function realList(list: string[]): Promise<string[]> {
 	return out;
 }
 
+// Folders the chat's own Bash can create or replace count only while no symlink sits in their path.
+async function selfRooted(list: string[]): Promise<string[]> {
+	const out: string[] = [];
+	for (const item of list) {
+		const abs = path.resolve(item);
+		if ((await resolveReal(abs).catch(() => undefined)) === abs) out.push(abs);
+	}
+	return out;
+}
+
+export async function ownScratch(scope: Scope): Promise<string | undefined> {
+	return scope.scratch === undefined ? undefined : (await selfRooted([scope.scratch]))[0];
+}
+
+export async function inSharedTmp(p: string, scope: Scope): Promise<boolean> {
+	if (scope.scratch === undefined || typeof p !== 'string' || p === '' || p.includes('\0')) return false;
+	const base = scope.roots[0] ?? '/';
+	const lexical = path.resolve(base, p);
+	const real = await resolveReal(lexical).catch(() => lexical);
+	const own = await ownScratch(scope);
+	if (own !== undefined && (within(lexical, own) || within(real, own))) return false;
+	const shared = [...(scope.sessionTmp ? [path.resolve(scope.sessionTmp)] : []), '/tmp'];
+	return shared.some(d => within(lexical, d) || within(real, d));
+}
+
 export async function isPathAllowed(p: string, scope: Scope): Promise<boolean> {
 	if (typeof p !== 'string' || p === '' || p.includes('\0') || scope.roots.length === 0) {
 		return false;
@@ -312,7 +349,10 @@ export async function isPathAllowed(p: string, scope: Scope): Promise<boolean> {
 		return false;
 	}
 	const extra = (await scope.projects?.())?.roots ?? [];
-	const roots = await realList([...scope.roots, ...extra, ...(scope.readRoots ?? [])]);
+	const roots = [
+		...(await realList([...scope.roots, ...extra])),
+		...(await selfRooted([...(scope.readRoots ?? []), ...(scope.scratch ? [scope.scratch] : []), ...(scope.sessionRead?.() ?? [])])),
+	];
 	const denied = await realList(scope.denied);
 	for (const r of await realList(extra)) {
 		if (!within(real, r)) continue;
@@ -500,6 +540,10 @@ export async function classifyEditTarget(filePath: string, scope: Scope): Promis
 			if (first === undefined || first.startsWith('.')) return 'prompt-only';
 			return (await isYenaCheckout(verdict.dir)) && noAutoAccept(rel) ? 'prompt-only' : 'auto-eligible';
 		}
+	}
+	const scratch = await ownScratch(scope);
+	if (scratch !== undefined && within(real, scratch) && real !== scratch) {
+		return (await isPathAllowed(real, scope)) ? 'free' : 'deny-secret';
 	}
 	const roots = await realList(scope.roots);
 	const [realProject, ...promptRoots] = roots as [string, ...string[]];

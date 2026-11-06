@@ -96,6 +96,11 @@ describe('buildEnv', () => {
 		assert.ok(!('ANTHROPIC_API_KEY' in env));
 	});
 
+	it('sets YENA_SCRATCH only with a scratch folder', () => {
+		assert.equal(buildEnv({PATH: ''}, paths, oauth).YENA_SCRATCH, undefined);
+		assert.equal(buildEnv({PATH: ''}, paths, oauth, undefined, '/s/scratch/aaaaaaaa').YENA_SCRATCH, '/s/scratch/aaaaaaaa');
+	});
+
 	it('does not mutate the base env', () => {
 		const base = {ANTHROPIC_API_KEY: 'other'};
 		buildEnv(base, paths, oauth);
@@ -241,6 +246,14 @@ describe('buildChatHint', () => {
 		const hint = buildChatHint(paths);
 		assert.ok(hint.startsWith(buildHint(paths)));
 		assert.ok(hint.includes('need the user\'s approval'));
+	});
+
+	it('mentions the scratch folder only when given', () => {
+		const paths = resolvePaths('/data/claude', fakeModule(false));
+		assert.ok(!buildChatHint(paths).includes('scratch'));
+		const hint = buildChatHint(paths, '/tmp/s/scratch/aaaaaaaa');
+		assert.ok(hint.includes('/tmp/s/scratch/aaaaaaaa'));
+		assert.ok(hint.includes('$YENA_SCRATCH'));
 	});
 });
 

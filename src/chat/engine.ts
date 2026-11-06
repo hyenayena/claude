@@ -20,11 +20,12 @@ import {buildPreview} from './preview.js';
 import {makeReveal} from './reveal.js';
 import {bashHighlights} from './risk.js';
 import {makeScrub} from './scrub.js';
+import {createScratch} from './scratch.js';
 import {cliTmpOf, ensureShellTmp, sessionDirOf, shellTmpRoot} from './shell-tmp.js';
 import {createProcessStatus, statusLine} from './process-status.js';
 import {buildSandbox, createSandboxSync, sandboxProblem} from './sandbox.js';
 import {createLeftoverSweeper} from './sandbox-leftovers.js';
-import {readSessionTitle, titleFromPrompt, transcriptFile} from './title.js';
+import {projectSlug, readSessionTitle, titleFromPrompt, transcriptFile} from './title.js';
 import {buildAgentDefinitions} from './agent-defs.js';
 import {routeAgentInput} from './agent-route.js';
 import {createClassifier} from './classifier.js';
@@ -151,10 +152,18 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	} catch (err) {
 		log.warn('shell tmp unavailable', {error: errClass(err)});
 	}
+	const uid = process.getuid?.() ?? 0;
+	const sessionTmp = shellRoot !== undefined ? cliTmpOf(shellRoot, uid) : undefined;
+	const scratch = sessionTmp !== undefined ? createScratch({sessionTmp, uid, log}) : undefined;
+	const sessionIds = new Set<string>(resume ? [resume] : []);
 	const scope = buildScope({
 		...paths,
 		...(env.SSH_AUTH_SOCK && {agentSocket: env.SSH_AUTH_SOCK}),
-		...(shellRoot !== undefined && {sessionTmp: cliTmpOf(shellRoot, process.getuid?.() ?? 0)}),
+		...(sessionTmp !== undefined && {
+			sessionTmp,
+			sessionTasks: () => [...sessionIds].map(id => path.join(sessionTmp, projectSlug(paths.projectDir), id, 'tasks')),
+		}),
+		...(scratch && {scratch: scratch.dir}),
 	});
 	log.info('chat starting', {
 		fresh,
@@ -360,7 +369,8 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 				resume: id,
 				...(routed.model !== undefined && {model: routed.model}),
 				tuning: routed.tuning,
-				env: buildEnv(env, paths, cred, shellRoot),
+				env: buildEnv(env, paths, cred, shellRoot, scratch?.dir),
+				...(scratch && {scratch: scratch.dir}),
 				...(box && {sandbox: box}),
 				...(consoleSdk && io.commandBridge && {
 					consoleServer: createConsoleServer({
@@ -430,6 +440,9 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		},
 	});
 	created = session;
+	session.subscribe(e => {
+		if (e.type === 'ui' && e.event.kind === 'session') sessionIds.add(e.event.sessionId);
+	});
 	session.subscribe(e => {
 		if (e.type !== 'ui' || e.event.kind !== 'session') return;
 		const id = e.event.sessionId;
@@ -517,6 +530,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			titleTimers.clear();
 			session.close();
 			procStatus.clear();
+			scratch?.remove();
 		},
 		flush: () => saving,
 	};

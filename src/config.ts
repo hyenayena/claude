@@ -186,6 +186,7 @@ export function buildEnv(
 	paths: ClaudePaths,
 	cred: Credential,
 	shellTmp?: string,
+	scratch?: string,
 ): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {...base};
 	env.CLAUDE_CONFIG_DIR = paths.configDir;
@@ -201,6 +202,7 @@ export function buildEnv(
 		env.CLAUDE_CODE_TMPDIR = shellTmp;
 		env.npm_config_cache = path.join(cliTmpOf(shellTmp, process.getuid?.() ?? 0), 'npm-cache');
 	}
+	if (scratch !== undefined) env.YENA_SCRATCH = scratch;
 	if (cred.source === 'claude-login') {
 		delete env.ANTHROPIC_API_KEY;
 		delete env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -339,10 +341,13 @@ function projectHint(paths: ClaudePaths): string {
 	);
 }
 
-export function buildChatHint(paths: ClaudePaths): string {
+export function buildChatHint(paths: ClaudePaths, scratch?: string): string {
 	return (
 		buildHint(paths) +
 		projectHint(paths) +
+		(scratch === undefined
+			? ''
+			: ` Scratch files, one-off scripts and command outputs you want to read back go to this chat's scratch folder ${scratch} (also $YENA_SCRATCH; Read, Edit and Write work there without asking; it is removed when the chat ends), never into the md hub or a project; the rest of $TMPDIR and /tmp is shared with other chats and closed to Read, Edit and Write.`) +
 		" Tool calls that run commands or change files (Bash, Edit, Write) need the user's approval in this interface." +
 		' Bash runs as root in the project directory.' +
 		' If the user denies a call, do not retry it or work around the denial; explain what you needed and ask.' +
@@ -409,8 +414,9 @@ export function buildChatOptions(p: {
 	env?: Record<string, string | undefined>;
 	runtimeBin?: string;
 	sandbox?: SandboxSettings;
+	scratch?: string;
 }): Options {
-	const {canUseTool, tuning, consoleServer, sandbox, ...rest} = p;
+	const {canUseTool, tuning, consoleServer, sandbox, scratch, ...rest} = p;
 	const {maxTurns: _askLimit, ...base} = buildOptions(rest);
 	const full = base.env ?? {};
 	const keep = p.cred.passthrough ? ['CLAUDE_CODE_OAUTH_TOKEN'] : Object.keys(full).filter(k => full[k] === p.cred.value && p.cred.value !== '');
@@ -418,7 +424,7 @@ export function buildChatOptions(p: {
 		{
 			...base,
 			env: scrubChatEnv(full, keep),
-			systemPrompt: {type: 'preset', preset: 'claude_code', append: buildChatHint(p.paths) + soulSection(p.paths)},
+			systemPrompt: {type: 'preset', preset: 'claude_code', append: buildChatHint(p.paths, scratch) + soulSection(p.paths)},
 			settings: buildChatSettings(p.paths),
 			...(sandbox && {sandbox}),
 			tools: [...CHAT_TOOLS],
