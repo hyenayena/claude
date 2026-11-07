@@ -116,11 +116,8 @@ type PrefKey =
 	| 'chatThinking'
 	| 'chatFastMode'
 	| 'chatOutputStyle'
-	| 'chatPermissionMode'
-	| 'chatInputMode'
 	| 'chatMcp'
 	| 'chatHooks'
-	| 'chatKeepRunning'
 	| 'chatRouter'
 	| 'chatClassifier'
 	| (typeof TIER_STATE_KEYS)[Tier]['model']
@@ -136,7 +133,6 @@ type PrefSpec = {
 	inline?: SettingInline;
 	parse: (value: string) => ClaudeState[PrefKey];
 	show: (state: ClaudeState) => string;
-	onSet?: (value: string) => void;
 	newChatsOnly?: true;
 };
 
@@ -157,16 +153,6 @@ const FAST_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Off'},
 	{value: 'on', label: 'On', description: 'faster output on supported models'},
 ];
-const MODE_OPTIONS: SettingOption[] = [
-	{value: '', label: 'Default', description: 'edits and commands ask first'},
-	{value: 'acceptEdits', label: 'Accept edits', description: 'project edits go through without asking'},
-	{value: 'plan', label: 'Plan', description: 'yena researches and proposes a plan first, no edits'},
-	{value: 'auto', label: 'Auto', description: 'a classifier approves or denies, asks when unsure'},
-];
-const INPUT_OPTIONS: SettingOption[] = [
-	{value: '', label: 'Normal'},
-	{value: 'vim', label: 'Vim', description: 'Esc for NORMAL mode, i/a/o to type'},
-];
 const MCP_OPTIONS: SettingOption[] = [
 	{value: '', label: 'On', description: 'servers from the Claude Code config; each call asks'},
 	{value: 'off', label: 'Off'},
@@ -174,10 +160,6 @@ const MCP_OPTIONS: SettingOption[] = [
 const HOOK_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Off'},
 	{value: 'on', label: 'On', description: 'hooks from settings files run (yena\'s path policy stays)'},
-];
-const KEEP_OPTIONS: SettingOption[] = [
-	{value: '', label: 'Off'},
-	{value: 'on', label: 'On', description: 'the chat finishes its work after you leave yena'},
 ];
 const ROUTER_OPTIONS: SettingOption[] = [
 	{value: '', label: 'Off'},
@@ -222,10 +204,7 @@ const STYLE_OPTIONS: SettingOption[] = [
 ];
 
 export type ChatSettingsHooks = {
-	applyMode?: (mode: 'default' | 'acceptEdits' | 'plan' | 'auto') => void;
-	applyInputMode?: (mode: 'normal' | 'vim') => void;
 	applyLive?: (patch: LivePatch) => void;
-	applyKeep?: (keep: boolean) => void;
 };
 
 export function chatSettings(
@@ -235,15 +214,6 @@ export function chatSettings(
 	hooks: ChatSettingsHooks = {},
 ): Setting[] {
 	const specs: PrefSpec[] = [
-		{
-			key: 'chatPermissionMode',
-			label: 'Permission mode',
-			description: 'How tool calls are approved',
-			options: MODE_OPTIONS,
-			parse: v => fromOptions<'acceptEdits' | 'plan' | 'auto'>(MODE_OPTIONS, v),
-			show: s => s.chatPermissionMode ?? '',
-			onSet: v => hooks.applyMode?.(v === '' ? 'default' : (v as 'acceptEdits' | 'plan' | 'auto')),
-		},
 		{
 			key: 'chatRouter',
 			label: 'Model router',
@@ -322,24 +292,6 @@ export function chatSettings(
 			parse: v => fromOptions<'on'>(HOOK_OPTIONS, v),
 			show: s => s.chatHooks ?? '',
 		},
-		{
-			key: 'chatKeepRunning',
-			label: 'Keep working after exit',
-			description: 'Let the chat finish its work in the background when you leave yena',
-			options: KEEP_OPTIONS,
-			parse: v => fromOptions<'on'>(KEEP_OPTIONS, v),
-			show: s => s.chatKeepRunning ?? '',
-			onSet: v => hooks.applyKeep?.(v === 'on'),
-		},
-		{
-			key: 'chatInputMode',
-			label: 'Input mode',
-			description: 'How the chat input edits text',
-			options: INPUT_OPTIONS,
-			parse: v => fromOptions<'vim'>(INPUT_OPTIONS, v),
-			show: s => s.chatInputMode ?? '',
-			onSet: v => hooks.applyInputMode?.(v === 'vim' ? 'vim' : 'normal'),
-		},
 	];
 	return specs.map(spec => ({
 		key: spec.key,
@@ -352,7 +304,6 @@ export function chatSettings(
 			const stored = spec.parse(value);
 			await store.update({[spec.key]: stored});
 			log.info('chat setting set', {key: spec.key, value: value === '' ? 'default' : value});
-			spec.onSet?.(value);
 			const patch = livePatch(spec.key, value);
 			if (patch) hooks.applyLive?.(patch);
 		},

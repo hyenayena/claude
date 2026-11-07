@@ -394,7 +394,7 @@ export function globBase(pattern: string, from: string): string | undefined {
 export function createCanUseTool(scope: Scope): CanUseTool {
 	const notAvailable = (name: string) => ({
 		behavior: 'deny' as const,
-		message: `Tool "${name}" is not available in "claude ask" (read-only mode).`,
+		message: `Tool "${name}" is not available in "chat ask" (read-only mode).`,
 	});
 	const pathDenied = {
 		behavior: 'deny' as const,

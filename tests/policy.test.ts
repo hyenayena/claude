@@ -228,7 +228,7 @@ describe('canUseTool', () => {
 		for (const name of ['Bash', 'Edit', 'Write', 'WebFetch', 'Agent', 'mcp__x']) {
 			assert.deepEqual(await run(name, {}), {
 				behavior: 'deny',
-				message: `Tool "${name}" is not available in "claude ask" (read-only mode).`,
+				message: `Tool "${name}" is not available in "chat ask" (read-only mode).`,
 			});
 		}
 	});

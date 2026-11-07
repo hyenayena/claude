@@ -74,7 +74,7 @@ export const failureMessage = (
 		case 'usage-limit': {
 			const saved = chat
 				? 'The chat is saved; send a message after the reset to continue.'
-				: 'The session is saved; run "claude ask <text>" after the reset to continue.';
+				: 'The session is saved; run "chat ask <text>" after the reset to continue.';
 			const info = p.rateLimit;
 			if (info?.resetsAt !== undefined) {
 				const label = info.type ? ` (${LABELS[info.type]})` : '';
@@ -93,10 +93,10 @@ export const failureMessage = (
 				: 'The account cannot be billed (billing_error). Check the plan or credits, then run the command again; the session is saved.';
 		case 'context': {
 			if (!chat) {
-				return 'The conversation no longer fits in the model\'s context. Run "claude chat" then "claude compact" to summarise it, or "claude ask --new <text>" to start over. The session is saved.';
+				return 'The conversation no longer fits in the model\'s context. Run "chat continue" then "chat compact" to summarise it, or "chat ask --new <text>" to start over. The session is saved.';
 			}
 			const failed = /automatic compaction failed/i.test(p.cliText ?? '') ? ' Automatic compaction already failed.' : '';
-			return `The conversation no longer fits in the model's context. Run "claude compact" in the console to summarise it and continue, or "chat" to start a new chat. The chat is saved.${failed}`;
+			return `The conversation no longer fits in the model's context. Run "chat compact" in the console to summarise it and continue, or "chat" to start a new chat. The chat is saved.${failed}`;
 		}
 	}
 };

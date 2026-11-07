@@ -7,10 +7,8 @@ import type {CommandContext} from '../../../src/api.js';
 import {createClaude} from '../src/commands.js';
 import {API_KEY_ONLY} from '../src/credentials.js';
 import {hostVault} from '../src/vault.js';
-import type {ChatUi} from '../src/chat/command.js';
 import type {Origin, OpenEnv, OpenRequest} from '../src/deps/chat.js';
 import type {ChatQueryFn, QueryFn} from '../src/types.js';
-import {uiHelpers} from './helpers/chat-ui.js';
 import {fakeCredentials, seed} from './helpers/fake-credentials.js';
 import {makeFakeLog} from './helpers/fake-log.js';
 
@@ -46,7 +44,6 @@ const setup = async (o: {key?: boolean; env?: NodeJS.ProcessEnv; login?: boolean
 				})()) as unknown as QueryFn;
 		},
 		loadChatQuery: async () => chatQuery,
-		loadUi: async () => ({...uiHelpers, createChatElement: () => ({})}) as ChatUi,
 		login: {probe: async () => (o.login ? {loggedIn: true, method: 'claude.ai'} : undefined)},
 		loadRetired: async () => undefined,
 	});

@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
-import {uiHelpers} from '../helpers/chat-ui.js';
+import {chatShim} from '../helpers/chat-shim.js';
 import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import net from 'node:net';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach, test} from 'node:test';
 import type {CommandContext} from '../../../../src/api.js';
-import type {ChatUi} from '../../src/chat/command.js';
-import {createClaudeCommands, type ClaudeDeps} from '../../src/commands.js';
+import {createClaude, type ClaudeDeps} from '../../src/commands.js';
 import {createDecoder, encodeFrame, type ClientFrame, type RunnerFrame} from '../../src/runner/protocol.js';
 import {runnerSocketPath} from '../../src/runner/spawn.js';
 import {acquireLock, lockPath} from '../../src/sessions/lock.js';
@@ -16,7 +15,6 @@ import type {ChatQueryFn, QueryFn} from '../../src/types.js';
 
 const TOKEN = 'sk-ant-oat-TESTVALUE0123456789abcdef';
 const SID = '11111111-aaaa-4bbb-8ccc-222222222222';
-type Props = Parameters<ChatUi['createChatElement']>[0];
 
 let cleanup: Array<() => void> = [];
 afterEach(() => {
@@ -56,42 +54,20 @@ const setup = async (opts: {deps?: Partial<ClaudeDeps>} = {}) => {
 		rmSync(dataDir, {recursive: true, force: true});
 		rmSync(sessionDir, {recursive: true, force: true});
 	});
-	const printed: string[] = [];
-	const props: Props[] = [];
-	const waits: Array<Parameters<NonNullable<ChatUi['createWaitingElement']>>[0]> = [];
-	const scripts: Array<(close: () => void) => void | Promise<void>> = [];
-	let mounts = 0;
-	const ctx: CommandContext = {
-		print: t => printed.push(t),
-		clear: () => {},
-		exit: () => {},
-		mount: async build => {
-			const n = mounts++;
-			let close!: () => void;
-			const done = new Promise<void>(r => (close = r));
-			build({close});
-			void Promise.resolve(scripts[n] ? scripts[n]!(close) : close());
-			await done;
-		},
-	};
 	const query = (() => (async function* () {})()) as unknown as ChatQueryFn;
-	const chat = createClaudeCommands({
+	const {provider} = createClaude({
 		dataDir,
 		env: {CLAUDE_CODE_OAUTH_TOKEN: TOKEN},
 		loadQuery: async () => (() => { throw new Error('unused'); }) as unknown as QueryFn,
 		loadChatQuery: async () => query,
-		loadUi: async () => ({
-			...uiHelpers,
-			createChatElement: p => (props.push(p), {}),
-			createWaitingElement: p => (waits.push(p), {}),
-		}),
 		login: {probe: async () => undefined},
 		sessionDir: () => sessionDir,
 		shellTmp: () => mkdtempSync(join(tmpdir(), 'route-h-shell-')),
-		chatTiming: {waitPollMs: 5, remote: {connectTimeoutMs: 2000}},
+		chatTiming: {remote: {connectTimeoutMs: 2000}},
 		...opts.deps,
-	}).find(c => c.name === 'claude')!;
-	return {chat, ctx, printed, props, waits, scripts, dataDir, sessionDir};
+	});
+	const shim = chatShim(provider);
+	return {chat: shim.chat, ctx: {} as never, printed: shim.printed, props: shim.props, waits: shim.waits, scripts: shim.scripts, dataDir, sessionDir, mounts: shim.mounts};
 };
 
 const hold = (dir: string, where: 'local' | 'runner', socket?: string) => {
@@ -141,13 +117,13 @@ test('a bye reason during the attach is scrubbed before it reaches the user', as
 	);
 });
 
-test('attached elsewhere is turned into a hint that names claude stop', async () => {
+test('attached elsewhere is turned into a hint that names chat stop', async () => {
 	const t = await setup();
 	await startRunner(t.sessionDir, (s, f) => {
 		if (f.type === 'hello') s.write(encodeFrame({v: 1, type: 'bye', reason: 'attached elsewhere'} as RunnerFrame));
 	});
 	hold(t.sessionDir, 'runner', runnerSocketPath(t.sessionDir));
-	await assert.rejects(async () => t.chat.run(['chat'], t.ctx), /claude stop/);
+	await assert.rejects(async () => t.chat.run(['chat'], t.ctx), /chat stop/);
 });
 
 test('a bye in the middle of the chat prints a scrubbed notice', async () => {

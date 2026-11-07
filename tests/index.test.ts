@@ -12,14 +12,13 @@ const setup = async () => {
 	return {command: commands.find(c => c.name === 'claude')!, commands, printed, ctx};
 };
 
-test('plugin returns the autostarted chat command, the claude command and fix', async () => {
+test('plugin returns only the claude command, with the Claude settings tab', async () => {
 	const {commands} = await setup();
 	assert.deepEqual(
 		commands.map(c => c.name),
-		['chat', 'claude', 'fix'],
+		['claude'],
 	);
-	assert.equal(commands[0]!.autostart, true);
-	assert.equal(commands[0]!.settings?.title, 'Chat');
+	assert.equal(commands[0]!.settings?.title, 'Claude');
 });
 
 test('ping prints pong', async () => {
@@ -31,7 +30,7 @@ test('ping prints pong', async () => {
 test('no subcommand shows core help, or throws the usage error without it', async () => {
 	const {command, ctx} = await setup();
 	await assert.rejects(async () => command.run([], ctx), {
-		message: 'Usage: claude <ping|ask|chat|new|start|resume|rewind|fork|rename|export|copy|memory|code|tasks|mcp|session|sessions|stop|tier|auth|help|<Claude Code command>>',
+		message: 'Usage: claude <ping|memory|code|tier|auth|help>',
 	});
 	const paths: (string[] | undefined)[] = [];
 	await command.run([], {...ctx, showHelp: path => paths.push(path)});
@@ -45,12 +44,11 @@ test('claude declares no help subcommand of its own', async () => {
 	assert.equal(command.subcommands!.some(s => s.name === 'help'), false);
 });
 
-test('an unknown subcommand is a Claude Code command and needs an open chat', async () => {
+test('an unknown subcommand is an error that does not echo control bytes', async () => {
 	const {command, ctx} = await setup();
-	await assert.rejects(async () => command.run(['nope'], ctx), {
-		message: 'No chat is open. Claude Code commands run in the open chat; start one with "chat".',
-	});
-	await assert.rejects(async () => command.run(['bad\u001bname'], ctx), /Unknown subcommand/);
+	await assert.rejects(async () => command.run(['nope'], ctx), {message: 'Unknown subcommand "nope". See "claude help"'});
+	await assert.rejects(async () => command.run(['ask', 'x'], ctx), /Unknown subcommand "ask"/);
+	await assert.rejects(async () => command.run(['bad\u001bname'], ctx), (err: Error) => /^Unknown subcommand "/.test(err.message) && !err.message.includes("\u001b"));
 });
 
 test('a host without log falls back to a noop logger', async () => {

@@ -22,27 +22,6 @@ test('withPatch keeps the next query in step with live changes', () => {
 	assert.deepEqual(cur, {tuning: {thinking: 'disabled', outputStyle: 'Explanatory'}});
 });
 
-test('the keep-working setting defaults to Off, stores only on, and tells the open chat', async () => {
-	const state: ClaudeState = {};
-	const applied: boolean[] = [];
-	const logged: Array<Record<string, unknown> | undefined> = [];
-	const log = {error() {}, warn() {}, info: (_m: string, f?: Record<string, unknown>) => void logged.push(f), debug() {}, child: () => log, addRedactor() {}} as unknown as Logger;
-	const store = {read: async () => ({...state}), update: async (p: Partial<ClaudeState>) => void Object.assign(state, p)};
-	const setting = chatSettings(store, () => true, log, {applyKeep: k => applied.push(k)}).find(s => s.key === 'chatKeepRunning')!;
-	assert.equal(setting.label, 'Keep working after exit');
-	assert.deepEqual(setting.options.map(o => o.value), ['', 'on']);
-	assert.equal(await setting.get(), '');
-	await setting.set('on');
-	assert.equal(state.chatKeepRunning, 'on');
-	assert.equal(await setting.get(), 'on');
-	await setting.set('');
-	assert.equal(await setting.get(), '');
-	assert.deepEqual(applied, [true, false]);
-	await assert.rejects(async () => setting.set('maybe'));
-	assert.deepEqual(applied, [true, false]);
-	assert.ok(logged.some(f => f?.key === 'chatKeepRunning' && f.value === 'on'));
-});
-
 test('router, classifier and tier settings store only what they mean and show the tier defaults', async () => {
 	const state: ClaudeState = {};
 	const log = {error() {}, warn() {}, info() {}, debug() {}, child: () => log, addRedactor() {}} as unknown as Logger;
@@ -51,7 +30,8 @@ test('router, classifier and tier settings store only what they mean and show th
 	const settings = chatSettings(store, () => true, log, {applyLive: p => live.push(p)});
 	const by = (k: string) => settings.find(s => s.key === k)!;
 	const keys = settings.map(s => s.key);
-	assert.deepEqual(keys.slice(0, 4), ['chatPermissionMode', 'chatRouter', 'chatClassifier', 'tierLightModel']);
+	assert.deepEqual(keys.slice(0, 3), ['chatRouter', 'chatClassifier', 'tierLightModel']);
+	for (const moved of ['chatPermissionMode', 'chatKeepRunning', 'chatInputMode']) assert.equal(keys.includes(moved), false, moved);
 	assert.equal(by('chatRouter').label, 'Model router');
 	assert.match(by('chatRouter').description!, /^Picks the model of the chat and its agents by tier/);
 	assert.match(by('chatClassifier').description!, /only with the model router on/);

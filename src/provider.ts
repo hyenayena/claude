@@ -25,13 +25,12 @@ import {readHolder} from './sessions/lock.js';
 import {stopHolder} from './sessions/stop.js';
 import {listPrompts, listSessions, readHistory, readTranscriptDetail} from './chat/history.js';
 import {readSessionTitle, transcriptFile} from './chat/title.js';
-import {openSource, type ClaudeSource} from './chat/open.js';
-import type {ChatOpen} from './chat/command.js';
+import {openSource, type ChatOpen, type ClaudeSource} from './chat/open.js';
 import {isInteractive, makeScrub, type AskEnv, type ChatProvider, type ChatSession, type Origin, type OpenedChat, type OpenEnv, type OpenRequest, type RunningInfo} from './deps/chat.js';
 import type {Credential, CredentialInfo, QueryFn} from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
-const STOP_USAGE = 'Usage: claude stop [session]';
+const STOP_USAGE = 'Usage: chat stop [session]';
 
 const LIMIT_KINDS = new Set(['usage-limit', 'rate-limit', 'billing', 'context']);
 
@@ -176,14 +175,19 @@ export const createClaudeProvider = (hub: SessionHub, deps: ClaudeDeps): ChatPro
 		open: async (req: OpenRequest, io: OpenEnv): Promise<OpenedChat | undefined> => {
 			const keyOnly = keyOnlyFor(req.origin);
 			const state = await store.read();
+			const model = req.model ?? state.chatModel;
 			const open: ChatOpen = {
 				fresh: req.fresh,
-				...(req.attach !== undefined && {attach: req.attach}),
-				...(req.model !== undefined && {model: req.model}),
+				// A key-only open never attaches to a background runner; a busy one is refused, not waited for.
+				...(req.attach !== undefined && {attach: req.attach && !keyOnly}),
+				...(keyOnly && req.attach === true && {noWait: true}),
+				...(model !== undefined && {model}),
 				tuning: tuningFromState(state),
 				...(req.resume && {resume: req.resume}),
 				...(req.fork && {fork: true}),
 				...(req.resumeAt && {resumeAt: req.resumeAt}),
+				...(req.historyUntil && {historyUntil: req.historyUntil}),
+				...(req.draft && {draft: req.draft}),
 				...(req.mode && {mode: req.mode}),
 				...(req.keep !== undefined && {keep: req.keep}),
 				...(keyOnly && {apiKeyOnly: true}),
@@ -325,6 +329,7 @@ export const createClaudeProvider = (hub: SessionHub, deps: ClaudeDeps): ChatPro
 					await source.flush();
 				} finally {
 					if (hub.openSession === session) {
+						hub.openKeyOnly = false;
 						hub.openSession = undefined;
 						hub.applyOpenChat = undefined;
 						hub.setOpenTier = undefined;

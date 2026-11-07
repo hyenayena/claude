@@ -1,22 +1,79 @@
-import type {OpenEnv} from '../deps/chat.js';
+import type {CommandContext, Logger} from '../../../../src/api.js';
+import type {ChatMode, OpenEnv, Tier} from '../deps/chat.js';
 import {sessionSubscription} from '../session-accounts.js';
 import {resolvePaths, type ClaudePaths} from '../config.js';
 import {accountsCtx, liveSecrets, makeRedactor, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
 import {pinnedAccount} from '../accounts.js';
-import {clip, errClass, noopLog} from '../log.js';
+import {errClass, noopLog} from '../log.js';
 import type {ClaudeState, Credential} from '../types.js';
-import {makeReveal, makeScrub, type Tier} from '../deps/chat.js';
-import type {LivePatch} from '../chat-prefs.js';
+import {makeReveal, makeScrub} from '../deps/chat.js';
+import type {ChatTuning, LivePatch} from '../chat-prefs.js';
+import type {LoginProbe} from '../claude-login.js';
+import type {ClaudeVault} from '../vault.js';
+import type {spawnRunner} from '../runner/spawn.js';
+import type {ChatQueryFn, CredentialInfo} from '../types.js';
+import type {ConsoleSdk} from './console-tools.js';
+import type {EngineDeps} from './engine.js';
 import {createChatEngine} from './engine.js';
 import type {ClaudeChatHandle} from './handle.js';
 import {RemoteChatSession} from './remote-session.js';
 import {ensureShellTmp} from './shell-tmp.js';
 import {createShellWatch, type ShellWatch} from './shell-watch.js';
 import {createPinWatch, type PinWatch} from './pin-watch.js';
-import type {ChatOpen, ChatRoute, ChatRunDeps, ChatUi} from './command.js';
+
+export type ChatRoute =
+	| {kind: 'local'; release: () => void}
+	| {kind: 'attach'; socketPath: string; release: () => void}
+	| {kind: 'spawn'; sessionDir: string; release: () => void}
+	| {kind: 'wait'; message: string};
+
+export type ChatRouteRequest = {
+	attach: boolean;
+	keep: boolean;
+};
+
+export type ChatRunDeps = {
+	dataDir: string;
+	env: NodeJS.ProcessEnv;
+	moduleDir?: string;
+	log?: Logger;
+	loadChatQuery: () => Promise<ChatQueryFn>;
+	loadConsoleSdk?: () => Promise<ConsoleSdk>;
+	registerAbort?: (c: AbortController) => () => void;
+	store: {read: () => Promise<ClaudeState>; update: (patch: Partial<ClaudeState>) => Promise<unknown>};
+	showNoticeOnce: (cred: CredentialInfo, ctx: Pick<CommandContext, 'print'>) => Promise<void>;
+	probeLogin?: LoginProbe;
+	isMissingModule: (err: unknown) => boolean;
+	acquire: () => () => void;
+	onRulesChanged?: () => void;
+	shellTmp?: () => string;
+	turnLock?: EngineDeps['turnLock'];
+	route?: (req: ChatRouteRequest) => ChatRoute;
+	peek?: () => Promise<{free: boolean; title?: string}>;
+	spawnRunner?: typeof spawnRunner;
+	remote?: {rpcTimeoutMs?: number; connectTimeoutMs?: number};
+	vault?: ClaudeVault;
+	redactExtra?: (text: string) => string;
+};
+
+export type ChatOpen = {
+	fresh: boolean;
+	model?: string;
+	tuning?: ChatTuning;
+	resume?: string;
+	fork?: boolean;
+	resumeAt?: string;
+	apiKeyOnly?: boolean;
+	historyUntil?: string;
+	draft?: string;
+	attach?: boolean;
+	// A busy session is refused with its message instead of waiting for it.
+	noWait?: boolean;
+	mode?: ChatMode;
+	keep?: boolean;
+};
 
 export type ClaudeSource = {
-	chatUi: ChatUi;
 	session: ClaudeChatHandle;
 	cred: Credential;
 	scrub: (s: string) => string;
@@ -28,10 +85,6 @@ export type ClaudeSource = {
 	applyLive: (patch: LivePatch) => void;
 	setTier: (tier: Tier | 'auto') => void;
 	initialModel: string | undefined;
-	draft: string | undefined;
-	send?: string;
-	fork: boolean;
-	historyUntil: string | undefined;
 	remote: RemoteChatSession | undefined;
 	watch: ShellWatch;
 	pin: PinWatch;
@@ -49,15 +102,13 @@ const resolveRoute = async (open: ChatOpen, io: OpenEnv, deps: ChatRunDeps): Pro
 	for (;;) {
 		const route = deps.route!({attach: open.attach === true, keep: open.keep === true});
 		if (route.kind !== 'wait') return route;
-		const ui = deps.peek ? await deps.loadUi() : undefined;
-		if (!deps.peek || !ui?.createWaitingElement) throw new Error(route.message);
+		if (!deps.peek || open.noWait) throw new Error(route.message);
 		if (!(await io.wait(deps.peek))) return undefined;
 	}
 };
 
 const openLocal = async (open: ChatOpen, io: OpenEnv, deps: ChatRunDeps): Promise<Base> => {
-	const {fresh, model, tuning, resume: chosen, fork, resumeAt, historyUntil, draft} = open;
-	let ui: ChatUi | undefined;
+	const {fresh, model, tuning, resume: chosen, fork, resumeAt} = open;
 	const engine = await createChatEngine(
 		{
 			fresh,
@@ -72,9 +123,6 @@ const openLocal = async (open: ChatOpen, io: OpenEnv, deps: ChatRunDeps): Promis
 		{
 			...deps,
 			onCredential: cred => deps.showNoticeOnce(cred, {print: io.print}),
-			preload: async () => {
-				ui = await deps.loadUi();
-			},
 		},
 		{
 			...(io.commandBridge && {commandBridge: io.commandBridge}),
@@ -84,7 +132,6 @@ const openLocal = async (open: ChatOpen, io: OpenEnv, deps: ChatRunDeps): Promis
 	);
 	const {state} = engine;
 	return {
-		chatUi: ui!,
 		session: engine.session,
 		cred: engine.cred,
 		scrub: engine.scrub,
@@ -96,10 +143,6 @@ const openLocal = async (open: ChatOpen, io: OpenEnv, deps: ChatRunDeps): Promis
 		applyLive: engine.applyLive,
 		setTier: engine.setTier,
 		initialModel: model !== undefined ? model : !fresh ? state.lastModel : undefined,
-		draft,
-		...(open.send && {send: open.send}),
-		fork: fork === true,
-		historyUntil,
 		remote: undefined,
 		close: engine.close,
 		flush: engine.flush,
@@ -124,17 +167,6 @@ const openRemote = async (open: ChatOpen, route: Extract<ChatRoute, {kind: 'atta
 	const redact = makeRedactor(cred, liveSecrets(credOpts), deps.redactExtra);
 	const scrub = makeScrub(redact);
 	await deps.showNoticeOnce(cred, {print: io.print});
-	let chatUi: ChatUi;
-	try {
-		chatUi = await deps.loadUi();
-	} catch (err) {
-		const raw = err instanceof Error ? err.message : String(err);
-		log.error('chat dependencies failed to load', {missingModule: deps.isMissingModule(err), err: clip(scrub(raw))});
-		if (deps.isMissingModule(err)) {
-			throw new Error('The chat interface dependencies (ink, react) are not installed in the yena host. Run "./yena install".');
-		}
-		throw new Error(`Claude request failed: ${scrub(raw)}`);
-	}
 	const keep = open.keep === true;
 	const state = await deps.store.read();
 	const paths = resolvePaths(deps.dataDir, deps.moduleDir);
@@ -192,14 +224,13 @@ const openRemote = async (open: ChatOpen, route: Extract<ChatRoute, {kind: 'atta
 		const raw = err instanceof Error ? err.message : String(err);
 		throw new Error(
 			raw === 'attached elsewhere'
-				? 'The background chat is attached to another yena. Close it there or run "claude stop".'
+				? 'The background chat is attached to another yena. Close it there or run "chat stop".'
 				: scrub(raw),
 		);
 	});
 	if (!spawned) log.info('chat remote', {action: 'attached'});
 	remote.refreshCommands();
 	return {
-		chatUi,
 		session: remote,
 		cred,
 		scrub,
@@ -211,10 +242,6 @@ const openRemote = async (open: ChatOpen, route: Extract<ChatRoute, {kind: 'atta
 		applyLive: patch => remote.applyLive(patch),
 		setTier: tier => remote.setTier(tier),
 		initialModel: spawned ? open.model : remote.model,
-		draft: spawned ? open.draft : undefined,
-		...(open.send && {send: open.send}),
-		fork: spawned && open.fork === true,
-		historyUntil: spawned ? open.historyUntil : undefined,
 		remote,
 		close: () => remote.close(),
 		flush: () => Promise.resolve(),
@@ -264,6 +291,11 @@ export const openSource = async (open: ChatOpen, io: OpenEnv, deps: ChatRunDeps)
 	}
 	const route = await resolveRoute(open, io, deps);
 	if (!route) return undefined;
+	// Fail closed: a key-only open never joins a runner that may run on a login.
+	if (open.apiKeyOnly && route.kind === 'attach') {
+		route.release();
+		throw new Error('A background chat is running; an unattended run does not join it. Close it with "chat stop" first.');
+	}
 	let held: Exclude<ChatRoute, {kind: 'wait'}> = route;
 	try {
 		let base: Base;

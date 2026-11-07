@@ -94,7 +94,7 @@ describe('failureMessage', () => {
 		);
 		assert.equal(
 			failureMessage('usage-limit', { rateLimit: { ...info, type: undefined }, surface: 'ask', clock: c }),
-			'Usage limit reached, resets at 15:00 UTC (in 2h 14m). The session is saved; run "claude ask <text>" after the reset to continue.',
+			'Usage limit reached, resets at 15:00 UTC (in 2h 14m). The session is saved; run "chat ask <text>" after the reset to continue.',
 		);
 	});
 	it('usage limit without info collapses and caps CLI text', () => {
@@ -128,7 +128,7 @@ describe('failureMessage', () => {
 		const chat = failureMessage('context', { surface: 'chat', clock: c });
 		assert.equal(
 			chat,
-			'The conversation no longer fits in the model\'s context. Run "claude compact" in the console to summarise it and continue, or "chat" to start a new chat. The chat is saved.',
+			'The conversation no longer fits in the model\'s context. Run "chat compact" in the console to summarise it and continue, or "chat" to start a new chat. The chat is saved.',
 		);
 		const failed = failureMessage('context', {
 			cliText: 'Prompt is too long · automatic compaction failed: boom',
@@ -139,7 +139,7 @@ describe('failureMessage', () => {
 		assert.ok(!failed.includes('boom'));
 		assert.equal(
 			failureMessage('context', { surface: 'ask', clock: c }),
-			'The conversation no longer fits in the model\'s context. Run "claude chat" then "claude compact" to summarise it, or "claude ask --new <text>" to start over. The session is saved.',
+			'The conversation no longer fits in the model\'s context. Run "chat continue" then "chat compact" to summarise it, or "chat ask --new <text>" to start over. The session is saved.',
 		);
 	});
 });

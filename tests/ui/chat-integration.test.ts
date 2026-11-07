@@ -3,21 +3,12 @@ import {existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync} 
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach, test} from 'node:test';
-import React, {type ReactElement} from 'react';
-void React;
 import type {CanUseTool, Options} from '@anthropic-ai/claude-agent-sdk';
 import {ChatSession} from '../../src/chat/chat-session.js';
 import {createChatCanUseTool} from '../../src/chat/permission-bridge.js';
-import {makeReveal, makeScrub} from '../../src/deps/chat.js';
 import {buildScope} from '../../src/policy.js';
-import {createChatElement} from '../../src/deps/chat-ui.js';
-import {mountHarness} from '../helpers/harness.js';
 
-const reveal = makeReveal(s => s);
-const scrub = makeScrub(s => s);
 const ARM = 40;
-const ESC = '\u001b';
-const SGR = new RegExp(`${ESC}\\[[0-9;]*m`, 'g');
 const wait = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 type Script = (can: CanUseTool, signal: AbortSignal) => Promise<unknown>;
@@ -75,67 +66,39 @@ function build(script: Script) {
 		buildOptions: (_ac, _resume, prompter) =>
 			({canUseTool: createChatCanUseTool({scope, projectDir: proj, mdDir: md, prompter})}) as Options,
 	});
-	const printed: string[] = [];
-	const h = mountHarness(
-		createChatElement({
-			controller: session,
-			print: s => printed.push(s.replace(SGR, '').trim()),
-			close: () => {},
-			scrub,
-			reveal,
-			armMs: ARM,
-			projectDir: proj,
-		}) as ReactElement,
-	);
-	cleanup.push(() => {
-		h.unmount();
-		session.close();
-	});
-	return {session, h, printed, results, proj, state};
+	cleanup.push(() => session.close());
+	return {session, results, proj, state};
 }
 
 const toolCall = (can: CanUseTool, signal: AbortSignal, name: string, input: Record<string, unknown>, id: string) =>
 	can(name, input, {signal, toolUseID: id} as never);
 
-test('y at the prompt resolves the bridge call as allow and prints one audit line', async () => {
+const settle = async (t: {session: ChatSession}, count: number): Promise<void> => {
+	for (let i = 0; i < 100 && t.session.pendingPermissions.length < count; i++) await wait(10);
+};
+
+const answer = (t: {session: ChatSession}, index: number, decision: Parameters<ChatSession['answerPermission']>[1]): void => {
+	assert.equal(t.session.answerPermission(t.session.pendingPermissions[index]!.id, decision), true);
+};
+
+test('allowing a pending request resolves the bridge call as allow', async () => {
 	const t = build((can, signal) => toolCall(can, signal, 'Bash', {command: 'echo hi'}, 'u1'));
-	await wait(50);
-	t.h.press('draft text');
-	await wait(30);
 	t.session.send('go');
-	await wait(ARM + 150);
+	await settle(t, 1);
 	assert.equal(t.session.pendingPermissions.length, 1);
-	assert.doesNotMatch(t.h.lastFrame(), /draft text/);
-	t.h.press('y');
+	answer(t, 0, {kind: 'allow'});
 	await wait(120);
 	assert.equal((t.results[0] as {behavior: string}).behavior, 'allow');
-	assert.deepEqual(t.printed.filter(p => /^Allowed Bash/.test(p)), ['Allowed Bash: echo hi']);
-	assert.match(t.h.lastFrame(), /draft text/);
+	assert.equal(t.session.pendingPermissions.length, 0);
 });
 
-test('a double-tapped Enter before arming approves neither of two queued prompts', async () => {
-	const t = build(async (can, signal) =>
-		Promise.all([
-			toolCall(can, signal, 'Bash', {command: 'echo one'}, 'a'),
-			toolCall(can, signal, 'Bash', {command: 'echo two'}, 'b'),
-		]),
-	);
-	t.session.send('go');
-	await wait(30);
-	t.h.press('\r');
-	t.h.press('\r');
-	await wait(10);
-	assert.equal(t.session.pendingPermissions.length, 2);
-});
-
-test('unmounting with a prompt pending resolves the bridge call as a cancel and closes the query', async () => {
+test('closing the session with a prompt pending resolves the bridge call as a cancel and closes the query', async () => {
 	let pending: Promise<unknown> | undefined;
 	const t = build((can, signal) => (pending = toolCall(can, signal, 'Bash', {command: 'echo pend'}, 'p')));
 	t.session.send('go');
-	await wait(ARM + 150);
+	await settle(t, 1);
 	assert.equal(t.session.pendingPermissions.length, 1);
-	t.h.unmount();
-	await wait(50);
+	t.session.close();
 	const settled = await Promise.race([pending, wait(500).then(() => 'still pending')]);
 	assert.equal((settled as {behavior: string}).behavior, 'deny');
 	assert.match((settled as {message: string}).message, /cancelled/);
@@ -158,33 +121,27 @@ test('accept-edits mode auto-accepts eligible writes only; guarded and linked ta
 		}
 		return out;
 	});
-	await wait(100);
-	t.h.press(`${ESC}[Z`);
-	await wait(ARM + 60);
-	t.h.press('\r');
-	await wait(60);
+	t.session.setMode('acceptEdits');
 	assert.equal(t.session.mode, 'acceptEdits');
 	t.session.send('go');
-	await wait(ARM + 250);
+	await settle(t, 1);
 	const pendingPaths = t.session.pendingPermissions.map(r => (r.kind === 'tool' ? r.path : undefined));
 	assert.deepEqual(pendingPaths, [join(t.proj, 'link-pkg')]);
-	t.h.press('n');
+	answer(t, 0, {kind: 'deny'});
 	await wait(150);
 	assert.deepEqual(t.results[0], ['new.txt:allow', 'CLAUDE.local.md:deny', 'link-claude:deny', 'link-pkg:deny']);
 	assert.ok(!existsSync(join(t.proj, 'new.txt')));
-	assert.ok(t.printed.some(p => /^Auto-accepted Write: .*new\.txt/.test(p)));
-	assert.ok(t.printed.some(p => /^Blocked Write: .*CLAUDE\.local\.md/.test(p)));
 });
 
-test('a write through a directory symlink shows where it resolves and audits both paths', async () => {
+test('a write through a directory symlink carries where it resolves', async () => {
 	const t = build((can, signal) =>
 		toolCall(can, signal, 'Write', {file_path: join(t.proj, 'dirlink', 'n.txt'), content: 'a\n'}, 'w'),
 	);
 	t.session.send('go');
-	await wait(ARM + 250);
-	assert.match(t.h.lastFrame(), /resolves to: .*realdir\/n\.txt/);
-	t.h.press('y');
+	await settle(t, 1);
+	const request = t.session.pendingPermissions[0]!;
+	assert.match(request.kind === 'tool' ? (request.resolvedPath ?? '') : '', /realdir\/n\.txt$/);
+	answer(t, 0, {kind: 'allow'});
 	await wait(150);
 	assert.equal((t.results[0] as {behavior: string}).behavior, 'allow');
-	assert.ok(t.printed.some(p => /^Allowed Write: .*realdir\/n\.txt$/.test(p) && !p.includes('\n')), t.printed.join('|'));
 });

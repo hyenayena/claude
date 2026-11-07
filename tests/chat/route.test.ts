@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
-import {uiHelpers} from '../helpers/chat-ui.js';
+import {chatShim} from '../helpers/chat-shim.js';
 import {mkdtempSync, writeFileSync} from 'node:fs';
 import net from 'node:net';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach, test} from 'node:test';
 import type {CommandContext} from '../../../../src/api.js';
-import type {ChatUi} from '../../src/chat/command.js';
-import {createClaudeCommands, type ClaudeDeps} from '../../src/commands.js';
+import {createClaude, type ClaudeDeps} from '../../src/commands.js';
 import {createDecoder, encodeFrame, type ClientFrame, type RunnerFrame} from '../../src/runner/protocol.js';
 import {runnerSocketPath} from '../../src/runner/spawn.js';
 import {serveControl} from '../../src/sessions/control.js';
@@ -16,7 +15,6 @@ import type {ChatQueryFn, QueryFn} from '../../src/types.js';
 
 const OAUTH = 'sk-ant-oat-TESTVALUE0123456789abcdef';
 const SID = '11111111-aaaa-4bbb-8ccc-222222222222';
-type Props = Parameters<ChatUi['createChatElement']>[0];
 
 let cleanup: Array<() => void> = [];
 afterEach(() => {
@@ -53,42 +51,20 @@ const setup = async (opts: {keep?: boolean; deps?: Partial<ClaudeDeps>} = {}) =>
 	const dataDir = mkdtempSync(join(tmpdir(), 'route-data-'));
 	const sessionDir = mkdtempSync(join(tmpdir(), 'route-sess-'));
 	if (opts.keep) writeFileSync(join(dataDir, 'state.json'), JSON.stringify({chatKeepRunning: 'on'}));
-	const printed: string[] = [];
-	const props: Props[] = [];
-	const waits: Array<Parameters<NonNullable<ChatUi['createWaitingElement']>>[0]> = [];
-	const scripts: Array<(close: () => void) => void | Promise<void>> = [];
-	let mounts = 0;
-	const ctx: CommandContext = {
-		print: t => printed.push(t),
-		clear: () => {},
-		exit: () => {},
-		mount: async build => {
-			const n = mounts++;
-			let close!: () => void;
-			const done = new Promise<void>(r => (close = r));
-			build({close});
-			void Promise.resolve(scripts[n] ? scripts[n]!(close) : close());
-			await done;
-		},
-	};
 	const query = (() => (async function* () {})()) as unknown as ChatQueryFn;
-	const chat = createClaudeCommands({
+	const {provider} = createClaude({
 		dataDir,
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => { throw new Error('unused'); }) as unknown as QueryFn,
 		loadChatQuery: async () => query,
-		loadUi: async () => ({
-			...uiHelpers,
-			createChatElement: p => (props.push(p), {}),
-			createWaitingElement: p => (waits.push(p), {}),
-		}),
 		login: {probe: async () => undefined},
 		sessionDir: () => sessionDir,
 		shellTmp: () => mkdtempSync(join(tmpdir(), 'route-shell-')),
-		chatTiming: {waitPollMs: 5, remote: {connectTimeoutMs: 2000}},
+		chatTiming: {remote: {connectTimeoutMs: 2000}},
 		...opts.deps,
-	}).find(c => c.name === 'claude')!;
-	return {chat, ctx, printed, props, waits, scripts, dataDir, sessionDir, mounts: () => mounts};
+	});
+	const shim = chatShim(provider, {keep: opts.keep === true});
+	return {chat: shim.chat, ctx: {} as never, printed: shim.printed, props: shim.props, waits: shim.waits, scripts: shim.scripts, dataDir, sessionDir, mounts: shim.mounts};
 };
 
 test('setting Off keeps the chat in this process', async () => {
@@ -187,7 +163,7 @@ test('ask refuses while a session runs and names it by title when it answers', a
 	const got = acquireLock({dir: t.sessionDir, kind: 'chat', where: 'local'});
 	assert.ok(got.ok);
 	cleanup.push(() => got.ok && got.lock.release());
-	await assert.rejects(async () => t.chat.run(['ask', 'hi'], t.ctx), /^Error: A session is running \(chat( \w+)? since \d\d:\d\d\)\. Wait for it or run "claude stop"\.$/);
+	await assert.rejects(async () => t.chat.run(['ask', 'hi'], t.ctx), /^Error: A session is running \(chat( \w+)? since \d\d:\d\d\)\. Wait for it or run "chat stop"\.$/);
 });
 
 test('ask names the running session by its title when the control socket answers', async () => {
@@ -203,5 +179,5 @@ test('ask names the running session by its title when the control socket answers
 		},
 	});
 	cleanup.push(() => void server.close());
-	await assert.rejects(async () => t.chat.run(['ask', 'hi'], t.ctx), {message: 'A session is running (Fix the parser). Wait for it or run "claude stop".'});
+	await assert.rejects(async () => t.chat.run(['ask', 'hi'], t.ctx), {message: 'A session is running (Fix the parser). Wait for it or run "chat stop".'});
 });

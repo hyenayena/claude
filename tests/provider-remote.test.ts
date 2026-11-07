@@ -8,12 +8,10 @@ import {afterEach, test} from 'node:test';
 import {createClaude} from '../src/commands.js';
 import {API_KEY_ONLY} from '../src/credentials.js';
 import {hostVault} from '../src/vault.js';
-import type {ChatUi} from '../src/chat/command.js';
 import type {Origin, OpenEnv} from '../src/deps/chat.js';
 import {createDecoder, encodeFrame, type ClientFrame, type RunnerFrame} from '../src/runner/protocol.js';
 import {runnerSocketPath} from '../src/runner/spawn.js';
 import type {ChatQueryFn, QueryFn} from '../src/types.js';
-import {uiHelpers} from './helpers/chat-ui.js';
 import {fakeCredentials, seed} from './helpers/fake-credentials.js';
 import {makeFakeLog} from './helpers/fake-log.js';
 
@@ -67,11 +65,10 @@ const setup = async (key: boolean) => {
 		vault,
 		loadQuery: async () => (() => { throw new Error('unused'); }) as unknown as QueryFn,
 		loadChatQuery: async () => (() => (async function* () {})()) as unknown as ChatQueryFn,
-		loadUi: async () => ({...uiHelpers, createChatElement: () => ({})}) as ChatUi,
 		login: {probe: async () => undefined},
 		sessionDir: () => sessionDir,
 		shellTmp: () => mkdtempSync(join(tmpdir(), 'prov-remote-shell-')),
-		chatTiming: {waitPollMs: 5, remote: {connectTimeoutMs: 2000}},
+		chatTiming: {remote: {connectTimeoutMs: 2000}},
 		spawnRunner: async opts => {
 			spawned++;
 			frames = await startRunnerServer(opts.sessionDir);

@@ -59,7 +59,7 @@ export const COMMAND_KEY_PREFIX = 'cmd:';
 export const commandKey = (req: Pick<CommandConfirmRequest, 'command' | 'subcommand'>): string =>
 	`${COMMAND_KEY_PREFIX}${req.subcommand === undefined ? req.command : `${req.command} ${req.subcommand}`}`;
 
-const ALWAYS_ASK = new Set(['cmd:claude tier', 'cmd:claude start', 'cmd:claude send']);
+const ALWAYS_ASK = new Set(['cmd:claude tier', 'cmd:chat start', 'cmd:chat send']);
 
 export const alwaysAsk = (key: string): boolean => ALWAYS_ASK.has(key);
 

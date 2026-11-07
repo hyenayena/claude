@@ -9,6 +9,7 @@ import {storeSecret} from '../src/credentials.js';
 import {hostVault} from '../src/vault.js';
 import {fakeCredentials, type FakeCredentials} from './helpers/fake-credentials.js';
 import {createClaudeCommand, createClaudeCommands, type ClaudeDeps} from '../src/commands.js';
+import {shimClaude} from './helpers/claude-shim.js';
 import {checkCommandDocs} from '../src/kit.js';
 import type {LoginStatus} from '../src/claude-login.js';
 import type {QueryFn} from '../src/types.js';
@@ -53,7 +54,7 @@ const setup = async (over: Partial<ClaudeDeps> & {env?: NodeJS.ProcessEnv; fake?
 	const printed: string[] = [];
 	const ctx: CommandContext = {print: t => printed.push(...t.split('\n')), clear: () => {}, exit: () => {}};
 	const q = makeQuery(() => okMsgs(SID1, 'answer'));
-	const command = createClaudeCommand({
+	const shim = shimClaude({
 		dataDir,
 		env: {ANTHROPIC_API_KEY: KEY},
 		loadQuery: async () => q.query,
@@ -61,7 +62,8 @@ const setup = async (over: Partial<ClaudeDeps> & {env?: NodeJS.ProcessEnv; fake?
 		vault,
 		...over,
 	});
-	return {command, dataDir, printed, ctx, q, fake, vault, store};
+	const command = shim.claude;
+	return {command, provider: shim.provider, dataDir, printed, ctx, q, fake, vault, store};
 };
 
 const state = async (dir: string) => JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')) as Record<string, unknown>;
@@ -88,22 +90,6 @@ test('ask continues the stored session; --new starts fresh', async () => {
 	assert.equal(q.calls[1]!.options.resume, SID1);
 	await command.run(['ask', '--new', 'three'], ctx);
 	assert.equal(q.calls[2]!.options.resume, undefined);
-});
-
-test('-- ends flag parsing', async () => {
-	const {command, ctx, q} = await setup();
-	await command.run(['ask', '--', '--new', 'x'], ctx);
-	assert.equal(q.calls[0]!.prompt, '--new x');
-	await assert.rejects(async () => command.run(['ask', '--bogus', 'x'], ctx), /Unknown option "--bogus"/);
-});
-
-test('missing text and slash commands are refused', async () => {
-	const {command, ctx} = await setup();
-	await assert.rejects(async () => command.run(['ask'], ctx), {message: 'Usage: claude ask [--new] <text…>'});
-	await assert.rejects(async () => command.run(['ask', '--new'], ctx), {message: 'Usage: claude ask [--new] <text…>'});
-	await assert.rejects(async () => command.run(['ask', '/help'], ctx), {
-		message: 'Slash commands are not supported in "claude ask"',
-	});
 });
 
 test('a second concurrent ask is rejected', async () => {
@@ -251,17 +237,14 @@ test('no notice for API keys', async () => {
 	assert.equal(printed[0], 'Active credential: API key (from environment)');
 });
 
-test('new clears the session; session prints id and model', async () => {
-	const {command, ctx, printed, dataDir} = await setup();
-	await command.run(['session'], ctx);
-	assert.equal(printed[0], 'Session: (none)');
-	assert.equal(printed[1], 'Model: (unknown)');
+test('the provider describes the last session and model', async () => {
+	const {command, ctx, provider} = await setup();
+	const rows = async () => Object.fromEntries((await provider.describe()).map(r => [r.label, r.value]));
+	assert.equal((await rows())['Session'], '(none)');
+	assert.equal((await rows())['Model'], '(unknown)');
 	await command.run(['ask', 'x'], ctx);
-	printed.length = 0;
-	await command.run(['session'], ctx);
-	assert.equal(printed[0], `Session: ${SID1}`);
-	assert.equal(printed[1], 'Model: claude-test-1');
-	void dataDir;
+	assert.equal((await rows())['Session'], SID1);
+	assert.equal((await rows())['Model'], 'claude-test-1');
 });
 
 test('auth status warns on a world-readable auth.json and reports no secret', async () => {
@@ -682,32 +665,19 @@ test('commands carry agent policies', async () => {
 	const {command} = await setup();
 	assert.equal(command.agent, 'deny');
 	const by = Object.fromEntries(command.subcommands!.map(s => [s.name, s.agent]));
-	for (const n of ['session', 'tasks', 'mcp']) assert.equal(by[n], 'safe', n);
-	for (const n of ['ping', 'rename', 'export', 'auth']) assert.equal(by[n], 'confirm', n);
-	for (const n of ['ask', 'chat', 'new', 'resume', 'rewind', 'fork', 'copy', 'memory', 'code']) assert.equal(by[n], 'deny', n);
+	assert.deepEqual(Object.keys(by).sort(), ['auth', 'code', 'memory', 'ping', 'tier']);
+	for (const n of ['ping', 'auth', 'tier']) assert.equal(by[n], 'confirm', n);
+	for (const n of ['memory', 'code']) assert.equal(by[n], 'deny', n);
 	const auth = command.subcommands!.find(s => s.name === 'auth')!;
 	const authBy = Object.fromEntries(auth.subcommands!.map(s => [s.name, s.agent]));
 	assert.deepEqual(authBy, {status: 'confirm', login: 'deny', add: 'confirm', order: 'confirm', use: 'confirm', auto: 'confirm', remove: 'confirm', logout: 'confirm'});
-	const reconnect = command.subcommands!.find(s => s.name === 'mcp')!.subcommands!.find(s => s.name === 'reconnect')!;
-	assert.equal(reconnect.agent, undefined);
 });
 
-test('the claude, chat and fix commands pass the documentation check', async () => {
+test('the claude command passes the documentation check', async () => {
 	const {command} = await setup();
 	assert.deepEqual(checkCommandDocs(command), []);
 	const cmds = createClaudeCommands({dataDir: '/tmp/x', env: {}, loadQuery: async () => (() => { throw new Error('unused'); }) as never});
 	for (const c of cmds) assert.deepEqual(checkCommandDocs(c), [], c.name);
-});
-
-test('the top-level chat command is denied to agents', async () => {
-	const {createClaudeCommands} = await import('../src/commands.js');
-	const cmds = createClaudeCommands({dataDir: '/tmp/x', env: {}, loadQuery: async () => (() => { throw new Error('unused'); }) as never});
-	assert.equal(cmds.find(c => c.name === 'chat')?.agent, 'deny');
-});
-
-test('chat is listed in the subcommands', async () => {
-	const {command} = await setup();
-	assert.ok(command.subcommands?.some(s => s.name === 'chat' && s.usage === 'claude chat [--new]'));
 });
 
 test('ask footer and session output never carry control bytes or the secret', async () => {
@@ -716,10 +686,10 @@ test('ask footer and session output never carry control bytes or the secret', as
 		{type: 'system', subtype: 'init', session_id: SID1, model: evilModel, apiKeySource: 'x'},
 		{type: 'result', subtype: 'success', is_error: false, result: 'fine', session_id: SID1},
 	]);
-	const {command, ctx, printed} = await setup({env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH}, loadQuery: async () => q.query});
+	const {command, ctx, printed, provider} = await setup({env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH}, loadQuery: async () => q.query});
 	await command.run(['ask', 'x'], ctx);
-	await command.run(['session'], ctx);
-	const out = printed.join('\n');
+	const rows = await provider.describe();
+	const out = [...printed, ...rows.map(r => `${r.label}: ${r.value}`)].join('\n');
 	assert.equal(/[\x1b\x07]/.test(out), false);
 	assert.equal(out.includes(OAUTH), false);
 });
@@ -1088,7 +1058,7 @@ test('claude tier is a confirm subcommand with usage errors, a router check and 
 	assert.equal(tier.usage, 'claude tier [auto|light|standard|strong|max]');
 	await assert.rejects(async () => command.run(['tier', 'max', 'now'], ctx), {message: 'Usage: claude tier [auto|light|standard|strong|max]'});
 	await assert.rejects(async () => command.run(['tier', 'huge'], ctx), /Unknown tier "huge"; use auto, light, standard, strong or max/);
-	await assert.rejects(async () => command.run(['tier', 'max'], ctx), {message: 'The model router is off; turn it on in the Chat settings'});
+	await assert.rejects(async () => command.run(['tier', 'max'], ctx), {message: 'The model router is off; turn it on in the Claude settings'});
 	await writeFile(join(dataDir, 'state.json'), JSON.stringify({chatRouter: 'on'}));
 	await assert.rejects(async () => command.run(['tier', 'max'], ctx), /No chat is open/);
 	await assert.rejects(async () => command.run(['tier', 'auto'], ctx), /No chat is open/);

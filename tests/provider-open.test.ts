@@ -1,28 +1,26 @@
 import assert from 'node:assert/strict';
-import {uiHelpers} from '../helpers/chat-ui.js';
 import {existsSync, readFileSync} from 'node:fs';
 import {mkdir, mkdtemp, readFile, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
-import type {Command, CommandContext} from '../../../../src/api.js';
-import {CHAT_DISALLOWED_TOOLS, CHAT_TOOLS} from '../../src/policy.js';
-import {createClaudeCommand, createClaudeCommands, type ClaudeDeps} from '../../src/commands.js';
-import {resolvePaths} from '../../src/config.js';
-import {checkCommandDocs} from '../../src/kit.js';
-import type {ChatQueryFn, QueryFn} from '../../src/types.js';
-import type {ChatUi} from '../../src/chat/command.js';
-import {makeFakeLog, serialized} from '../helpers/fake-log.js';
-import {fakeCredentials, seed} from '../helpers/fake-credentials.js';
-import {API_KEY_ONLY} from '../../src/credentials.js';
-import {hostVault} from '../../src/vault.js';
+import type {Command, CommandContext} from '../../../src/api.js';
+import {CHAT_DISALLOWED_TOOLS, CHAT_TOOLS} from '../src/policy.js';
+import type {ClaudeDeps} from '../src/commands.js';
+import {shimClaude, type Props} from './helpers/claude-shim.js';
+import {resolvePaths} from '../src/config.js';
+import {checkCommandDocs} from '../src/kit.js';
+import type {ChatQueryFn, QueryFn} from '../src/types.js';
+import {makeFakeLog, serialized} from './helpers/fake-log.js';
+import {fakeCredentials, seed} from './helpers/fake-credentials.js';
+import {API_KEY_ONLY} from '../src/credentials.js';
+import {hostVault} from '../src/vault.js';
 
 const OAUTH = 'sk-ant-oat01-TESTVALUE0123456789abcdef';
 const KEY = 'sk-ant-api03-SCHEDVALUE0123456789abcdef';
 const SID1 = '11111111-aaaa-4bbb-8ccc-222222222222';
 const SID2 = '33333333-aaaa-4bbb-8ccc-444444444444';
 
-type Props = Parameters<ChatUi['createChatElement']>[0];
 
 const makeChatQuery = (failFirst = false, failMessage = 'boom') => {
 	const calls: Array<{options: Record<string, unknown>}> = [];
@@ -68,20 +66,13 @@ const setup = async (opts: {mount?: boolean; failFirst?: boolean; failMessage?: 
 	const q = makeChatQuery(opts.failFirst, opts.failMessage);
 	const aborts: AbortController[] = [];
 	let unregistered = 0;
-	const real = createClaudeCommand({
+	const real = shimClaude({
 		dataDir,
 		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
 		loadQuery: async () => (() => {
 			throw new Error('unused');
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => q.query,
-		loadUi: async () => ({
-			...uiHelpers,
-			createChatElement: p => {
-				props.push(p);
-				return {};
-			},
-		}),
 		registerAbort: c => {
 			aborts.push(c);
 			return () => void unregistered++;
@@ -89,24 +80,18 @@ const setup = async (opts: {mount?: boolean; failFirst?: boolean; failMessage?: 
 		login: {probe: async () => undefined},
 		loadRetired: async () => undefined,
 		...opts.deps,
-	});
+	}, {onProps: p => props.push(p)}).claude;
 	const command = {run: async (args: string[], c: CommandContext) => real.run(args, c)};
 	return {command, dataDir, printed, ctx, q, props, aborts, mounts: () => mounts, unregistered: () => unregistered};
 };
 
+const createClaudeCommands = (deps: ClaudeDeps & {onProps?: (p: Props) => void}) => {
+	const {onProps, ...rest} = deps;
+	const sh = shimClaude(rest, onProps ? {onProps} : {});
+	return [sh.chat, sh.claude] as const;
+};
+
 const readState = async (dir: string) => JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')) as Record<string, unknown>;
-
-test('chat without mount throws', async () => {
-	const {command, ctx} = await setup({mount: false});
-	await assert.rejects(command.run(['chat'], ctx), {message: '"claude chat" needs an interface that can show views'});
-});
-
-test('chat rejects unknown arguments', async () => {
-	const {command, ctx, mounts} = await setup();
-	await assert.rejects(command.run(['chat', '--bogus'], ctx), {message: 'Usage: claude chat [--new]'});
-	await assert.rejects(command.run(['chat', 'text'], ctx), {message: 'Usage: claude chat [--new]'});
-	assert.equal(mounts(), 0);
-});
 
 test('missing credential throws before mount', async () => {
 	const {command, ctx, mounts} = await setup({deps: {env: {}}});
@@ -126,26 +111,10 @@ test('missing SDK maps to the friendly error before mount', async () => {
 	assert.equal(mounts(), 0);
 });
 
-test('missing ink or react maps to the host dependency error before mount', async () => {
-	const {command, ctx, mounts} = await setup({
-		deps: {
-			loadUi: async () => {
-				throw Object.assign(new Error("Cannot find package 'ink' imported from /app/modules/claude/src/ui/ChatView.tsx"), {
-					code: 'ERR_MODULE_NOT_FOUND',
-				});
-			},
-		},
-	});
-	await assert.rejects(command.run(['chat'], ctx), {
-		message: 'The chat interface dependencies (ink, react) are not installed in the yena host. Run "./yena install".',
-	});
-	assert.equal(mounts(), 0);
-});
-
 test('a missing module that names the SDK keeps the SDK message even when ink is mentioned', async () => {
 	const {command, ctx } = await setup({
 		deps: {
-			loadUi: async () => {
+			loadChatQuery: async () => {
 				throw Object.assign(new Error("Cannot find package '@anthropic-ai/claude-agent-sdk' imported from ink-wrapper.ts"), {
 					code: 'ERR_MODULE_NOT_FOUND',
 				});
@@ -307,7 +276,7 @@ test('a turn that needs a new session does not write state', async () => {
 	assert.equal((await readState(s.dataDir)).lastSessionId, undefined);
 });
 
-test('finally closes the session, unregisters, and prints the closing line', async () => {
+test('flushing closes the session and unregisters', async () => {
 	const s = await setup({
 		run: async p => {
 			const done = turnDone(p);
@@ -318,7 +287,6 @@ test('finally closes the session, unregisters, and prints the closing line', asy
 	await s.command.run(['chat'], s.ctx);
 	assert.equal(s.q.closed(), 1);
 	assert.equal(s.unregistered(), 1);
-	assert.equal(s.printed.at(-1), '[chat closed · session 33333333 · model claude-test-1]');
 	assert.equal(s.props[0]!.controller.state, 'closed');
 });
 
@@ -332,79 +300,7 @@ test('aborting the lifetime controller closes the session', async () => {
 	await s.command.run(['chat'], s.ctx);
 });
 
-test('an idle open chat does not block ask, and opening another chat replaces it', async () => {
-	let release!: () => void;
-	const gate = new Promise<void>(r => (release = r));
-	let closes = 0;
-	const s = await setup({run: () => gate});
-	s.ctx.mount = async build => {
-		build({
-			close: () => {
-				closes++;
-				release();
-			},
-		});
-		await gate;
-	};
-	const running = s.command.run(['chat'], s.ctx);
-	await new Promise(r => setTimeout(r, 20));
-	await assert.rejects(s.command.run(['ask', 'x'], s.ctx), (err: Error) => err.message !== 'A chat is already open' && /unused/.test(err.message));
-	const second = s.command.run(['chat'], s.ctx);
-	await running;
-	await second;
-	assert.equal(closes, 1);
-});
-
-test('closing line carries no control bytes or secret from the model name', async () => {
-	const s = await setup({
-		run: async p => {
-			const done = turnDone(p);
-			p.controller.send('hello');
-			await done;
-		},
-	});
-	const evil = `m\x1b]0;x\x07\x1b]52;c;QUJD\x07${OAUTH}`;
-	const q = ((arg: {prompt: AsyncIterable<unknown>}) =>
-		Object.assign(
-			(async function* () {
-				for await (const _ of arg.prompt) {
-					yield {type: 'system', subtype: 'init', session_id: SID2, model: evil, apiKeySource: 'x'};
-					yield {type: 'result', subtype: 'success', is_error: false, result: 'hi', session_id: SID2};
-				}
-			})(),
-			{close: () => {}},
-		)) as unknown as ChatQueryFn;
-	const cmd = createClaudeCommand({
-		dataDir: s.dataDir,
-		loadRetired: async () => undefined,
-		login: {probe: async () => undefined},
-		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
-		loadQuery: async () => (() => {
-			throw new Error('unused');
-		}) as unknown as QueryFn,
-		loadChatQuery: async () => q,
-		loadUi: async () => ({...uiHelpers, createChatElement: p => (s.props.push(p), {})}),
-	});
-	const ctx: CommandContext = {
-		print: t => s.printed.push(t),
-		clear: () => {},
-		exit: () => {},
-		mount: async build => {
-			build({close: () => {}});
-			const p = s.props.at(-1)!;
-			const done = turnDone(p);
-			p.controller.send('hello');
-			await done;
-		},
-	};
-	await cmd.run(['chat'], ctx);
-	const out = s.printed.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
-	assert.equal(/[\x1b\x07]/.test(out), false);
-	assert.equal(out.includes(OAUTH), false);
-	assert.ok(s.printed.at(-1)!.startsWith('[chat closed'));
-});
-
-test('chat logs start and close with labels only, registers the redactor first, and leaks nothing', async () => {
+test('chat logs its start with labels only, registers the redactor first, and leaks nothing', async () => {
 	const log = makeFakeLog();
 	const s = await setup({
 		deps: {log, env: {ANTHROPIC_API_KEY: KEY}},
@@ -426,10 +322,6 @@ test('chat logs start and close with labels only, registers the redactor first, 
 		model: 'default',
 	});
 	assert.equal(find('turn ended').fields.outcome, 'ok');
-	const closed = find('chat closed');
-	assert.equal(closed.level, 'info');
-	assert.equal(closed.fields.session8, SID2.slice(0, 8));
-	assert.equal(closed.fields.model, 'claude-test-1');
 	const out = serialized(log);
 	for (const secret of ['PROMPT-SENTINEL-1', KEY, 'sk-ant']) assert.equal(out.includes(secret), false, secret);
 });
@@ -577,7 +469,7 @@ test('the shipped bridge gets the real preview and highlight builders', async ()
 
 const setupChat = async (opts: Parameters<typeof setup>[0] = {}, extra: Partial<Parameters<typeof createClaudeCommands>[0]> = {}) => {
 	const s = await setup(opts);
-	const [chat] = createClaudeCommands({
+	const shimmed = shimClaude({
 		...extra,
 		dataDir: s.dataDir,
 		loadRetired: async () => undefined,
@@ -587,15 +479,8 @@ const setupChat = async (opts: Parameters<typeof setup>[0] = {}, extra: Partial<
 			throw new Error('unused');
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => s.q.query,
-		loadUi: async () => ({
-			...uiHelpers,
-			createChatElement: p => {
-				s.props.push(p);
-				return {};
-			},
-		}),
-	});
-	return {...s, chat: chat!};
+	}, {onProps: p => s.props.push(p)});
+	return {...s, chat: shimmed.chat, shimmed};
 };
 
 const sendOnce = async (p: Props) => {
@@ -627,13 +512,6 @@ test('top-level chat without a setting leaves the model to the account default',
 	assert.equal('model' in s.q.calls[0]!.options, false);
 });
 
-test('top-level chat rejects bad model ids and extra arguments before mounting', async () => {
-	const s = await setupChat();
-	await assert.rejects(async () => s.chat.run(['bad model\x1b'], s.ctx), /Invalid model/);
-	await assert.rejects(async () => s.chat.run(['a', 'b'], s.ctx), {message: 'Usage: chat [model]'});
-	assert.equal(s.mounts(), 0);
-});
-
 test('the Claude settings tab reads and writes the chat model', async () => {
 	const s = await setupChat();
 	const setting = s.chat.settings!.settings.find(x => x.key === 'chatModel')!;
@@ -647,66 +525,11 @@ test('the Claude settings tab reads and writes the chat model', async () => {
 	assert.ok(setting.options.some(o => o.value === ''));
 });
 
-test('the chat view gets the host and the print of the mount control', async () => {
-	const s = await setupChat();
-	const printed: string[] = [];
-	const host = {
-		isFocused: () => true,
-		columns: () => 40,
-		subscribe: () => () => {},
-		move: () => false,
-		isHostKey: () => false,
-	};
-	s.ctx.mount = async build => {
-		build({close: () => {}, print: t => printed.push(t), host});
-	};
-	await s.chat.run([], s.ctx);
-	assert.equal(s.props[0]!.host, host);
-	s.props[0]!.print('x');
-	assert.equal(printed.length, 2);
-	assert.match(printed[0]!, /╭/);
-	assert.equal(printed[1], 'x');
-});
-
-test('a new chat opens with the yena banner sized to the view; a resumed one does not', async () => {
-	const build = {version: '9.9.9', modules: [{name: 'claude', version: '1.2.3'}]};
-	const s = await setupChat({run: async () => {}}, {build});
-	const printed: string[] = [];
-	const renders: ((width: number) => string)[] = [];
-	const host = {isFocused: () => true, columns: () => 60, subscribe: () => () => {}, move: () => false, isHostKey: () => false};
-	s.ctx.mount = async mount => {
-		mount({
-			close: () => {},
-			print: (t, o) => {
-				printed.push(t);
-				if (o?.render) renders.push(o.render as (width: number) => string);
-			},
-			host,
-		});
-	};
-	await s.chat.run([], s.ctx);
-	const banner = printed.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
-	assert.match(banner, /yena 9\.9\.9/);
-	assert.match(banner, /claude 1\.2\.3/);
-	assert.ok(banner.split('\n').every(row => row.length <= 60));
-	assert.equal(renders.length, 1);
-	const narrow = renders[0]!(30).replace(/\x1b\[[0-9;]*m/g, '').split('\n');
-	assert.ok(narrow.every(row => row.length === 30));
-	assert.notEqual(renders[0]!(30), renders[0]!(60));
-
-	printed.length = 0;
-	await writeTranscript(s.dataDir, SID1, [{type: 'user', message: {content: 'old question'}}]);
-	await claudeWithPicker(s).run(['resume', SID1.slice(0, 6)], s.ctx);
-	assert.match(printed.join('\n'), /old question/);
-	assert.doesNotMatch(printed.join('\n'), /╭|yena /);
-});
-
-test('the Claude tab offers permission mode, model, effort, thinking, fast mode and output style', async () => {
+test('the Claude tab offers router, tiers, model, effort, thinking, fast mode and output style', async () => {
 	const s = await setupChat();
 	assert.deepEqual(
 		s.chat.settings!.settings.map(x => x.key),
 		[
-			'chatPermissionMode',
 			'chatRouter',
 			'chatClassifier',
 			'tierLightModel',
@@ -724,8 +547,6 @@ test('the Claude tab offers permission mode, model, effort, thinking, fast mode 
 			'chatOutputStyle',
 			'chatMcp',
 			'chatHooks',
-			'chatKeepRunning',
-			'chatInputMode',
 		],
 	);
 });
@@ -773,109 +594,6 @@ test('chat options carry the SDK permission mode and the policy hook', async () 
 	assert.equal(o.hooks?.PreToolUse?.length, 1);
 });
 
-test('the permission mode setting starts new chats in that mode and switches the open chat at once', async () => {
-	let release!: () => void;
-	const gate = new Promise<void>(r => (release = r));
-	const s = await setupChat({run: () => gate});
-	const mode = s.chat.settings!.settings.find(x => x.key === 'chatPermissionMode')!;
-	await mode.set('acceptEdits');
-	assert.equal((await readState(s.dataDir)).chatPermissionMode, 'acceptEdits');
-	const running = s.chat.run([], s.ctx);
-	await new Promise(r => setTimeout(r, 20));
-	const controller = s.props[0]!.controller;
-	assert.equal(controller.mode, 'acceptEdits');
-	await mode.set('auto');
-	assert.equal(controller.mode, 'auto');
-	await mode.set('');
-	assert.equal(controller.mode, 'default');
-	assert.equal('chatPermissionMode' in (await readState(s.dataDir)), false);
-	await assert.rejects(Promise.resolve(mode.set('bypassPermissions')), /Unknown option/);
-	release();
-	await running;
-	await mode.set('auto');
-});
-
-test('claude <command> runs a Claude Code command in the open chat', async () => {
-	let release!: () => void;
-	const gate = new Promise<void>(r => (release = r));
-	const s = await setupChat({run: () => gate});
-	const [chat, claude] = createClaudeCommands({
-		dataDir: s.dataDir,
-		loadRetired: async () => undefined,
-		login: {probe: async () => undefined},
-		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
-		loadQuery: async () => (() => {
-			throw new Error('unused');
-		}) as unknown as QueryFn,
-		loadChatQuery: async () => s.q.query,
-		loadUi: async () => ({
-			...uiHelpers,
-			createChatElement: p => {
-				s.props.push(p);
-				return {};
-			},
-		}),
-	});
-	const running = chat!.run([], s.ctx);
-	await new Promise(r => setTimeout(r, 20));
-	const props = s.props.at(-1)!;
-	const sent: string[] = [];
-	props.controller.subscribe(e => {
-		if (e.type === 'sent') sent.push(e.text);
-	});
-	const done = turnDone(props);
-	await claude!.run(['compact', 'keep', 'the', 'plan'], s.ctx);
-	await done;
-	assert.deepEqual(sent, ['/compact keep the plan']);
-	assert.ok(s.printed.includes('Sent /compact to the chat'));
-	release();
-	await running;
-	await assert.rejects(async () => claude!.run(['compact'], s.ctx), /No chat is open/);
-});
-
-test('claude hints list Claude Code commands from the session, or from the config dir before one starts', async () => {
-	const s = await setupChat();
-	await mkdir(join(s.dataDir, 'config', 'commands'), {recursive: true});
-	await writeFile(join(s.dataDir, 'config', 'commands', 'pipeline.md'), '---\ndescription: Run the pipeline\nargument-hint: <request>\n---\nbody');
-	await mkdir(join(s.dataDir, 'config', 'skills', 'deploy'), {recursive: true});
-	await writeFile(join(s.dataDir, 'config', 'skills', 'deploy', 'SKILL.md'), '---\nname: deploy\ndescription: Deploy it\n---\n');
-	const [, claude] = createClaudeCommands({
-		dataDir: s.dataDir,
-		loadRetired: async () => undefined,
-		login: {probe: async () => undefined},
-		env: {},
-		loadQuery: async () => (() => {
-			throw new Error('unused');
-		}) as unknown as QueryFn,
-	});
-	const subs = claude!.subcommands!;
-	assert.ok(subs.some(x => x.name === 'ping'));
-	const pipeline = subs.find(x => x.name === 'pipeline')!;
-	assert.equal(pipeline.usage, 'claude pipeline <request>');
-	assert.match(pipeline.description, /Run the pipeline/);
-	assert.ok(subs.some(x => x.name === 'deploy'));
-});
-
-test('Claude Code commands with free-text hints and long descriptions still pass the documentation check', async () => {
-	const s = await setupChat();
-	await mkdir(join(s.dataDir, 'config', 'commands'), {recursive: true});
-	await writeFile(join(s.dataDir, 'config', 'commands', 'review.md'), `---\ndescription: ${'Review the change carefully. '.repeat(6)}\nargument-hint: [--strict] pr number\n---\nbody`);
-	await writeFile(join(s.dataDir, 'config', 'commands', 'fixit.md'), '---\ndescription: Fix it.\nargument-hint: <issue> [note…]\n---\nbody');
-	await writeFile(join(s.dataDir, 'config', 'commands', 'help.md'), '---\ndescription: Not core help\n---\nbody');
-	const [, claude] = createClaudeCommands({dataDir: s.dataDir, loadRetired: async () => undefined, login: {probe: async () => undefined}, env: {}, loadQuery: async () => (() => []) as unknown as QueryFn});
-	const subs = claude!.subcommands!;
-	const review = subs.find(x => x.name === 'review')!;
-	assert.equal(review.usage, 'claude review [args…]');
-	assert.match(review.args![0]!.description, /\[--strict\] pr number/);
-	assert.ok(review.description.length <= 90 && !review.description.endsWith('.'));
-	const fixit = subs.find(x => x.name === 'fixit')!;
-	assert.equal(fixit.usage, 'claude fixit <issue> [note…]');
-	assert.deepEqual(fixit.args!.map(a => a.name), ['issue', 'note']);
-	assert.equal(fixit.description, 'Claude Code: Fix it');
-	assert.equal(subs.some(x => x.name === 'help'), false);
-	assert.deepEqual(checkCommandDocs(claude!), []);
-});
-
 test('the chat is named after the first message, then after the title Claude Code writes', async () => {
 	let check!: () => void;
 	const checked = new Promise<void>(r => (check = r));
@@ -901,74 +619,10 @@ const writeTranscript = async (dataDir: string, sessionId: string, rows: unknown
 	await writeFile(join(dir, `${sessionId}.jsonl`), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
 };
 
-const claudeWithPicker = (s: Awaited<ReturnType<typeof setupChat>>, pick?: (p: {items: {id: string; label: string}[]; onPick: (id: string) => void; close: () => void}) => void) =>
-	createClaudeCommands({
-		dataDir: s.dataDir,
-		loadRetired: async () => undefined,
-		login: {probe: async () => undefined},
-		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
-		loadQuery: async () => (() => {
-			throw new Error('unused');
-		}) as unknown as QueryFn,
-		loadChatQuery: async () => s.q.query,
-		loadUi: async () => ({
-			...uiHelpers,
-			createChatElement: p => {
-				s.props.push(p);
-				return {};
-			},
-			createPickerElement: p => {
-				pick?.(p);
-				return {};
-			},
-		}),
-	})[1]!;
-
-test('claude resume <id> continues that session and shows its earlier messages', async () => {
-	const printed: string[] = [];
-	const s = await setupChat({run: async () => {}});
-	await writeTranscript(s.dataDir, SID1, [
-		{type: 'user', message: {content: 'old question'}},
-		{type: 'assistant', message: {id: 'a', content: [{type: 'text', text: 'old answer'}]}},
-	]);
-	s.ctx.mount = async build => {
-		build({close: () => {}, print: t => printed.push(t)});
-		await new Promise(r => setTimeout(r, 30));
-	};
-	const claude = claudeWithPicker(s);
-	await claude.run(['resume', SID1.slice(0, 6)], s.ctx);
-	assert.equal(s.props.at(-1)!.initialSessionId, SID1);
-	const joined = printed.join('\n');
-	assert.match(joined, /old question/);
-	assert.match(joined, /old answer/);
-	assert.match(joined, /Resumed/);
-	await assert.rejects(async () => claude.run(['resume', 'ffff'], s.ctx), /No earlier chat matches "ffff"/);
-	await assert.rejects(async () => claude.run(['resume', 'a', 'b'], s.ctx), {message: 'Usage: claude resume [session]'});
-});
-
-test('claude resume without an id opens the picker in the console and resumes the pick', async () => {
-	const s = await setupChat({run: async () => {}});
-	await writeTranscript(s.dataDir, SID1, [{type: 'user', message: {content: 'first'}}]);
-	const targets: unknown[] = [];
-	s.ctx.mount = async (build, options) => {
-		targets.push(options?.target ?? 'main');
-		build({close: () => {}});
-	};
-	const claude = claudeWithPicker(s, p => {
-		assert.deepEqual(p.items.map(x => x.id), [SID1]);
-		p.onPick(SID1);
-		p.close();
-	});
-	await claude.run(['resume'], s.ctx);
-	assert.deepEqual(targets, ['panel', 'main']);
-	assert.equal(s.props.at(-1)!.initialSessionId, SID1);
-});
-
 test('claude new starts a fresh chat', async () => {
 	const s = await setupChat({run: sendOnce});
 	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({lastSessionId: SID1}));
-	const claude = claudeWithPicker(s);
-	await claude.run(['new'], s.ctx);
+	await s.shimmed.claude.run(['new'], s.ctx);
 	assert.equal(s.q.calls[0]!.options.resume, undefined);
 	assert.equal(s.props.at(-1)!.initialSessionId, undefined);
 });
@@ -1001,13 +655,7 @@ test('model, effort, thinking, fast mode and output style apply to the open chat
 			throw new Error('unused');
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => wrapped,
-		loadUi: async () => ({
-			...uiHelpers,
-			createChatElement: p => {
-				s.props.push(p);
-				return {};
-			},
-		}),
+		onProps: p => s.props.push(p),
 	});
 	const running = chat!.run([], s.ctx);
 	await new Promise(r => setTimeout(r, 40));
@@ -1034,8 +682,7 @@ test('model, effort, thinking, fast mode and output style apply to the open chat
 
 test('a chat started in plan mode tells the SDK; saved "always" rules reach the next chat and can be removed', async () => {
 	const s = await setupChat({run: sendOnce});
-	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({chatPermissionMode: 'plan'}));
-	await s.chat.run([], s.ctx);
+	await s.shimmed.open({fresh: true, mode: 'plan'}, s.ctx);
 	assert.equal(s.q.calls[0]!.options.permissionMode, 'plan');
 	const [, claude] = createClaudeCommands({
 		dataDir: s.dataDir,
@@ -1046,7 +693,7 @@ test('a chat started in plan mode tells the SDK; saved "always" rules reach the 
 			throw new Error('unused');
 		}) as unknown as QueryFn,
 	});
-	assert.equal(claude!.settings, undefined, 'no Permissions tab without rules');
+	assert.equal(claude!.settings!.settings.some(x => x.key.startsWith('rule:')), false, 'no rule rows without rules');
 	let release!: () => void;
 	const gate = new Promise<void>(r => (release = r));
 	const s2 = await setupChat({run: () => gate});
@@ -1067,12 +714,13 @@ test('a chat started in plan mode tells the SDK; saved "always" rules reach the 
 	});
 	await new Promise(r => setTimeout(r, 20));
 	const tab = claude2!.settings!;
-	assert.equal(tab.title, 'Permissions');
-	assert.equal(tab.settings[0]!.label, 'npm test');
-	assert.equal(await tab.settings[0]!.get(), 'keep');
-	await tab.settings[0]!.set('remove');
+	assert.equal(tab.title, 'Claude');
+	const rule = tab.settings.find(x => x.key.startsWith('rule:'))!;
+	assert.equal(rule.label, 'npm test');
+	assert.equal(await rule.get(), 'keep');
+	await rule.set('remove');
 	assert.equal('allowedCommands' in (await readState(s2.dataDir)), false);
-	assert.equal(claude2!.settings, undefined);
+	assert.equal(claude2!.settings!.settings.some(x => x.key.startsWith('rule:')), false);
 });
 
 const transcriptRows = [
@@ -1081,158 +729,6 @@ const transcriptRows = [
 	{type: 'user', uuid: 'u2', parentUuid: 'a1', message: {content: 'second question'}},
 	{type: 'assistant', uuid: 'a2', parentUuid: 'u2', message: {id: 'm2', content: [{type: 'text', text: 'second answer'}]}},
 ];
-
-test('claude rename, export and copy work on the last chat', async () => {
-	const s = await setupChat();
-	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({lastSessionId: SID1}));
-	await writeTranscript(s.dataDir, SID1, transcriptRows);
-	const claude = claudeWithPicker(s);
-	await claude.run(['rename', 'My', 'chat'], s.ctx);
-	assert.ok(s.printed.includes('Renamed the chat to "My chat"'));
-	await assert.rejects(async () => claude.run(['rename'], s.ctx), /Usage: claude rename/);
-	await claude.run(['export'], s.ctx);
-	const exported = s.printed.at(-1)!.replace(/^Exported 4 messages to /, '');
-	const md = await readFile(exported, 'utf8');
-	assert.match(md, /^# My chat/);
-	assert.match(md, /## You\n\nfirst question/);
-	assert.match(md, /## yena\n\nsecond answer/);
-	await assert.rejects(async () => claude.run(['export', '/etc/x.md'], s.ctx), /inside the project or the claude data directory/);
-	const copied: string[] = [];
-	s.ctx.copyToClipboard = t => (copied.push(t), true);
-	await claude.run(['copy'], s.ctx);
-	await claude.run(['copy', '2'], s.ctx);
-	assert.deepEqual(copied, ['second answer', 'first answer']);
-	await assert.rejects(async () => claude.run(['copy', '3'], s.ctx), /only 2 answers/);
-});
-
-test('claude fork opens a branch of the current chat with its history', async () => {
-	const s = await setupChat({run: sendOnce});
-	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({lastSessionId: SID1}));
-	await writeTranscript(s.dataDir, SID1, transcriptRows);
-	const claude = claudeWithPicker(s);
-	await claude.run(['fork'], s.ctx);
-	const o = s.q.calls[0]!.options;
-	assert.equal(o.resume, SID1);
-	assert.equal(o.forkSession, true);
-	assert.equal(o.enableFileCheckpointing, true);
-});
-
-test('claude rewind restores files and reopens the chat before the picked message, with it in the input', async () => {
-	const s = await setupChat();
-	const rewound: string[] = [];
-	const base = s.q.query;
-	const query = ((arg: never) =>
-		Object.assign(base(arg), {rewindFiles: async (id: string) => (rewound.push(id), {canRewind: true, filesChanged: ['a.ts']})})) as unknown as ChatQueryFn;
-	const printed: string[] = [];
-	const [chat, claude] = createClaudeCommands({
-		dataDir: s.dataDir,
-		loadRetired: async () => undefined,
-		login: {probe: async () => undefined},
-		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
-		loadQuery: async () => (() => {
-			throw new Error('unused');
-		}) as unknown as QueryFn,
-		loadChatQuery: async () => query,
-		loadUi: async () => ({
-			...uiHelpers,
-			createChatElement: p => {
-				s.props.push(p);
-				return {};
-			},
-			createPickerElement: p => {
-				assert.deepEqual(p.items.map(i => i.id), ['u2', 'u1']);
-				p.onPick('u2');
-				p.close();
-				return {};
-			},
-		}),
-	}) as [typeof s.chat, typeof s.chat];
-	s.ctx.print = t => printed.push(t);
-	let mounts = 0;
-	s.ctx.mount = async (build, options) => {
-		if (options?.target === 'panel') {
-			build({close: () => {}});
-			return;
-		}
-		mounts++;
-		let close!: () => void;
-		const closed = new Promise<void>(r => (close = r));
-		build({close});
-		const p = s.props.at(-1)!;
-		const done = turnDone(p);
-		p.controller.send(mounts === 1 ? 'hi' : 'again');
-		await done;
-		if (mounts === 1) await closed;
-	};
-	const running = chat.run([], s.ctx);
-	await new Promise(r => setTimeout(r, 40));
-	await writeTranscript(s.dataDir, SID2, transcriptRows);
-	await claude.run(['rewind'], s.ctx);
-	await running;
-	assert.deepEqual(rewound, ['u2']);
-	assert.ok(printed.some(p => p.startsWith('Rewound: files restored (1 changed)')));
-	assert.equal(s.props.at(-1)!.initialDraft, 'second question');
-	const o = s.q.calls.at(-1)!.options;
-	assert.equal(o.resume, SID2);
-	assert.equal(o.forkSession, true);
-	assert.equal(o.resumeSessionAt, 'a1');
-});
-
-test('claude tasks lists the chat tasks and stops the picked running one; claude mcp shows server status', async () => {
-	let release!: () => void;
-	const gate = new Promise<void>(r => (release = r));
-	const s = await setupChat({run: async p => {
-		const done = turnDone(p);
-		p.controller.send('hi');
-		await done;
-		await gate;
-	}});
-	const stopped: string[] = [];
-	const base = s.q.query;
-	const query = ((arg: never) =>
-		Object.assign(base(arg), {
-			stopTask: async (id: string) => void stopped.push(id),
-			mcpServerStatus: async () => [{name: 'github', status: 'connected'}, {name: 'db', status: 'failed', error: 'no socket'}],
-		})) as unknown as ChatQueryFn;
-	const [chat, claude] = createClaudeCommands({
-		dataDir: s.dataDir,
-		loadRetired: async () => undefined,
-		login: {probe: async () => undefined},
-		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
-		loadQuery: async () => (() => {
-			throw new Error('unused');
-		}) as unknown as QueryFn,
-		loadChatQuery: async () => query,
-		loadUi: async () => ({
-			...uiHelpers,
-			createChatElement: p => {
-				s.props.push(p);
-				return {};
-			},
-			createPickerElement: p => {
-				assert.deepEqual(p.items.map(i => i.id), ['t1']);
-				p.onPick('t1');
-				p.close();
-				return {};
-			},
-		}),
-	}) as [typeof s.chat, typeof s.chat];
-	await assert.rejects(async () => claude.run(['tasks'], s.ctx), /No chat is open/);
-	const running = chat.run([], s.ctx);
-	await new Promise(r => setTimeout(r, 40));
-	const session = s.props.at(-1)!.controller as unknown as {_tasks: Map<string, unknown>};
-	session._tasks.set('t1', {id: 't1', status: 'running', description: 'watch', background: true, startedAt: Date.now()});
-	const chatMount = s.ctx.mount;
-	s.ctx.mount = async build => void build({close: () => {}});
-	await claude.run(['tasks'], s.ctx);
-	s.ctx.mount = chatMount;
-	assert.deepEqual(stopped, ['t1']);
-	await claude.run(['mcp'], s.ctx);
-	assert.ok(s.printed.includes('github: connected'));
-	assert.ok(s.printed.includes('db: failed (no socket)'));
-	release();
-	await running;
-});
 
 test('chat with a Claude Code login: no credentials in the child env', async () => {
 	let runs = 0;
@@ -1300,139 +796,6 @@ test('the chat child gets the private shell tmp root, and a failure only logs', 
 	assert.deepEqual(rec?.fields, {error: 'Error'});
 });
 
-test('claude start opens a new chat that sends the message and returns while the chat stays open', async () => {
-	let release!: () => void;
-	const hold = new Promise<void>(resolve => {
-		release = resolve;
-	});
-	const s = await setup({run: () => hold});
-	await s.command.run(['start', 'hello', 'there'], s.ctx);
-	assert.equal(s.props.at(-1)!.initialSend, 'hello there');
-	assert.ok(s.printed.includes('Started a new chat with the message.'));
-	const s2 = await setup();
-	const agent: CommandContext = {print: () => {}, clear: () => {}, exit: () => {}, signal: new AbortController().signal};
-	await assert.rejects(s2.command.run(['start', 'x'], {...agent, caller: 'yena'}), /No chat view is available/);
-	await assert.rejects(s2.command.run(['start'], s2.ctx), /Usage: claude start <message…>/);
-	release();
-});
-
-test('claude send hands the message to the open chat view, or starts a chat when none is open', async () => {
-	let release!: () => void;
-	const hold = new Promise<void>(resolve => {
-		release = resolve;
-	});
-	const s = await setup({run: () => hold});
-	await s.command.run(['send', 'first'], s.ctx);
-	assert.equal(s.props.at(-1)!.initialSend, 'first');
-	assert.ok(s.printed.includes('Started a new chat with the message.'));
-	const got: string[] = [];
-	s.props.at(-1)!.onInbox!(text => void got.push(text));
-	await s.command.run(['send', 'talk', 'about', 'TECH-1'], s.ctx);
-	assert.deepEqual(got, ['talk about TECH-1']);
-	assert.ok(s.printed.includes('Sent the message to the open chat.'));
-	s.props.at(-1)!.onInbox!(() => {
-		throw new Error('Wait for the answer or press Esc to interrupt');
-	});
-	await assert.rejects(s.command.run(['send', 'x'], s.ctx), /Wait for the answer/);
-	await assert.rejects(s.command.run(['send'], s.ctx), /Usage: claude send <message…>/);
-	release();
-});
-
-const schedulerSetup = async (o: {key?: boolean; env?: NodeJS.ProcessEnv; login?: boolean; log?: ReturnType<typeof makeFakeLog>} = {}) => {
-	const fake = fakeCredentials();
-	if (o.key) seed(fake, 'sched', 'anthropic-key', KEY);
-	const vault = hostVault(fake, makeFakeLog());
-	await vault.load();
-	let release!: () => void;
-	const hold = new Promise<void>(resolve => {
-		release = resolve;
-	});
-	let runs = 0;
-	const s = await setup({
-		run: () => (runs++ === 0 ? Promise.resolve() : hold),
-		deps: {
-			vault,
-			env: o.env ?? {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
-			login: {probe: async () => (o.login ? {loggedIn: true, method: 'claude.ai'} : undefined)},
-			...(o.log && {log: o.log}),
-		},
-	});
-	await s.command.run(['new'], s.ctx);
-	assert.equal(s.props.length, 1);
-	const caller = (who: string | undefined): CommandContext => ({print: t => void s.printed.push(t), clear: () => {}, exit: () => {}, signal: new AbortController().signal, ...(who !== undefined && {caller: who})});
-	return {...s, release, caller};
-};
-
-test('a chat started by the scheduler runs only on an API key: no key, no chat', async () => {
-	const s = await schedulerSetup();
-	for (const who of ['scheduler', undefined, 'other']) {
-		await assert.rejects(s.command.run(['start', 'hello'], s.caller(who)), {message: API_KEY_ONLY}, String(who));
-		await assert.rejects(s.command.run(['send', 'hello'], s.caller(who)), {message: API_KEY_ONLY}, String(who));
-	}
-	assert.equal(s.props.length, 1, 'no chat was opened');
-	assert.equal(s.mounts(), 1);
-	assert.ok(!s.printed.includes('Started a new chat with the message.'));
-	s.release();
-});
-
-test('a scheduler chat uses the stored key even when the env token comes first or is pinned', async () => {
-	const log = makeFakeLog();
-	const s = await schedulerSetup({key: true, log, login: true});
-	await s.command.run(['auth', 'use', 'login'], s.ctx);
-	await s.command.run(['start', 'hello'], s.caller('scheduler'));
-	assert.equal(s.props.length, 2);
-	assert.equal(s.props.at(-1)!.initialAccount, 'sched');
-	assert.equal(s.props.at(-1)!.initialSend, 'hello');
-	assert.deepEqual(log.records.find(r => r.msg === 'chat started with a message')!.fields, {chars: 5, byCaller: true, apiKeyOnly: true});
-	assert.ok(!serialized(log).includes(KEY));
-	s.release();
-});
-
-test('a scheduler send with no open chat starts a key-only chat the same way', async () => {
-	const s = await schedulerSetup({key: true});
-	await s.command.run(['send', 'later'], s.caller('scheduler'));
-	assert.equal(s.props.length, 2);
-	assert.equal(s.props.at(-1)!.initialAccount, 'sched');
-	s.release();
-});
-
-test('the claude console tools (caller "yena") and typed lines keep the normal selection', async () => {
-	const viaTool = await schedulerSetup({key: true});
-	await viaTool.command.run(['start', 'hello'], viaTool.caller('yena'));
-	assert.equal(viaTool.props.at(-1)!.initialAccount, 'env-token');
-	viaTool.release();
-	const typed = await schedulerSetup({key: true});
-	await typed.command.run(['start', 'hello'], typed.ctx);
-	assert.equal(typed.props.at(-1)!.initialAccount, 'env-token');
-	typed.release();
-});
-
-test('a scheduler send into an open chat is refused unless that chat was started key-only; the chat is untouched', async () => {
-	const subscription = await schedulerSetup();
-	const got: string[] = [];
-	subscription.props.at(-1)!.onInbox!(text => void got.push(text));
-	await assert.rejects(subscription.command.run(['send', 'x'], subscription.caller('scheduler')), {message: API_KEY_ONLY});
-	assert.deepEqual(got, []);
-	await subscription.command.run(['send', 'typed'], subscription.ctx);
-	assert.deepEqual(got, ['typed'], 'the user keeps the subscription');
-	subscription.release();
-
-	const userKey = await schedulerSetup({key: true, env: {}});
-	const gotUser: string[] = [];
-	userKey.props.at(-1)!.onInbox!(text => void gotUser.push(text));
-	await assert.rejects(userKey.command.run(['send', 'job'], userKey.caller('scheduler')), {message: API_KEY_ONLY});
-	assert.deepEqual(gotUser, [], 'a chat the user opened is refused even on a key: it may move to the login');
-	userKey.release();
-
-	const keyOnly = await schedulerSetup({key: true});
-	await keyOnly.command.run(['start', 'first'], keyOnly.caller('scheduler'));
-	const gotKey: string[] = [];
-	keyOnly.props.at(-1)!.onInbox!(text => void gotKey.push(text));
-	await keyOnly.command.run(['send', 'job'], keyOnly.caller('scheduler'));
-	assert.deepEqual(gotKey, ['job'], 'the open chat was started key-only');
-	keyOnly.release();
-});
-
 test('auth use and auth auto refresh the pin watch of the open chat', async () => {
 	let claude: Command | undefined;
 	const seen: Array<string | undefined> = [];
@@ -1457,13 +820,7 @@ test('auth use and auth auto refresh the pin watch of the open chat', async () =
 			throw new Error('unused');
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => s.q.query,
-		loadUi: async () => ({
-			...uiHelpers,
-			createChatElement: p => {
-				s.props.push(p);
-				return {};
-			},
-		}),
+		onProps: p => s.props.push(p),
 	});
 	claude = cmds[1]!;
 	await cmds[0]!.run([], s.ctx);
@@ -1490,13 +847,7 @@ test('claude tier pins the open chat, shows the pin, returns it to the router an
 			throw new Error('unused');
 		}) as unknown as QueryFn,
 		loadChatQuery: async () => s.q.query,
-		loadUi: async () => ({
-			...uiHelpers,
-			createChatElement: p => {
-				s.props.push(p);
-				return {};
-			},
-		}),
+		onProps: p => s.props.push(p),
 	}) as [typeof s.chat, typeof s.chat];
 	const running = chat.run([], s.ctx);
 	await new Promise(r => setTimeout(r, 60));

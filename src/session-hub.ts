@@ -7,7 +7,7 @@ import {errClass} from './log.js';
 import {runnerSocketPath} from './runner/spawn.js';
 import {makeScrub, type Tier} from './deps/chat.js';
 import {loadRetiredCredentials} from './deps/account.js';
-import type {ChatRoute, ChatRouteRequest, ChatRunDeps} from './chat/command.js';
+import type {ChatRoute, ChatRouteRequest, ChatRunDeps} from './chat/open.js';
 import type {ClaudeChatHandle} from './chat/handle.js';
 import {queryStatus, serveControl, type ControlServer, type ControlStatus} from './sessions/control.js';
 import {acquireLock, isSessionId, readHolder, type LockInfo, type LockKind, type SessionLock} from './sessions/lock.js';
@@ -33,14 +33,11 @@ export type SessionHub = {
 	chatOpen: boolean;
 	askRunning: boolean;
 	askAbort: (() => void) | undefined;
-	openHandle: {close: () => void; done: Promise<void>} | undefined;
 	openSession: ClaudeChatHandle | undefined;
 	applyOpenChat: ((patch: LivePatch) => void) | undefined;
 	setOpenTier: ((tier: Tier | 'auto') => void) | undefined;
 	refreshOpenPin: (() => void) | undefined;
-	deliverToOpenChat: ((text: string) => void) | undefined;
 	openKeyOnly: boolean;
-	inputMode: 'normal' | 'vim';
 	onRulesChanged: (() => void) | undefined;
 	sessionsDir(): string | undefined;
 	busyMessage(holder: LockInfo | undefined): string;
@@ -55,11 +52,7 @@ export type SessionHub = {
 	peekLock(): Promise<{free: boolean; title?: string}>;
 	showRetiredOnce(ctx: Pick<CommandContext, 'print'>): Promise<void>;
 	showNoticeOnce(cred: CredentialInfo, ctx: Pick<CommandContext, 'print'>): Promise<void>;
-	runDeps(onMount?: (close: () => void) => void): ChatRunDeps;
-};
-
-export const unavailable = async (): Promise<never> => {
-	throw new Error('The chat is not available in this build');
+	runDeps(): ChatRunDeps;
 };
 
 export const createSessionHub = (
@@ -77,14 +70,11 @@ export const createSessionHub = (
 		chatOpen: false,
 		askRunning: false,
 		askAbort: undefined,
-		openHandle: undefined,
 		openSession: undefined,
 		applyOpenChat: undefined,
 		setOpenTier: undefined,
 		refreshOpenPin: undefined,
-		deliverToOpenChat: undefined,
 		openKeyOnly: false,
-		inputMode: 'normal',
 		onRulesChanged: undefined,
 
 		sessionsDir: () => {
@@ -98,9 +88,9 @@ export const createSessionHub = (
 		},
 
 		busyMessage: holder => {
-			if (!holder) return 'A session is starting. Wait a moment or run "claude sessions".';
+			if (!holder) return 'A session is starting. Wait a moment or run "chat sessions".';
 			const what = holder.sessionId ? `${holder.kind} ${holder.sessionId.slice(0, 8)}` : holder.kind;
-			return `A session is running (${what} since ${clockTime(holder.startedAt)}). Wait for it or run "claude stop".`;
+			return `A session is running (${what} since ${clockTime(holder.startedAt)}). Wait for it or run "chat stop".`;
 		},
 
 		localStatus: (kind, startedAt) => {
@@ -167,7 +157,8 @@ export const createSessionHub = (
 						stop: async () => {
 							if (kind === 'ask') return hub.askAbort?.();
 							await hub.openSession?.interrupt().catch(() => {});
-							hub.openHandle?.close();
+							// Closing the session ends the chat view, which watches for it.
+							hub.openSession?.close();
 						},
 					},
 				}).then(
@@ -205,7 +196,7 @@ export const createSessionHub = (
 			const dir = hub.sessionsDir();
 			const status = dir && got.holder ? await queryStatus(dir, 500).catch(() => undefined) : undefined;
 			const title = status?.title ? makeScrub(s => s)(status.title).slice(0, 80) : '';
-			throw new Error(title ? `A session is running (${title}). Wait for it or run "claude stop".` : hub.busyMessage(got.holder));
+			throw new Error(title ? `A session is running (${title}). Wait for it or run "chat stop".` : hub.busyMessage(got.holder));
 		},
 
 		routeChat: req => {
@@ -233,7 +224,7 @@ export const createSessionHub = (
 		},
 
 		turnBusy: holder =>
-			`${hub.busyMessage(holder).replace(/ Wait for it or run "claude stop"\.$/, '')} Your message stays in the input; send it when that session is done.`,
+			`${hub.busyMessage(holder).replace(/ Wait for it or run "chat stop"\.$/, '')} Your message stays in the input; send it when that session is done.`,
 
 		chatTurnLock: () =>
 			createTurnLock({
@@ -288,16 +279,18 @@ export const createSessionHub = (
 			await store.update({subscriptionNotice: SUBSCRIPTION_NOTICE_VERSION});
 		},
 
-		runDeps: onMount => ({
+		runDeps: () => ({
 			dataDir,
-			...(deps.build && {build: deps.build}),
 			env,
 			moduleDir: deps.moduleDir,
 			log,
-			loadChatQuery: deps.loadChatQuery ?? unavailable,
+			loadChatQuery:
+				deps.loadChatQuery ??
+				(async () => {
+					throw new Error('The chat is not available in this build');
+				}),
 			...(deps.loadConsoleSdk && {loadConsoleSdk: deps.loadConsoleSdk}),
 			...(deps.shellTmp && {shellTmp: deps.shellTmp}),
-			loadUi: deps.loadUi ?? unavailable,
 			registerAbort: deps.registerAbort,
 			store,
 			showNoticeOnce: hub.showNoticeOnce,
@@ -305,39 +298,15 @@ export const createSessionHub = (
 			isMissingModule,
 			vault: vaultOf(credOpts),
 			...(deps.redactExtra && {redactExtra: deps.redactExtra}),
-			...(onMount && {onMount}),
-			onSession: s => {
-				hub.openSession = s;
-			},
 			route: hub.routeChat,
 			turnLock: hub.chatTurnLock,
 			peek: hub.peekLock,
 			...(deps.spawnRunner && {spawnRunner: deps.spawnRunner}),
 			...deps.chatTiming,
-			onPin: refresh => {
-				hub.refreshOpenPin = refresh;
-			},
-			onLive: apply => {
-				hub.applyOpenChat = apply;
-			},
-			onTier: set => {
-				hub.setOpenTier = set;
-			},
-			onInbox: deliver => {
-				hub.deliverToOpenChat = deliver;
-			},
 			onRulesChanged: () => hub.onRulesChanged?.(),
-			inputMode: () => hub.inputMode,
 			acquire: () => hub.acquireShared('chat'),
 		}),
 	};
-
-	void store.read().then(
-		s => {
-			hub.inputMode = s.chatInputMode === 'vim' ? 'vim' : 'normal';
-		},
-		() => {},
-	);
 
 	return hub;
 };

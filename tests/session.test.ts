@@ -83,10 +83,10 @@ test('authentication_failed assistant error maps to the auth message', async () 
 	await assert.rejects(run(f), /Not authenticated/);
 });
 
-test('resume not found maps to the claude new message', async () => {
+test('resume not found maps to the chat new message', async () => {
 	const f = fake([{type: 'result', subtype: 'error_during_execution', is_error: true, result: 'No conversation found with session ID: x'}]);
 	await assert.rejects(run(f), {
-		message: 'The stored session no longer exists. Run "claude new" or "claude ask --new <text>".',
+		message: 'The stored session no longer exists. Run "chat new" or "chat ask --new <text>".',
 	});
 });
 
@@ -96,7 +96,7 @@ test('real SDK shapes: resume miss carries the text in errors[] with result abse
 		{type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['No conversation found with session ID: 11111111-2222-4333-8444-555555555555']},
 	]);
 	await assert.rejects(run(f), {
-		message: 'The stored session no longer exists. Run "claude new" or "claude ask --new <text>".',
+		message: 'The stored session no longer exists. Run "chat new" or "chat ask --new <text>".',
 	});
 });
 
@@ -169,7 +169,7 @@ test('usage limit is classified, carries the session id and model', async () => 
 	assert.equal(err.sessionId, 's-res');
 	assert.equal(err.model, 'm1');
 	assert.match(err.message, /Usage limit reached/);
-	assert.match(err.message, /claude ask/);
+	assert.match(err.message, /chat ask/);
 });
 
 test('a rate_limit error without a rejected report is a rate-limit', async () => {

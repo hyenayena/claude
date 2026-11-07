@@ -35,6 +35,7 @@ export type ClaudeState = {
 	chatThinking?: 'disabled';
 	chatFastMode?: boolean;
 	chatOutputStyle?: 'Explanatory' | 'Learning';
+	// Read only by the provider's legacyPrefs: the chat module owns these settings now.
 	chatPermissionMode?: 'acceptEdits' | 'plan' | 'auto';
 	chatInputMode?: 'vim';
 	chatMcp?: 'off';

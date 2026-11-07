@@ -61,7 +61,6 @@ export type EngineDeps = {
 	shellTmp?: () => string;
 	sandboxProblem?: (pathVar: string | undefined) => string | undefined;
 	onCredential?: (cred: Credential) => Promise<void>;
-	preload?: () => Promise<void>;
 	turnLock?: (session: () => ChatSession | undefined) => {acquire(): void; release(): void};
 	idleCloseMs?: number;
 	vault?: ClaudeVault;
@@ -126,7 +125,6 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 				return undefined;
 			});
 		}
-		await deps.preload?.();
 	} catch (err) {
 		const missingModule = deps.isMissingModule(err);
 		log.error('chat dependencies failed to load', {
@@ -192,7 +190,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		if (kept === undefined || kept === keptNoted || sub === undefined) return;
 		keptNoted = kept;
 		log.info('session account kept');
-		io.warn(`This chat stays on the Claude subscription "${sub.account}": a chat uses only one subscription. Start a new chat ("claude new") to use "${kept}".`);
+		io.warn(`This chat stays on the Claude subscription "${sub.account}": a chat uses only one subscription. Start a new chat ("chat new") to use "${kept}".`);
 	};
 	let created: ChatSession | undefined;
 	const sandboxExtras = {socketDirs: [sessionDirOf(shellTmpRoot(process.getuid?.() ?? 0))]};
