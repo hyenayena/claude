@@ -864,3 +864,34 @@ test('claude tier pins the open chat, shows the pin, returns it to the router an
 	await writeFile(join(s.dataDir, 'state.json'), JSON.stringify({chatRouter: 'on'}));
 	await assert.rejects(async () => claude.run(['tier', 'max'], s.ctx), /No chat is open/);
 });
+
+test('a module-origin open without a command bridge never loads the console SDK and runs key-only', async () => {
+	let sdkLoads = 0;
+	const s = await setup({
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hi');
+			await done;
+		},
+	});
+	const shimmed = shimClaude({
+		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH, ANTHROPIC_API_KEY: KEY},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+		loadChatQuery: async () => s.q.query,
+		loadConsoleSdk: async () => {
+			sdkLoads++;
+			return consoleSdkFake;
+		},
+	}, {onProps: p => s.props.push(p)});
+	await shimmed.open({origin: 'module', fresh: true, attach: false, keep: false}, s.ctx);
+	assert.equal(sdkLoads, 0);
+	const env = s.q.calls[0]!.options.env as Record<string, string | undefined>;
+	assert.equal(env.ANTHROPIC_API_KEY, KEY);
+	assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+	assert.equal('yena' in ((s.q.calls[0]!.options['mcpServers'] as Record<string, unknown> | undefined) ?? {}), false);
+});
