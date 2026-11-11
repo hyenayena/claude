@@ -783,7 +783,9 @@ export class ChatSession implements ChatController, PermissionPrompter {
 
 	private onUi(event: UiEvent, handle: Handle): void {
 		let ev = event;
-		if (ev.kind === 'cli-state' && ev.state === 'running') this.beginCliTurn(handle);
+		// Claude Code often starts a turn by itself (after a subagent hand-back) without a "running" state change;
+		// main-agent output while idle is such a turn, or the idle close would cut it.
+		if ((ev.kind === 'cli-state' && ev.state === 'running') || (this._state === 'idle' && FIRST_OUTPUT.has(ev.kind))) this.beginCliTurn(handle);
 		if (this.firstOutput && FIRST_OUTPUT.has(ev.kind)) {
 			this.log.info('first output', {ms: Date.now() - this.firstOutput.at, warm: this.firstOutput.warm});
 			this.firstOutput = undefined;

@@ -1238,6 +1238,31 @@ test('a turn Claude Code starts itself (a background task finished) runs like a 
 	assert.equal(q.closed, 1, 'closed once idle again');
 });
 
+test('main-agent output while idle starts a turn even without a running state report', async () => {
+	const t = fakeTurnLock();
+	const {session, queries, ends} = setup({turnLock: t.lock, idleCloseMs: 20} as never);
+	session.send('start a coder');
+	const q = queries[0]!;
+	q.emit(init());
+	q.emit(task('b1', 'task_started'));
+	q.emit(ok());
+	await tick();
+	q.emit(task('b1', 'task_notification', 'completed'));
+	await tick();
+	await tick();
+	assert.equal(session.state, 'idle');
+	q.emit(toolUse('h1'));
+	await tick();
+	assert.equal(session.state, 'running', 'the hand-back turn shows as work');
+	await new Promise(r => setTimeout(r, 40));
+	assert.equal(q.closed, 0, 'the idle close never cuts the hand-back turn');
+	q.emit(ok());
+	await tick();
+	assert.equal(session.state, 'idle');
+	assert.deepEqual(ends().map(e => e.type === 'turn-end' && e.outcome), ['ok', 'ok']);
+	assert.deepEqual(t.calls, ['acquire', 'release', 'acquire', 'release']);
+});
+
 test('a running state report during a sent turn changes nothing', async () => {
 	const {session, queries, ends} = setup();
 	session.send('one');
