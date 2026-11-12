@@ -14,7 +14,7 @@ import {type Clock, type RateLimitInfo, systemClock} from '../deps/chat.js';
 import {normalize} from './normalize.js';
 import {PlanTracker} from './plan.js';
 import {type PlanItem} from '../deps/chat.js';
-import {TurnStats} from '../deps/chat.js';
+import {MAX_DURATION_MS, TurnStats} from '../deps/chat.js';
 import {type ChatUsage, subtract, UsageMeter} from '../deps/chat.js';
 import {MAX_QUEUE, PERMISSION_IDLE_MS, type PermissionPrompter, sdkPermissionMode} from './permission.js';
 import {type AuditEntry, type CancelCause, type ChatMode, MODE_CYCLE, type PermissionDecision, type PermissionRequest} from '../deps/chat.js';
@@ -162,6 +162,9 @@ export function parseContextUsage(raw: unknown): {used: number; limit?: number} 
 	const limit = Math.min(MAX_CONTEXT, Math.round(max - buffer));
 	return limit > 0 ? {used, limit} : {used};
 }
+
+const COMMAND_DESCRIPTION_CAP = 4096;
+const COMMAND_HINT_CAP = 1024;
 
 export class ChatSession implements ChatController, PermissionPrompter {
 	private readonly opts: ChatSessionOptions;
@@ -387,6 +390,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.authFailed = false;
 		this.turnError = undefined;
 		this.pending = undefined;
+		this.thinkingStart = undefined;
+		this.thinkingEnd = undefined;
 		this.setState('running');
 		this.turnStartedAt = Date.now();
 		this.turnUsageFrom = this.usage;
@@ -693,8 +698,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 						.filter((c): c is {name: string; description?: unknown; argumentHint?: unknown} => typeof c?.name === 'string')
 						.map(c => ({
 							name: c.name,
-							...(typeof c.description === 'string' && {description: c.description}),
-							...(typeof c.argumentHint === 'string' && c.argumentHint !== '' && {argumentHint: c.argumentHint}),
+							...(typeof c.description === 'string' && {description: c.description.slice(0, COMMAND_DESCRIPTION_CAP)}),
+							...(typeof c.argumentHint === 'string' && c.argumentHint !== '' && {argumentHint: c.argumentHint.slice(0, COMMAND_HINT_CAP)}),
 						})),
 				);
 			},
@@ -739,6 +744,8 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.authFailed = false;
 		this.turnError = undefined;
 		this.pending = undefined;
+		this.thinkingStart = undefined;
+		this.thinkingEnd = undefined;
 		this.setState('running');
 		this.turnStartedAt = Date.now();
 		this.turnUsageFrom = this.usage;
@@ -833,16 +840,18 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			const start = this.toolStarts.get(ev.toolUseId);
 			if (start !== undefined) {
 				this.toolStarts.delete(ev.toolUseId);
-				ev = {...ev, durationMs: Math.max(0, this.clock.now() - start)};
+				ev = {...ev, durationMs: Math.min(MAX_DURATION_MS, Math.max(0, this.clock.now() - start))};
 			}
 		}
 		if (ev.kind === 'thinking') {
-			this.thinkingStart ??= this.clock.now();
+			// an ended thought without thinking-text must not keep its old start
+			if (this.thinkingEnd !== undefined) this.thinkingStart = this.clock.now();
+			else this.thinkingStart ??= this.clock.now();
 			this.thinkingEnd = undefined;
 		} else if (this.thinkingStart !== undefined && (ev.kind === 'text-delta' || ev.kind === 'tool-input' || ev.kind === 'thinking-text')) {
 			this.thinkingEnd ??= this.clock.now();
 			if (ev.kind === 'thinking-text') {
-				ev = {...ev, durationMs: Math.max(0, this.thinkingEnd - this.thinkingStart)};
+				ev = {...ev, durationMs: Math.min(MAX_DURATION_MS, Math.max(0, this.thinkingEnd - this.thinkingStart))};
 				this.thinkingStart = undefined;
 				this.thinkingEnd = undefined;
 			}

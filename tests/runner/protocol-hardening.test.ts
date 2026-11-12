@@ -118,3 +118,51 @@ test('queue and send enforce their limits', () => {
 	assert.throws(() => createDecoder('toRunner').push(line({v: 1, type: 'open', open: {fresh: 'yes'}, tuning: {}, keep: true})), ProtocolError);
 	assert.throws(() => createDecoder('toRunner').push(line({v: 1, type: 'open', open: {fresh: true}, tuning: {}})), ProtocolError);
 });
+
+test('an invalid snapshot stays fatal after a dropped ui event', () => {
+	const dec = createDecoder('toClient', () => {});
+	assert.deepEqual(dec.push(line({v: 1, type: 'event', event: {type: 'ui', event: {kind: ''}}})), []);
+	assert.throws(() => dec.push(line({...SNAP, state: 'zombie'})), ProtocolError);
+});
+
+const uiEvent = (event: unknown) => line({v: 1, type: 'event', event: {type: 'ui', event}});
+
+test('hostile ui kinds produce no drop record content: unknown ones vanish, malformed ones carry no kind', () => {
+	const drops: Array<{type: string; kind?: string; field: string}> = [];
+	const dec = createDecoder('toClient', i => drops.push(i));
+	const hostile = ['x'.repeat(5000), 'UPPER', 'a\u001b[31mb', 'a\nb', '1abc', 'a'.repeat(33)];
+	for (const kind of hostile) assert.deepEqual(dec.push(uiEvent({kind, text: 'secret'})), []);
+	for (const kind of ['', 5, null, {a: 1}]) assert.deepEqual(dec.push(uiEvent({kind, text: 'secret'})), []);
+	for (const d of drops) {
+		assert.ok(!('kind' in d));
+		assert.match(d.field, /^[A-Za-z][A-Za-z0-9]{0,63}$|^unknown$/);
+		assert.ok(!JSON.stringify(d).includes('secret'));
+	}
+	assert.ok(drops.every(d => !JSON.stringify(d).includes('\u001b')));
+});
+
+test('a throwing drop observer does not end the decoder', () => {
+	const dec = createDecoder('toClient', () => {
+		throw new Error('observer');
+	});
+	assert.deepEqual(dec.push(uiEvent({kind: ''})), []);
+	assert.equal(dec.push(line({v: 1, type: 'event', event: {type: 'state', state: 'idle'}})).length, 1);
+});
+
+test('a non-ui event that fails validation stays fatal and is never reported as a drop', () => {
+	for (const event of [{type: 'state', state: 'zombie'}, {type: 'turn-end', outcome: 'bogus'}, {type: 'permission-requested', request: 5}]) {
+		const drops: unknown[] = [];
+		const dec = createDecoder('toClient', i => drops.push(i));
+		assert.throws(() => dec.push(line({v: 1, type: 'event', event})), ProtocolError);
+		assert.throws(() => dec.push(line({v: 1, type: 'event', event: {type: 'state', state: 'idle'}})), ProtocolError);
+		assert.deepEqual(drops, []);
+	}
+});
+
+test('the runner-side decoder is unchanged: bad client frames stay fatal and the callback is unused', () => {
+	const drops: unknown[] = [];
+	const dec = createDecoder('toRunner', i => drops.push(i));
+	assert.throws(() => dec.push(line({v: 1, type: 'answer', id: 'a', decision: {kind: 'bogus'}})), ProtocolError);
+	assert.throws(() => dec.push(line({v: 1, type: 'answer', id: 'a', decision: {kind: 'allow'}})), ProtocolError);
+	assert.deepEqual(drops, []);
+});

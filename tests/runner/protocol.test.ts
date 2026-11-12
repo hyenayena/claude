@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {createDecoder, encodeFrame, MAX_FRAME_BYTES, ProtocolError, type ClientFrame, type RunnerFrame} from '../../src/runner/protocol.js';
+import {createDecoder, encodeFrame, MAX_FRAME_BYTES, ProtocolError, type ClientFrame, type DroppedFrame, type RunnerFrame} from '../../src/runner/protocol.js';
 import {parseTodos} from '../../src/deps/chat.js';
 
 const line = (o: unknown): string => `${JSON.stringify(o)}\n`;
@@ -154,7 +154,12 @@ test('an event frame runs chat\'s reader: an unknown ui kind drops the frame, a 
 	const dec = createDecoder('toClient');
 	const out = dec.push(Buffer.from(line({v: 1, type: 'event', event: {type: 'ui', event: {kind: 'from-the-future', x: 1}}}) + line({v: 1, type: 'event', event: {type: 'state', state: 'idle'}})));
 	assert.deepEqual(out.map(f => f.type), ['event']);
-	assert.throws(() => toClient({type: 'event', event: {type: 'ui', event: {kind: ''}}}), {name: 'ProtocolError', message: 'Invalid frame: ui event kind'});
+	const drops: DroppedFrame[] = [];
+	const dropping = (event: unknown) => createDecoder('toClient', i => drops.push(i)).push(line({v: 1, type: 'event', event}));
+	assert.deepEqual(dropping({type: 'ui', event: {kind: ''}}), []);
+	assert.deepEqual(drops.pop(), {type: 'event', field: 'ui'});
+	assert.deepEqual(dropping({type: 'ui', event: {kind: 'task', id: 't', status: 'running', description: 5}}), []);
+	assert.deepEqual(drops.pop(), {type: 'event', kind: 'task', field: 'description'});
 	assert.throws(() => toClient({type: 'event', event: {type: 'turn-end', outcome: 'bogus'}}), {name: 'ProtocolError', message: 'Invalid frame: outcome is not valid'});
 	const answer = (decision: unknown) => createDecoder('toRunner').push(line({v: 1, type: 'answer', id: 'a', decision}));
 	assert.deepEqual(answer({kind: 'allow'}), [{v: 1, type: 'answer', id: 'a', decision: {kind: 'allow'}}]);
@@ -170,4 +175,32 @@ test('whatever the model puts in plan items, the clipped plan is a frame the cli
 	assert.deepEqual(createDecoder('toClient').push(encodeFrame(frame)), [frame]);
 	const snap = {v: 1, type: 'snapshot', ...SNAPSHOT_BODY, plan: items};
 	assert.equal(createDecoder('toClient').push(Buffer.from(line(snap))).length, 1);
+});
+
+test('an invalid ui event is dropped alone: the frames around it decode, the decoder keeps working', () => {
+	const state = (st: string) => line({v: 1, type: 'event', event: {type: 'state', state: st}});
+	const drops: DroppedFrame[] = [];
+	const dec = createDecoder('toClient', i => drops.push(i));
+	const bad = line({v: 1, type: 'event', event: {type: 'ui', event: {kind: 'thinking-text', text: 'x', durationMs: -1}}});
+	const out = dec.push(Buffer.from(state('idle') + bad + state('running')));
+	assert.equal(out.length, 2);
+	assert.deepEqual(drops, [{type: 'event', kind: 'thinking-text', field: 'durationMs'}]);
+	assert.equal(dec.push(Buffer.from(state('idle'))).length, 1);
+	assert.equal(createDecoder('toClient').push(Buffer.from(bad)).length, 0);
+});
+
+test('control frames and broken lines stay fatal after a dropped event', () => {
+	const bad = line({v: 1, type: 'event', event: {type: 'ui', event: {kind: 'thinking-text', text: 'x', durationMs: -1}}});
+	const snap = {...SNAPSHOT_BODY, type: 'snapshot', v: 1};
+	for (const fatal of [
+		line({...snap, state: 'zombie'}),
+		line({v: 1, type: 'bridgeRun', id: '', line: 'x', timeoutMs: 1}),
+		line({v: 1, type: 'log', level: 'trace', msg: 'x'}),
+		'not json\n',
+	]) {
+		const dec = createDecoder('toClient', () => {});
+		assert.deepEqual(dec.push(Buffer.from(bad)), []);
+		assert.throws(() => dec.push(Buffer.from(fatal)), ProtocolError);
+		assert.throws(() => dec.push(Buffer.from(bad)), ProtocolError);
+	}
 });

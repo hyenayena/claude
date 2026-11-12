@@ -812,6 +812,23 @@ test('typed text starting with / is delivered as written; console commands are d
 	session.close();
 });
 
+test('supportedCommands clips over-long descriptions and hints', async () => {
+	const {session} = setup();
+	const orig = FakeQuery.prototype as unknown as {supportedCommands?: () => Promise<unknown>};
+	orig.supportedCommands = () => Promise.resolve([{name: 'big', description: 'd'.repeat(5000), argumentHint: 'h'.repeat(2000)}]);
+	try {
+		session.send('hi');
+		await tick();
+		await tick();
+		const cmd = session.commands.find(c => c.name === 'big');
+		assert.equal(cmd?.description?.length, 4096);
+		assert.equal(cmd?.argumentHint?.length, 1024);
+	} finally {
+		delete orig.supportedCommands;
+		session.close();
+	}
+});
+
 test('the session learns its Claude Code commands from init and supportedCommands', async () => {
 	const {session, queries} = setup();
 	session.send('hi');
@@ -1580,6 +1597,75 @@ test('a thought that ends with the thinking-text itself is timed up to it', asyn
 	await tick();
 	const ev = t.uis().find(e => e.kind === 'thinking-text');
 	assert.equal(ev?.kind === 'thinking-text' && ev.durationMs, 4000);
+});
+
+test('durations are clamped to the contract maximum', async () => {
+	const t = timed();
+	t.session.send('go');
+	t.queries[0]?.emit(init());
+	t.queries[0]?.emit(toolUse('t1'));
+	t.queries[0]?.emit(thinkingStart());
+	await tick();
+	t.advance(700_000_000);
+	t.queries[0]?.emit(toolResult('t1'));
+	t.queries[0]?.emit(thought('hmm'));
+	await tick();
+	const res = t.uis().find(e => e.kind === 'tool-result');
+	const ev = t.uis().find(e => e.kind === 'thinking-text');
+	assert.equal(res?.kind === 'tool-result' && res.durationMs, 604_800_000);
+	assert.equal(ev?.kind === 'thinking-text' && ev.durationMs, 604_800_000);
+});
+
+test('a thought that ended without thinking-text does not stretch the next one', async () => {
+	const t = timed();
+	t.session.send('go');
+	t.queries[0]?.emit(init());
+	t.queries[0]?.emit(thinkingStart());
+	await tick();
+	t.advance(1000);
+	t.queries[0]?.emit(textDelta('hi'));
+	await tick();
+	t.advance(500_000_000);
+	t.queries[0]?.emit(thinkingStart());
+	await tick();
+	t.advance(3000);
+	t.queries[0]?.emit(thought('hmm'));
+	await tick();
+	const ev = t.uis().find(e => e.kind === 'thinking-text');
+	assert.equal(ev?.kind === 'thinking-text' && ev.durationMs, 3000);
+});
+
+test('a thought left open by one turn is not timed from the next sent turn', async () => {
+	const t = timed();
+	t.session.send('go');
+	t.queries[0]?.emit(init());
+	t.queries[0]?.emit(thinkingStart());
+	t.queries[0]?.emit(ok());
+	await tick();
+	t.advance(500_000_000);
+	t.session.send('again');
+	t.queries[t.queries.length - 1]?.emit(thought('hmm'));
+	await tick();
+	const ev = t.uis().find(e => e.kind === 'thinking-text');
+	assert.ok(ev && !('durationMs' in ev));
+});
+
+test('a thought left open by one turn is not timed from a Claude Code turn', async () => {
+	const t = timed();
+	t.session.send('go');
+	const q = t.queries[0]!;
+	q.emit(cliState('running'));
+	q.emit(init());
+	q.emit(thinkingStart());
+	q.emit(ok());
+	q.emit(cliState('idle'));
+	await tick();
+	t.advance(500_000_000);
+	q.emit(cliState('running'));
+	q.emit(thought('hmm'));
+	await tick();
+	const ev = t.uis().find(e => e.kind === 'thinking-text');
+	assert.ok(ev && !('durationMs' in ev));
 });
 
 const usage = (input: number, output: number, cacheRead = 0) => ({input_tokens: input, cache_creation_input_tokens: 0, cache_read_input_tokens: cacheRead, output_tokens: output});

@@ -115,6 +115,23 @@ const fail = (what: string): never => {
 };
 
 type Rec = Record<string, unknown>;
+export type DroppedFrame = {type: string; kind?: string; field: string};
+
+class DroppableFrameError extends ProtocolError {
+	constructor(message: string, readonly info: DroppedFrame) {
+		super(message);
+	}
+}
+
+const droppable = (err: ContractError, event: Rec): DroppableFrameError => {
+	const kind = isRec(event.event) ? event.event.kind : undefined;
+	return new DroppableFrameError(`Invalid frame: ${err.detail}`, {
+		type: 'event',
+		...(typeof kind === 'string' && /^[a-z][a-z-]{0,31}$/.test(kind) && {kind}),
+		field: /^[A-Za-z][A-Za-z0-9]{0,63}/.exec(err.detail)?.[0] ?? 'unknown',
+	});
+};
+
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
 const rec = (v: unknown, what: string): Rec => (isRec(v) ? v : fail(`${what} must be an object`));
 const str = (v: unknown, what: string, max = MAX_FRAME_BYTES): string =>
@@ -375,7 +392,13 @@ const CLIENT: Record<string, Reader> = {
 const RUNNER: Record<string, Reader> = {
 	snapshot: o => ({...readSnapshot(o)}),
 	event: o => {
-		const event = readChatEvent(o.event);
+		let event;
+		try {
+			event = readChatEvent(o.event);
+		} catch (err) {
+			if (err instanceof ContractError && isRec(o.event) && o.event.type === 'ui') throw droppable(err, o.event);
+			throw err;
+		}
 		return event ? {event} : null;
 	},
 	rpcResult: o => {
@@ -429,7 +452,7 @@ export type FrameDecoder = {
 	push(chunk: Buffer | string): Frame[];
 };
 
-export const createDecoder = (direction: FrameDirection): FrameDecoder => {
+export const createDecoder = (direction: FrameDirection, onDrop?: (info: DroppedFrame) => void): FrameDecoder => {
 	let pending: Buffer = Buffer.alloc(0);
 	let failed: ProtocolError | undefined;
 	return {
@@ -443,7 +466,7 @@ export const createDecoder = (direction: FrameDirection): FrameDecoder => {
 					const nl = pending.indexOf(0x0a, start);
 					if (nl === -1) break;
 					if (nl - start > MAX_FRAME_BYTES) throw new ProtocolError('Frame is too large');
-					if (nl > start) frames.push(...decodeLine(pending.subarray(start, nl), direction));
+					if (nl > start) frames.push(...decodeLine(pending.subarray(start, nl), direction, onDrop));
 					start = nl + 1;
 				}
 				pending = pending.subarray(start);
@@ -458,13 +481,23 @@ export const createDecoder = (direction: FrameDirection): FrameDecoder => {
 	};
 };
 
-const decodeLine = (line: Buffer, direction: FrameDirection): Frame[] => {
+const decodeLine = (line: Buffer, direction: FrameDirection, onDrop?: (info: DroppedFrame) => void): Frame[] => {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(line.toString('utf8'));
 	} catch {
 		throw new ProtocolError('Invalid frame: not JSON');
 	}
-	const frame = validateFrame(parsed, direction);
-	return frame ? [frame] : [];
+	try {
+		const frame = validateFrame(parsed, direction);
+		return frame ? [frame] : [];
+	} catch (err) {
+		if (!(err instanceof DroppableFrameError)) throw err;
+		try {
+			onDrop?.(err.info);
+		} catch {
+			// a failing observer must not end the connection
+		}
+		return [];
+	}
 };

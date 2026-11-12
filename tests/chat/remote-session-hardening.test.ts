@@ -236,6 +236,71 @@ test('invalid data after the snapshot closes the mirror and does not throw', asy
 	assert.deepEqual(lost, ['The background chat sent invalid data.']);
 });
 
+test('an invalid ui event is dropped and logged without its content, the next event arrives', async () => {
+	const r = await fakeRunner();
+	const lost: string[] = [];
+	const log = makeFakeLog();
+	const s = await connect(r.socketPath, {onLost: x => lost.push(x), log});
+	cleanup.push(() => s.close());
+	const events: ChatEvent[] = [];
+	s.subscribe(e => events.push(e));
+	r.sendRaw(`${JSON.stringify({v: 1, type: 'event', event: {type: 'ui', event: {kind: 'thinking-text', text: 'secret words', durationMs: -1}}})}\n`);
+	r.send({type: 'event', event: {type: 'sent', text: 'after'}});
+	await r.until(() => events.some(e => e.type === 'sent'));
+	assert.notEqual(s.state, 'closed');
+	assert.deepEqual(lost, []);
+	const drops = log.records.filter(x => x.msg === 'frame dropped');
+	assert.equal(drops.length, 1);
+	assert.deepEqual(drops[0]!.fields, {type: 'event', kind: 'thinking-text', field: 'durationMs'});
+	assert.ok(!JSON.stringify(log.records).includes('secret words'));
+});
+
+test('dropped ui events log at most 20 records, then one suppression record, and the connection stays', async () => {
+	const r = await fakeRunner();
+	const lost: string[] = [];
+	const log = makeFakeLog();
+	const s = await connect(r.socketPath, {onLost: x => lost.push(x), log});
+	cleanup.push(() => s.close());
+	const events: ChatEvent[] = [];
+	s.subscribe(e => events.push(e));
+	const bad = `${JSON.stringify({v: 1, type: 'event', event: {type: 'ui', event: {kind: 'thinking-text', text: 'x', durationMs: -1}}})}\n`;
+	r.sendRaw(bad.repeat(50));
+	r.send({type: 'event', event: {type: 'sent', text: 'after'}});
+	await r.until(() => events.some(e => e.type === 'sent'));
+	assert.equal(log.records.filter(x => x.msg === 'frame dropped').length, 20);
+	const sup = log.records.filter(x => x.msg === 'frame drops suppressed');
+	assert.equal(sup.length, 1);
+	assert.deepEqual(sup[0]!.fields, {count: 21});
+	assert.notEqual(s.state, 'closed');
+	assert.deepEqual(lost, []);
+});
+
+test('hostile kind and detail text never reaches the log', async () => {
+	const r = await fakeRunner();
+	const log = makeFakeLog();
+	const s = await connect(r.socketPath, {log});
+	cleanup.push(() => s.close());
+	const events: ChatEvent[] = [];
+	s.subscribe(e => events.push(e));
+	const evil = 'EVIL\u001b[31m'.repeat(50);
+	r.sendRaw(`${JSON.stringify({v: 1, type: 'event', event: {type: 'ui', event: {kind: evil, [evil]: 1}}})}\n`);
+	r.sendRaw(`${JSON.stringify({v: 1, type: 'event', event: {type: 'ui', event: {kind: {evil}}}})}\n`);
+	r.send({type: 'event', event: {type: 'sent', text: 'after'}});
+	await r.until(() => events.some(e => e.type === 'sent'));
+	const drop = log.records.find(x => x.msg === 'frame dropped');
+	assert.ok(drop && !('kind' in (drop.fields ?? {})));
+	assert.ok(!JSON.stringify(log.records).includes('EVIL'));
+});
+
+test('a state event that fails validation still closes the mirror', async () => {
+	const r = await fakeRunner();
+	const lost: string[] = [];
+	const s = await connect(r.socketPath, {onLost: x => lost.push(x), log: makeFakeLog()});
+	r.sendRaw(`${JSON.stringify({v: 1, type: 'event', event: {type: 'state', state: 'zombie'}})}\n`);
+	await r.until(() => s.state === 'closed');
+	assert.deepEqual(lost, ['The background chat sent invalid data.']);
+});
+
 test('an invalid first frame rejects the connect and an oversize one is refused', async () => {
 	const bad = await fakeRunner('{"v":1,"type":"snapshot","state":"zombie"}\n');
 	await assert.rejects(connect(bad.socketPath), /Could not read the background chat/);

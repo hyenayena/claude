@@ -5,7 +5,7 @@ import type {CommandBridge, CommandConfirmRequest, CommandRunResult, Logger} fro
 import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import {errClass, noopLog} from '../log.js';
 import {createDecoder, encodeFrame, ProtocolError} from '../runner/protocol.js';
-import type {ClientFrame, OpenSpec, RpcCall, RunnerFrame, Snapshot, StatePatch} from '../runner/protocol.js';
+import type {ClientFrame, DroppedFrame, OpenSpec, RpcCall, RunnerFrame, Snapshot, StatePatch} from '../runner/protocol.js';
 import {RESUME_MESSAGE} from '../session.js';
 import {readHolder} from '../sessions/lock.js';
 import type {RewindResult} from '../types.js';
@@ -54,6 +54,8 @@ let seq = 0;
 
 export const BUSY_SEND = 'Another session is working right now. Your message stays in the input; send it when that session is done.';
 
+const MAX_LOGGED_DROPS = 20;
+
 export class RemoteChatSession implements ClaudeChatHandle {
 	readonly detachesOnClose = true;
 	reattached = false;
@@ -99,7 +101,7 @@ export class RemoteChatSession implements ClaudeChatHandle {
 			const socket = net.createConnection(opts.socketPath);
 			const session = new RemoteChatSession(opts, socket);
 			session.reattached = opts.open === undefined;
-			const decoder = createDecoder('toClient');
+			const decoder = createDecoder('toClient', info => session.noteDrop(info));
 			let settled = false;
 			const timeout = setTimeout(
 				() => fail(new Error('The background chat did not answer in time')),
@@ -381,6 +383,14 @@ export class RemoteChatSession implements ClaudeChatHandle {
 
 	private pushCredentials(bundle: CredentialBundle): void {
 		this.write({v: 1, type: 'credentials', bundle: encodeBundle(bundle)});
+	}
+
+	private drops = 0;
+
+	private noteDrop(info: DroppedFrame): void {
+		this.drops++;
+		if (this.drops <= MAX_LOGGED_DROPS) this.log.warn('frame dropped', info);
+		else if (this.drops === MAX_LOGGED_DROPS + 1) this.log.warn('frame drops suppressed', {count: this.drops});
 	}
 
 	private write(frame: ClientFrame): void {
