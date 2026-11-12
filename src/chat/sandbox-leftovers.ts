@@ -101,7 +101,7 @@ export function createLeftoverSweeper(o: {
 	const sweep = async (extra: readonly string[] = []): Promise<void> => {
 		try {
 			const {removed, kinds} = await sweepPlaceholders([...extra, ...o.dirs()], o.fs);
-			if (removed > 0) o.log.info('sandbox leftovers removed', {removed, kinds});
+			if (removed > 0) o.log.debug('sandbox leftovers removed', {removed, kinds});
 		} catch {
 			// the sweep is best-effort cleanup and must never fail a tool call
 		}

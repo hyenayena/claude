@@ -55,7 +55,7 @@ export const releaseProvider = (): void => {
 const plugin: ModulePlugin = host => {
 	const log = host.log ?? noopLog;
 	exitLog = log;
-	log.info('plugin loaded');
+	log.debug('plugin loaded');
 	const vault = hostVault(host.credentials, log);
 	const redactExtra = log.redact?.bind(log);
 	const {commands, provider} = createClaude({dataDir: host.dataDir, env: process.env, log, vault, ...(redactExtra && {redactExtra}), loadQuery, loadChatQuery, loadConsoleSdk, registerAbort, spawnRunner, sessionDir: () => ensureSessionDir()});

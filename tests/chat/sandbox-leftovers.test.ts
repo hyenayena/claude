@@ -26,8 +26,8 @@ const fakeLog = () => {
 	const log: Logger = {
 		error: () => {},
 		warn: () => {},
-		info: (msg: string, meta?: unknown) => void records.push({msg, meta}),
-		debug: () => {},
+		info: () => {},
+		debug: (msg: string, meta?: unknown) => void records.push({msg, meta}),
 		child: () => log,
 		addRedactor: () => {},
 	} as unknown as Logger;

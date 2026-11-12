@@ -126,7 +126,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): ReturnType<typeof 
 			const started = Date.now();
 			try {
 				const out = text(formatCommandList(bridge.list()), false);
-				log.info('console tool', {tool: 'list_commands', status: 'ok', ms: Date.now() - started});
+				log.debug('console tool', {tool: 'list_commands', status: 'ok', ms: Date.now() - started});
 				return out;
 			} catch (err) {
 				log.warn('console tool failed', {tool: 'list_commands', err});
@@ -141,7 +141,6 @@ export function createConsoleServer(deps: ConsoleServerDeps): ReturnType<typeof 
 		COMMAND_TOOLS.run_command.description,
 		{command: z.string()},
 		async (args, extra): Promise<ToolResult> => {
-			const started = Date.now();
 			const line = typeof args.command === 'string' ? args.command.trim() : '';
 			if (line === '' || line.includes('\0')) {
 				return text('The command is empty or invalid.', true);
@@ -158,7 +157,6 @@ export function createConsoleServer(deps: ConsoleServerDeps): ReturnType<typeof 
 					timeoutMs: CONSOLE_TIMEOUT_MS,
 					...(signal && {signal}),
 				});
-				log.info('console tool', {tool: 'run_command', status: result.status, ms: Date.now() - started});
 				return text(formatRunResult(result), result.status !== 'ok');
 			} catch (err) {
 				log.warn('console tool failed', {tool: 'run_command', err: errClass(err)});

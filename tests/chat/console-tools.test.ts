@@ -274,7 +274,7 @@ test('log records carry metadata only: no command line, output or error text', a
 	await make(async () => {
 		throw new Error('SECRET-ERROR-TEXT');
 	}).handler({command: 'mod install SECRET-LINE'}, {});
-	assert.ok(records.length >= 2);
+	assert.deepEqual(records.map(r => r.msg), ['console tool failed']);
 	const dump = JSON.stringify(records);
 	for (const secret of ['SECRET-LINE', 'SECRET-OUTPUT', 'SECRET-ERROR-TEXT']) assert.equal(dump.includes(secret), false, secret);
 });

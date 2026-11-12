@@ -59,10 +59,10 @@ test('a host without log falls back to a noop logger', async () => {
 	assert.deepEqual(printed, ['pong']);
 });
 
-test('plugin load logs info', async () => {
+test('plugin load logs at debug', async () => {
 	const log = makeFakeLog();
 	await plugin({dataDir: '/tmp/claude-test', events: {emit: () => {}, on: () => () => {}}, log});
-	assert.deepEqual(log.records.filter(r => r.level === 'info').map(r => [r.level, r.msg]), [['info', 'plugin loaded']]);
+	assert.deepEqual(log.records.filter(r => r.level === 'debug').map(r => [r.level, r.msg]), [['debug', 'plugin loaded']]);
 });
 
 after(() => releaseProvider());

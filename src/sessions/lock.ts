@@ -197,7 +197,7 @@ export function acquireLock(opts: AcquireOptions): AcquireResult {
 				throw err;
 			}
 			closeSync(fd);
-			log.info('session lock', {action: 'acquired', kind: info.kind, where: info.where});
+			log.debug('session lock', {action: 'acquired', kind: info.kind, where: info.where});
 			let released = false;
 			const lock: SessionLock = {
 				get info() {
@@ -239,7 +239,7 @@ export function acquireLock(opts: AcquireOptions): AcquireResult {
 					if (!parsed || !same(parsed, info)) return;
 					try {
 						unlinkSync(file);
-						log.info('session lock', {action: 'released', kind: info.kind, where: info.where});
+						log.debug('session lock', {action: 'released', kind: info.kind, where: info.where});
 					} catch {
 					}
 				},
