@@ -459,6 +459,7 @@ export type EditTargetClass =
 const NO_AUTO_EXACT = new Set([
 	'Makefile',
 	'yena',
+	'install.sh',
 	'Dockerfile',
 	'compose.yaml',
 	'seccomp.json',
