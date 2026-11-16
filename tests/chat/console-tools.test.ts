@@ -351,12 +351,12 @@ test('claude tier always asks, in auto mode too, never offers "always" and ignor
 	}
 });
 
-test('alwaysAsk covers claude tier and chat start and send, and neverAlways includes them', () => {
-	for (const key of ['cmd:claude tier', 'cmd:chat start', 'cmd:chat send']) {
+test('alwaysAsk covers claude tier, chat start and send and export, and neverAlways includes them', () => {
+	for (const key of ['cmd:claude tier', 'cmd:chat start', 'cmd:chat send', 'cmd:export']) {
 		assert.equal(alwaysAsk(key), true, key);
 		assert.equal(neverAlways(key), true, key);
 	}
-	for (const key of ['cmd:claude', 'cmd:claude tierx', 'cmd:claude tasks', 'cmd:chat startx', 'cmd:claude start', 'cmd:claude send', 'cmd:tier', 'cmd:start']) assert.equal(alwaysAsk(key), false, key);
+	for (const key of ['cmd:claude', 'cmd:claude tierx', 'cmd:claude tasks', 'cmd:chat startx', 'cmd:claude start', 'cmd:claude send', 'cmd:tier', 'cmd:start', 'cmd:exportx', 'cmd:import']) assert.equal(alwaysAsk(key), false, key);
 });
 
 test('chat start and send always ask a person, in auto mode too, and ignore a saved rule', async () => {
