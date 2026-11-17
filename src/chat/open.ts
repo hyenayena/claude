@@ -1,5 +1,5 @@
 import type {CommandContext, Logger} from '../../../../src/api.js';
-import type {ChatMode, OpenEnv, Tier} from '../deps/chat.js';
+import type {ChatMode, ChatProfile, OpenEnv, Tier} from '../deps/chat.js';
 import {sessionSubscription} from '../session-accounts.js';
 import {resolvePaths, type ClaudePaths} from '../config.js';
 import {accountsCtx, liveSecrets, makeRedactor, registerLogRedaction, requireCredential, vaultOf, type CredentialOpts} from '../credentials.js';
@@ -71,6 +71,7 @@ export type ChatOpen = {
 	noWait?: boolean;
 	mode?: ChatMode;
 	keep?: boolean;
+	profile?: ChatProfile;
 };
 
 export type ClaudeSource = {
@@ -100,7 +101,7 @@ class SpawnFailure extends Error {
 
 const resolveRoute = async (open: ChatOpen, io: OpenEnv, deps: ChatRunDeps): Promise<Exclude<ChatRoute, {kind: 'wait'}> | undefined> => {
 	for (;;) {
-		const route = deps.route!({attach: open.attach === true, keep: open.keep === true});
+		const route = deps.route!(open.profile ? {attach: false, keep: false} : {attach: open.attach === true, keep: open.keep === true});
 		if (route.kind !== 'wait') return route;
 		if (!deps.peek || open.noWait) throw new Error(route.message);
 		if (!(await io.wait(deps.peek))) return undefined;
@@ -119,6 +120,7 @@ const openLocal = async (open: ChatOpen, io: OpenEnv, deps: ChatRunDeps): Promis
 			...(resumeAt && {resumeAt}),
 			...(open.mode && {mode: open.mode}),
 			...(open.apiKeyOnly && {apiKeyOnly: true}),
+			...(open.profile && {profile: open.profile}),
 		},
 		{
 			...deps,
@@ -295,6 +297,10 @@ export const openSource = async (open: ChatOpen, io: OpenEnv, deps: ChatRunDeps)
 	if (open.apiKeyOnly && route.kind === 'attach') {
 		route.release();
 		throw new Error('A background chat is running; an unattended run does not join it. Close it with "chat stop" first.');
+	}
+	if (open.profile && route.kind !== 'local') {
+		route.release();
+		throw new Error('A module chat runs only in this yena; close the background chat with "chat stop" first.');
 	}
 	let held: Exclude<ChatRoute, {kind: 'wait'}> = route;
 	try {

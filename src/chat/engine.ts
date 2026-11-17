@@ -32,7 +32,8 @@ import {createClassifier} from './classifier.js';
 import type {ChatMode, RouteInfo} from '../deps/chat.js';
 import {applyVerdict, classifierPrompt, decideMain, noteContinuing, Router} from './router.js';
 import {tierMapFromState, type TierMap} from './tiers.js';
-import {type Tier} from '../deps/chat.js';
+import {PROFILE_LIMITS, type ChatProfile, type Tier} from '../deps/chat.js';
+import {createProfileGuard, profileAgents} from './profile-guard.js';
 
 const TITLE_RETRY_MS = [3_000, 10_000];
 
@@ -45,6 +46,7 @@ export type EngineOpen = {
 	resumeAt?: string;
 	apiKeyOnly?: boolean;
 	mode?: ChatMode;
+	profile?: ChatProfile;
 };
 
 export type EngineDeps = {
@@ -98,7 +100,9 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	const log = deps.log ?? noopLog;
 	const credOpts: CredentialOpts = {env, dataDir, log, ...(deps.vault && {vault: deps.vault})};
 	const state = await store.read();
-	const resume = chosen ?? (fresh ? undefined : state.lastSessionId);
+	const {profile} = open;
+	const guard = profile && createProfileGuard(profile);
+	const resume = chosen ?? (fresh || profile ? undefined : state.lastSessionId);
 	const subs = new Map<string, SessionSub>();
 	const subOf = (id: string | undefined): SessionSub | undefined => (id === undefined ? undefined : (subs.get(id) ?? sessionSubscription(dataDir, id)));
 	let cred: Credential;
@@ -119,7 +123,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	let consoleSdk: ConsoleSdk | undefined;
 	try {
 		query = await deps.loadChatQuery();
-		if (io.commandBridge && deps.loadConsoleSdk) {
+		if (!open.profile && io.commandBridge && deps.loadConsoleSdk) {
 			consoleSdk = await deps.loadConsoleSdk().catch(err => {
 				log.warn('console tools unavailable', {err});
 				return undefined;
@@ -233,7 +237,8 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			log.warn('agent definitions failed', {errClass: errClass(err)});
 		}
 	};
-	await refreshDefs();
+	if (profile) agentDefs = profileAgents(profile, flags.map);
+	else await refreshDefs();
 	const classifier = createClassifier({
 		query,
 		log,
@@ -327,6 +332,12 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		session.applyRoute(tierApply(tier), {outcome: 'pinned', main: tier, pinned: tier}, previous, settleTo(tier));
 	};
 	const routedModel = (): {model?: string; tuning: ChatTuning} => {
+		if (profile) {
+			if (!profile.mainTier) return live;
+			const {effort: _effort, ...rest} = live.tuning;
+			const setting = flags.map[profile.mainTier];
+			return {model: setting.model, tuning: {...rest, ...(setting.effort !== undefined && {effort: setting.effort})}};
+		}
 		if (router.main === undefined) return live;
 		const setting = flags.map[router.main];
 		const {effort: _effort, ...rest} = live.tuning;
@@ -339,7 +350,10 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		redact,
 		log,
 		...(turnLock && {turnLock}),
-		idleCloseMs: deps.idleCloseMs ?? IDLE_CLOSE_MS,
+		idleCloseMs:
+			profile?.keepAliveMs !== undefined
+				? Math.max(1_000, Math.min(profile.keepAliveMs, PROFILE_LIMITS.keepAliveMs))
+				: (deps.idleCloseMs ?? IDLE_CLOSE_MS),
 		initialResume: resume,
 		...(state.allowedCommands && {savedApprovals: state.allowedCommands}),
 		onRemember: key => {
@@ -369,6 +383,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 				resume: id,
 				...(routed.model !== undefined && {model: routed.model}),
 				tuning: routed.tuning,
+				...(profile && {profile}),
 				env: buildEnv(env, paths, cred, shellRoot, scratch?.dir),
 				...(scratch && {scratch: scratch.dir}),
 				...(box && {sandbox: box}),
@@ -385,6 +400,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 					}),
 				}),
 				canUseTool: createChatCanUseTool({
+					...(guard && {profile: guard}),
 					scope,
 					projectDir: paths.projectDir,
 					mdDir: paths.mdDir,
@@ -401,19 +417,23 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 				approved: key => prompter.hasApproved(key),
 				bashTracker: leftovers,
 				...(box && {beforeBash: () => sandbox.refresh(), procHidden: true, sandboxed: true}),
-				agentRoute: input =>
-					routeAgentInput(input, {
-						routerOn: flags.routerOn,
-						rating: router.pinned ?? (flags.classifierOn ? router.rated : undefined),
-						map: flags.map,
-						dirs: agentDirs,
-						log,
-					}),
+				...(guard
+					? {profile: guard}
+					: {
+							agentRoute: (input: Record<string, unknown>) =>
+								routeAgentInput(input, {
+									routerOn: flags.routerOn,
+									rating: router.pinned ?? (flags.classifierOn ? router.rated : undefined),
+									map: flags.map,
+									dirs: agentDirs,
+									log,
+								}),
+						}),
 			}),
 			...(agentDefs && Object.keys(agentDefs).length > 0 && {agents: agentDefs}),
 			};
 		},
-		route,
+		...(!profile && {route}),
 		onReset: () => router.reset(),
 		preferAccount: () => {
 			const current = cred.account;
@@ -440,6 +460,11 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		},
 	});
 	created = session;
+	if (guard) {
+		session.subscribe(e => {
+			if (e.type === 'sent') guard.newUserMessage();
+		});
+	}
 	session.subscribe(e => {
 		if (e.type === 'ui' && e.event.kind === 'session') sessionIds.add(e.event.sessionId);
 	});
@@ -499,7 +524,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	});
 
 	session.subscribe(e => {
-		if (e.type !== 'turn-end' || session.needsNewSession) return;
+		if (profile || e.type !== 'turn-end' || session.needsNewSession) return;
 		const lastSessionId = session.sessionId;
 		if (!lastSessionId) return;
 		const lastModel = session.model;

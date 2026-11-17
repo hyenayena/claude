@@ -14,7 +14,7 @@ import {
 	GUARD_DENY,
 	MAX_TURNS,
 } from './policy.js';
-import {CONSOLE_SERVER_NAME} from './deps/chat.js';
+import {CONSOLE_SERVER_NAME, type ChatProfile} from './deps/chat.js';
 import {ROUTER_SYSTEM} from './chat/router.js';
 import type {SandboxSettings} from './chat/sandbox.js';
 import {cliTmpOf} from './chat/shell-tmp.js';
@@ -415,27 +415,39 @@ export function buildChatOptions(p: {
 	runtimeBin?: string;
 	sandbox?: SandboxSettings;
 	scratch?: string;
+	profile?: ChatProfile;
 }): Options {
-	const {canUseTool, tuning, consoleServer, sandbox, scratch, ...rest} = p;
+	const {canUseTool, tuning, consoleServer, sandbox, scratch, profile, ...rest} = p;
 	const {maxTurns: _askLimit, ...base} = buildOptions(rest);
 	const full = base.env ?? {};
 	const keep = p.cred.passthrough ? ['CLAUDE_CODE_OAUTH_TOKEN'] : Object.keys(full).filter(k => full[k] === p.cred.value && p.cred.value !== '');
-	return applyTuning(
+	const tuned = applyTuning(
 		{
 			...base,
 			env: scrubChatEnv(full, keep),
-			systemPrompt: {type: 'preset', preset: 'claude_code', append: buildChatHint(p.paths, scratch) + soulSection(p.paths)},
+			systemPrompt: {
+				type: 'preset',
+				preset: 'claude_code',
+				append: profile ? profile.appendSystemPrompt : buildChatHint(p.paths, scratch) + soulSection(p.paths),
+			},
 			settings: buildChatSettings(p.paths),
 			...(sandbox && {sandbox}),
-			tools: [...CHAT_TOOLS],
+			tools: CHAT_TOOLS.filter(t => !profile || profile.mainTools.includes(t)),
 			disallowedTools: [...CHAT_DISALLOWED_TOOLS],
 			permissionMode: 'default',
 			canUseTool,
-			...(consoleServer && {mcpServers: {...base.mcpServers, [CONSOLE_SERVER_NAME]: consoleServer}}),
+			...(consoleServer && !profile && {mcpServers: {...base.mcpServers, [CONSOLE_SERVER_NAME]: consoleServer}}),
 			enableFileCheckpointing: true,
 		},
 		tuning,
 	);
+	if (!profile) return tuned;
+	return {
+		...tuned,
+		mcpServers: {},
+		strictMcpConfig: true,
+		...(profile.loadInstructions === false && {settingSources: []}),
+	};
 }
 
 function readJson(file: string): Record<string, unknown> | undefined {

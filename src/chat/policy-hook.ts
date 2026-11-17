@@ -3,6 +3,7 @@ import path from 'node:path';
 import {classifyEditTarget, createCanUseTool, inSharedTmp, isAskFile, PLANS_DIR, resolveReal, type Scope} from '../policy.js';
 import {agentDenial} from './agent-policy.js';
 import {addsPrivilegedFrontmatter, isDefinitionPath} from './definition-guard.js';
+import type {ProfileGuard} from './profile-guard.js';
 import {POLICY_ASK, POLICY_DENY, scratchDenied} from './permission.js';
 
 const AUTH_FILE = /credentials\.json|\.claude\.json|config\/backups|accounts\.json|claude\/accounts\b|claude\/auth\.json/;
@@ -61,6 +62,7 @@ export type PolicyHookOptions = {
 	sandboxed?: boolean;
 	bashTracker?: {begin(id: string): void; end(id: string, cwd?: string): Promise<void>};
 	agentRoute?: (input: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
+	profile?: ProfileGuard;
 };
 
 export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: PolicyHookOptions = {}): HookCallback {
@@ -74,6 +76,13 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 		if (input.hook_event_name !== 'PreToolUse') return allow;
 		const tool = input.tool_name;
 		const args = (input.tool_input ?? {}) as Record<string, unknown>;
+		if (hookOpts.profile) {
+			const verdict = hookOpts.profile.preToolUse(tool, args, input.agent_id);
+			if (verdict.kind === 'deny') return denyWith(verdict.reason);
+			if (verdict.kind === 'rewrite') {
+				return {hookSpecificOutput: {hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput: verdict.input}};
+			}
+		}
 		switch (tool) {
 			case 'Read':
 			case 'Glob':

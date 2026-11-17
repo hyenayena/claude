@@ -286,6 +286,38 @@ describe('buildChatOptions', () => {
 		assert.equal(sp.append, buildChatHint(paths) + soulSection(paths));
 	});
 
+	describe('with a chat profile', () => {
+		const profile = {
+			id: 'clan',
+			owner: 'clan',
+			appendSystemPrompt: 'MODERATE',
+			mainTools: ['Agent', 'SendMessage', 'Bash', 'Nope'],
+			agents: {},
+			loadInstructions: false as const,
+		};
+
+		it('appends only the profile prompt and narrows the tools without widening', () => {
+			const o = buildChatOptions({...base, profile});
+			assert.equal((o.systemPrompt as {append: string}).append, 'MODERATE');
+			assert.deepEqual(o.tools, ['Bash', 'Agent', 'SendMessage']);
+			assert.ok((o.tools as string[]).every(t => CHAT_TOOLS.includes(t)));
+		});
+
+		it('has no MCP servers even with MCP on, and no setting sources', () => {
+			const server = {type: 'sdk', name: 'yena', instance: {}} as never;
+			const o = buildChatOptions({...base, profile, consoleServer: server, tuning: {}});
+			assert.deepEqual(o.mcpServers, {});
+			assert.equal(o.strictMcpConfig, true);
+			assert.deepEqual(o.settingSources, []);
+		});
+
+		it('keeps the setting sources when instructions are loaded', () => {
+			const {loadInstructions: _drop, ...loaded} = profile;
+			const o = buildChatOptions({...base, profile: loaded});
+			assert.deepEqual(o.settingSources, buildOptions({...base, canUseTool: undefined} as never).settingSources);
+		});
+	});
+
 	it('reuses the ask options for the rest', () => {
 		const a = buildOptions({...base, canUseTool: undefined} as never);
 		const o = buildChatOptions(base);

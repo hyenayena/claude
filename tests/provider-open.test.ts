@@ -895,3 +895,36 @@ test('a module-origin open without a command bridge never loads the console SDK 
 	assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
 	assert.equal('yena' in ((s.q.calls[0]!.options['mcpServers'] as Record<string, unknown> | undefined) ?? {}), false);
 });
+
+test('a profile open through the provider runs locally with the profile prompt, writes no session and ignores attach and keep', async () => {
+	const s = await setup({
+		run: async p => {
+			const done = turnDone(p);
+			p.controller.send('hi');
+			await done;
+		},
+	});
+	const profile = {
+		id: 'clan',
+		owner: 'clan',
+		appendSystemPrompt: 'You host a clan.',
+		mainTools: [],
+		agents: {},
+	};
+	const shimmed = shimClaude({
+		dataDir: s.dataDir,
+		loadRetired: async () => undefined,
+		login: {probe: async () => undefined},
+		env: {CLAUDE_CODE_OAUTH_TOKEN: OAUTH},
+		loadQuery: async () => (() => {
+			throw new Error('unused');
+		}) as unknown as QueryFn,
+		loadChatQuery: async () => s.q.query,
+	}, {onProps: p => s.props.push(p), extra: {profile, attach: true, keep: true} as never});
+	await shimmed.open({origin: 'user'}, s.ctx);
+	const options = s.q.calls[0]!.options as {systemPrompt: {append: string}; mcpServers: unknown};
+	assert.equal(options.systemPrompt.append, 'You host a clan.');
+	assert.deepEqual(options.mcpServers, {});
+	const state = existsSync(join(s.dataDir, 'state.json')) ? JSON.parse(readFileSync(join(s.dataDir, 'state.json'), 'utf8')) : {};
+	assert.equal('lastSessionId' in state, false);
+});

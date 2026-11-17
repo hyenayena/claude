@@ -165,6 +165,7 @@ export const createClaudeProvider = (hub: SessionHub, deps: ClaudeDeps): ChatPro
 		id: 'claude',
 		label: 'Claude Code',
 		modes: ['default', 'acceptEdits', 'plan', 'auto'],
+		profiles: true,
 		redact: text => redactor(active)(text),
 
 		admit: async origin => {
@@ -191,6 +192,7 @@ export const createClaudeProvider = (hub: SessionHub, deps: ClaudeDeps): ChatPro
 				...(req.mode && {mode: req.mode}),
 				...(req.keep !== undefined && {keep: req.keep}),
 				...(keyOnly && {apiKeyOnly: true}),
+				...(req.profile && {profile: req.profile, attach: false, keep: false}),
 			};
 			const source = await openSource(open, io, hub.runDeps());
 			if (!source) return undefined;

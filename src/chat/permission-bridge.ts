@@ -9,6 +9,7 @@ import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../deps/chat.js';
 import {POLICY_DENY, type PermissionPrompter, toolUnavailableMessage} from './permission.js';
 import {BASH_REVIEW_MAX, CANCEL_MESSAGE, DENY_MESSAGE, DENY_REASON_PREFIX, DISMISS_MESSAGE, type Highlight, PAYLOAD_REVIEW_MAX, type PermissionDecision, type PermissionRequest, type Preview, QUESTION_LIMITS, type QuestionSpec, REASON_MAX} from '../deps/chat.js';
 import {sanitizeBlock, sanitizeText} from '../kit.js';
+import type {ProfileGuard} from './profile-guard.js';
 import {outsideReason, WEB_KEY_PREFIX, webKey} from './policy-hook.js';
 
 export type PermissionBridgeDeps = {
@@ -20,6 +21,7 @@ export type PermissionBridgeDeps = {
 	preview?: (toolName: 'Edit' | 'Write', input: Record<string, unknown>, scope: Scope) => Promise<Preview | undefined>;
 	highlights?: (command: string) => Highlight[];
 	previewTimeoutMs?: number;
+	profile?: ProfileGuard;
 };
 
 type Opts = Parameters<CanUseTool>[2];
@@ -394,6 +396,8 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 	};
 
 	const dispatch = async (toolName: string, input: Record<string, unknown>, opts: Opts): Promise<PermissionResult> => {
+		const refused = deps.profile?.canUse(toolName, input, opts.agentID);
+		if (refused !== undefined) return policyDeny(toolName, refused, 'profile', opts.toolUseID);
 		switch (toolName) {
 			case 'Read':
 			case 'Glob':
