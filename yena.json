@@ -1,6 +1,6 @@
 {
 	"name": "claude",
-	"version": "0.35.1",
+	"version": "0.35.2",
 	"description": "Claude Code integration",
 	"runtime": "node",
 	"entry": "src/index.ts",
@@ -12,7 +12,7 @@
 	"dependencies": {
 		"core": {
 			"source": "core",
-			"version": "^0.22.0"
+			"version": "^0.23.0"
 		},
 		"chat": {
 			"source": "chat",
