@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import {mkdtempSync} from 'node:fs';
 import net from 'node:net';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname, join} from 'node:path';
 import {afterEach, mock, test} from 'node:test';
 import type {CommandBridge, CommandRunRequest, CommandRunResult} from '../../../../src/api.js';
 import type {ChatEvent} from '../../src/deps/chat.js';
-import {RemoteChatSession, type RemoteOptions} from '../../src/chat/remote-session.js';
+import {BUSY_SEND, RemoteChatSession, type RemoteOptions} from '../../src/chat/remote-session.js';
+import {acquireLock} from '../../src/sessions/lock.js';
 import {createDecoder, encodeFrame, type ClientFrame, type RunnerFrame, type Snapshot} from '../../src/runner/protocol.js';
 import {makeFakeLog} from '../helpers/fake-log.js';
 
@@ -127,6 +128,51 @@ test('send, interrupt and setMode become frames; send flips the state at once', 
 	await r.until(() => r.frames.some(f => f.type === 'queue'));
 	const types = r.frames.map(f => f.type);
 	assert.deepEqual(types.slice(1), ['send', 'setMode', 'interrupt', 'queue']);
+});
+
+const holdLock = (socketPath: string, socket: string | undefined, sessionId?: string) => {
+	const res = acquireLock({dir: dirname(socketPath), kind: 'chat', where: 'runner', ...(socket !== undefined && {socket}), ...(sessionId !== undefined && {sessionId})});
+	assert.ok(res.ok);
+	cleanup.push(() => res.lock.release());
+};
+
+test('send goes through when no one holds the turn lock', async () => {
+	const r = await fakeRunner();
+	const s = await connect(r.socketPath);
+	cleanup.push(() => s.close());
+	s.send('hi');
+	assert.equal(s.state, 'running');
+});
+
+test('send goes through when the holder is this window\'s own runner', async () => {
+	const r = await fakeRunner();
+	holdLock(r.socketPath, r.socketPath);
+	const s = await connect(r.socketPath);
+	cleanup.push(() => s.close());
+	s.send('hi');
+	assert.equal(s.state, 'running');
+	await r.until(() => r.frames.some(f => f.type === 'send'));
+});
+
+test('send falls back to the session id when the holder has no socket', async () => {
+	const r = await fakeRunner();
+	holdLock(r.socketPath, undefined, SNAPSHOT.sessionId);
+	const s = await connect(r.socketPath);
+	cleanup.push(() => s.close());
+	s.send('hi');
+	assert.equal(s.state, 'running');
+});
+
+test('send is refused and logged when another session holds the lock', async () => {
+	const r = await fakeRunner();
+	holdLock(r.socketPath, join(dirname(r.socketPath), 'other.sock'));
+	const log = makeFakeLog();
+	const s = await connect(r.socketPath, {log});
+	cleanup.push(() => s.close());
+	assert.throws(() => s.send('hi'), {message: BUSY_SEND});
+	assert.equal(s.state, 'idle');
+	assert.ok(log.records.some(x => x.msg === 'send refused' && x.fields.own === false && x.fields.cause === 'busy'));
+	assert.ok(!r.frames.some(f => f.type === 'send'));
 });
 
 test('answerPermission is optimistic and the runner echo is not emitted twice', async () => {

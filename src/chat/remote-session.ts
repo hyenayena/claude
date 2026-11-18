@@ -239,7 +239,13 @@ export class RemoteChatSession implements ClaudeChatHandle {
 		} catch {
 			holder = undefined;
 		}
-		if (holder) throw new Error(BUSY_SEND);
+		if (holder) {
+			const own = holder.socket !== undefined ? holder.socket === this.opts.socketPath : holder.sessionId !== undefined && holder.sessionId === this._sessionId;
+			if (!own) {
+				this.log.info('send refused', {cause: 'busy', own: false});
+				throw new Error(BUSY_SEND);
+			}
+		}
 		this._state = 'running';
 		this.write({v: 1, type: 'send', text, ...(opts.command && {command: true})});
 	}

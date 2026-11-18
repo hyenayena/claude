@@ -1182,6 +1182,27 @@ test('a background task keeps the lock until it ends', async () => {
 	assert.deepEqual(t.calls, ['acquire', 'release']);
 });
 
+test('a send while background tasks run keeps the held lock: no second acquire, no early release', async () => {
+	const t = fakeTurnLock();
+	const {session, queries} = setup({turnLock: t.lock} as never);
+	session.send('start a server');
+	queries[0]?.emit(init());
+	queries[0]?.emit(task('b1', 'task_started'));
+	queries[0]?.emit(ok());
+	await tick();
+	assert.equal(session.state, 'idle');
+	session.send('and now this');
+	assert.equal(session.state, 'running');
+	assert.deepEqual(t.calls, ['acquire']);
+	queries[0]?.emit(ok());
+	await tick();
+	assert.deepEqual(t.calls, ['acquire'], 'the task still runs, the lock stays');
+	queries[0]?.emit(task('b1', 'task_notification', 'completed'));
+	await tick();
+	await tick();
+	assert.deepEqual(t.calls, ['acquire', 'release']);
+});
+
 test('a refused send sends nothing and leaves the chat idle', async () => {
 	const t = fakeTurnLock(true);
 	const {session, queries, events} = setup({turnLock: t.lock} as never);
