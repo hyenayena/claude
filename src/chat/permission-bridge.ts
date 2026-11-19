@@ -430,7 +430,7 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 			case 'SendMessage': {
 				const denial = agentDenial(toolName, input);
 				if (denial) return policyDeny(toolName, denial, 'agent option not allowed', opts.toolUseID);
-				return {behavior: 'allow', updatedInput: input, toolUseID: opts.toolUseID};
+				return {behavior: 'allow', updatedInput: deps.profile?.inputFor(toolName, input) ?? input, toolUseID: opts.toolUseID};
 			}
 			case 'AskUserQuestion':
 				return handleQuestion(input, opts);

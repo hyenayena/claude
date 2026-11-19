@@ -101,7 +101,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	const credOpts: CredentialOpts = {env, dataDir, log, ...(deps.vault && {vault: deps.vault})};
 	const state = await store.read();
 	const {profile} = open;
-	const guard = profile && createProfileGuard(profile);
+	const guard = profile && createProfileGuard(profile, log);
 	const resume = chosen ?? (fresh || profile ? undefined : state.lastSessionId);
 	const subs = new Map<string, SessionSub>();
 	const subOf = (id: string | undefined): SessionSub | undefined => (id === undefined ? undefined : (subs.get(id) ?? sessionSubscription(dataDir, id)));
@@ -461,9 +461,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	});
 	created = session;
 	if (guard) {
-		session.subscribe(e => {
-			if (e.type === 'sent') guard.newUserMessage();
-		});
+		session.subscribe(e => guard.observe(e));
 	}
 	session.subscribe(e => {
 		if (e.type === 'ui' && e.event.kind === 'session') sessionIds.add(e.event.sessionId);

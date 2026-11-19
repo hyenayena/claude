@@ -252,3 +252,13 @@ test('the hook refuses agents outside the profile and rewrites an allowed call t
 	};
 	assert.deepEqual(out.hookSpecificOutput.updatedInput, {subagent_type: 'bo', prompt: 'x', name: 'bo', run_in_background: false});
 });
+
+test('agentInput: the user message of each send reaches the Agent prompt', async () => {
+	const s = await setup(profileOf({agentInput: 'turn'}));
+	await s.turn('first');
+	const out = (await s.agentCall({subagent_type: 'ada', prompt: 'cue'})) as unknown as {hookSpecificOutput: {updatedInput: {prompt: string}}};
+	assert.equal(out.hookSpecificOutput.updatedInput.prompt, 'The user says:\nfirst');
+	await s.turn('second');
+	const next = (await s.agentCall({subagent_type: 'bo', prompt: 'cue'})) as unknown as {hookSpecificOutput: {updatedInput: {prompt: string}}};
+	assert.equal(next.hookSpecificOutput.updatedInput.prompt, 'The user says:\nsecond');
+});
