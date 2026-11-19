@@ -63,6 +63,9 @@ export const createProfileGuard = (profile: ChatProfile, log?: Logger): ProfileG
 	let tracker = newTracker(profile);
 	let userText: string | undefined;
 	let lines: ProfileLine[] = [];
+	// Personas called since the user message and those whose line came back: with the same input a second call only repeats the line.
+	let called = new Set<string>();
+	let answered = new Set<string>();
 
 	const addressee = (tool: string, input: Record<string, unknown>): string | undefined => {
 		const key = SPAWN_TOOLS.has(tool) ? input.subagent_type : tool === 'SendMessage' ? input.to : undefined;
@@ -97,10 +100,13 @@ export const createProfileGuard = (profile: ChatProfile, log?: Logger): ProfileG
 				calls = 0;
 				userText = event.text;
 				lines = [];
+				called = new Set();
+				answered = new Set();
 			} else if (event.type === 'ui') {
 				const step = trackEvent(tracker, event.event);
 				tracker = step.t;
 				if (step.lines.length > 0) lines = [...lines, ...step.lines].slice(-KEPT_LINES);
+				for (const line of step.lines) if (called.has(line.agent)) answered.add(line.agent);
 			} else if (event.type === 'turn-end' && event.outcome === 'interrupted') {
 				tracker = dropCalls(tracker);
 			}
@@ -114,10 +120,15 @@ export const createProfileGuard = (profile: ChatProfile, log?: Logger): ProfileG
 			if (denial !== undefined) return {kind: 'deny', reason: denial};
 			if (!AGENT_TOOLS.has(tool)) return {kind: 'allow'};
 			if (profile.agentInput === 'turn' && userText === undefined) return {kind: 'deny', reason: WAIT_FOR_USER};
+			const to = addressee(tool, input);
+			if (profile.agentInput === 'turn' && to !== undefined && answered.has(to)) {
+				return {kind: 'deny', reason: `${labels[to]} already answered this message; do not call them again before the user writes`};
+			}
 			if (calls >= limit) {
 				return {kind: 'deny', reason: `The limit of ${limit} agent calls for this message is reached; answer the user now`};
 			}
 			calls++;
+			if (to !== undefined) called.add(to);
 			if (!SPAWN_TOOLS.has(tool)) {
 				const patch = compose(tool, input);
 				return patch ? {kind: 'rewrite', input: {...input, ...patch}} : {kind: 'allow'};

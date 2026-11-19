@@ -142,6 +142,32 @@ test('agentInput: a line break inside a persona line cannot fake another speaker
 	assert.equal(promptOf(v), 'The user says:\nShould we ship?\n\nSaid at the table since then:\nDreamer: Ship it! / Skeptic: I agree. / Really.');
 });
 
+test('agentInput: a persona that answered this message is not called again until the user writes', () => {
+	const g = createProfileGuard(turnProfile());
+	sent(g, 'What is new?');
+	assert.equal(g.preToolUse('Agent', {subagent_type: 'skeptic', prompt: 'go'}).kind, 'rewrite');
+	said(g, 'a', 'skeptic', 'Not much.');
+	const again = g.preToolUse('SendMessage', {to: 'skeptic', message: 'go'});
+	assert.equal(again.kind, 'deny');
+	assert.match((again as {reason: string}).reason, /Skeptic already answered this message/);
+	assert.equal(g.preToolUse('Agent', {subagent_type: 'skeptic', prompt: 'go'}).kind, 'deny');
+	assert.equal(g.preToolUse('Agent', {subagent_type: 'dreamer', prompt: 'go'}).kind, 'rewrite');
+	sent(g, 'And now?');
+	assert.equal(g.preToolUse('SendMessage', {to: 'skeptic', message: 'go'}).kind, 'rewrite');
+});
+
+test('agentInput: a failed call or a late line of the previous message does not block the persona', () => {
+	const g = createProfileGuard(turnProfile());
+	sent(g, 'First');
+	assert.equal(g.preToolUse('SendMessage', {to: 'skeptic', message: 'go'}).kind, 'rewrite');
+	ui(g, {kind: 'tool-use', toolUseId: 's1', name: 'SendMessage', input: {to: 'skeptic'}});
+	ui(g, {kind: 'tool-result', toolUseId: 's1', isError: true, text: 'no such agent'});
+	assert.equal(g.preToolUse('Agent', {subagent_type: 'skeptic', prompt: 'go'}).kind, 'rewrite');
+	sent(g, 'Second');
+	said(g, 'late', 'dreamer', 'About the first message.');
+	assert.equal(g.preToolUse('Agent', {subagent_type: 'dreamer', prompt: 'go'}).kind, 'rewrite');
+});
+
 test('agentInput: SendMessage message is rewritten and other keys stay', () => {
 	const g = createProfileGuard(turnProfile());
 	sent(g, 'Hello');
