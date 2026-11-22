@@ -259,7 +259,7 @@ test('acceptEdits auto-accepts only eligible paths and audits with line counts',
 	assert.equal(prompter.requests.length, 0);
 });
 
-test('acceptEdits still prompts for markdown-adjacent, dotfile, build and decision-reason cases', async () => {
+test('acceptEdits auto-accepts dotfiles and build files, and still prompts for decision-reason cases', async () => {
 	const {call, prompter} = setup();
 	prompter.mode = 'acceptEdits';
 	const base = {old_string: 'a', new_string: 'b'};
@@ -268,8 +268,8 @@ test('acceptEdits still prompts for markdown-adjacent, dotfile, build and decisi
 	await call('Edit', {file_path: f('package.json'), ...base});
 	await call('Edit', {file_path: f('src/a.ts'), ...base}, {decisionReasonType: 'workingDir'} as never);
 	await call('Edit', {file_path: f('src/a.ts'), ...base}, {defaultToNo: true});
-	assert.equal(prompter.requests.length, 5);
-	assert.equal(prompter.audits.filter(a => a.outcome === 'auto-accepted').length, 0);
+	assert.equal(prompter.requests.length, 2);
+	assert.equal(prompter.audits.filter(a => a.outcome === 'auto-accepted').length, 3);
 });
 
 test('edits in the md dir never ask, in any mode', async () => {

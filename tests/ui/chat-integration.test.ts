@@ -30,6 +30,7 @@ function build(script: Script) {
 	mkdirSync(md, {recursive: true});
 	mkdirSync(data);
 	writeFileSync(join(proj, 'package.json'), '{}\n');
+	writeFileSync(join(proj, '.yenarules'), '[ask write]\n/package.json\n');
 	writeFileSync(join(proj, 'CLAUDE.local.md'), 'x\n');
 	symlinkSync(join(proj, 'package.json'), join(proj, 'link-pkg'));
 	symlinkSync(join(proj, 'CLAUDE.local.md'), join(proj, 'link-claude'));
@@ -106,7 +107,7 @@ test('closing the session with a prompt pending resolves the bridge call as a ca
 	assert.equal(t.state.closed, 1);
 });
 
-test('accept-edits mode auto-accepts eligible writes only; guarded and linked targets never auto-accept', async () => {
+test('accept-edits mode auto-accepts eligible writes only; guarded and rules-asked targets (through a link too) never auto-accept', async () => {
 	const t = build(async (can, signal) => {
 		const out: string[] = [];
 		const inputs: Array<[string, string]> = [

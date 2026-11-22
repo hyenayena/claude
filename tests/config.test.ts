@@ -248,6 +248,13 @@ describe('buildChatHint', () => {
 		assert.ok(hint.includes('need the user\'s approval'));
 	});
 
+	it('says what the rules files mean', () => {
+		const paths = resolvePaths('/data/claude', fakeModule(false));
+		const hint = buildChatHint(paths);
+		assert.match(hint, /Paths a \.yenarules file or the project's rules list under deny are closed; under ask, the user approves each read or change/);
+		assert.match(hint, /\.yenarules and project rules files are only changed by the user/);
+	});
+
 	it('mentions the scratch folder only when given', () => {
 		const paths = resolvePaths('/data/claude', fakeModule(false));
 		assert.ok(!buildChatHint(paths).includes('scratch'));
@@ -284,6 +291,22 @@ describe('buildChatOptions', () => {
 		assert.equal((o.settings as {disableAllHooks: boolean}).disableAllHooks, true);
 		const sp = o.systemPrompt as {append: string};
 		assert.equal(sp.append, buildChatHint(paths) + soulSection(paths));
+	});
+
+	it('puts the rules into the settings: Read denies for expanded paths and the autoMode block', () => {
+		const autoMode = {environment: ['$defaults', 'e'], allow: ['$defaults', 'a']};
+		const o = buildChatOptions({...base, rulesDenyRead: ['/w/app/.env', '/w/app/secrets'], autoMode});
+		const settings = o.settings as {permissions: {deny: string[]}; autoMode?: unknown};
+		assert.deepEqual(settings.autoMode, autoMode);
+		for (const rule of ['Read(//w/app/.env)', 'Read(//w/app/.env/**)', 'Read(//w/app/secrets)', 'Read(//w/app/secrets/**)']) assert.ok(settings.permissions.deny.includes(rule), rule);
+		assert.deepEqual(buildChatOptions(base).settings, buildChatSettings(paths), 'without rules the settings are unchanged');
+		assert.ok(!('autoMode' in (buildChatOptions(base).settings as object)));
+		assert.equal((o.settings as {disableAllHooks: boolean}).disableAllHooks, true);
+	});
+
+	it('the ask options carry the Read denies for the rules too', () => {
+		const o = buildOptions({paths, cred: oauth, abortController: new AbortController(), rulesDenyRead: ['/w/app/.env']});
+		assert.ok((o.settings as {permissions: {deny: string[]}}).permissions.deny.includes('Read(//w/app/.env)'));
 	});
 
 	describe('with a chat profile', () => {

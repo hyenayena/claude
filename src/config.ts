@@ -16,6 +16,7 @@ import {
 } from './policy.js';
 import {CONSOLE_SERVER_NAME, type ChatProfile} from './deps/chat.js';
 import {ROUTER_SYSTEM} from './chat/router.js';
+import type {AutoMode} from './chat/auto-mode.js';
 import type {SandboxSettings} from './chat/sandbox.js';
 import {cliTmpOf} from './chat/shell-tmp.js';
 import {ensureHub, HUB_DIRS, hubDirFor} from './deps/md.js';
@@ -232,6 +233,7 @@ export function buildOptions(p: {
 	model?: string;
 	env?: Record<string, string | undefined>;
 	runtimeBin?: string;
+	rulesDenyRead?: string[];
 }): Options {
 	const {paths} = p;
 	const runtimeBin = p.runtimeBin ?? paths.runtimeBin;
@@ -242,11 +244,11 @@ export function buildOptions(p: {
 		settingSources: ['user', 'project', 'local'],
 		abortController: p.abortController,
 		systemPrompt: {type: 'preset', preset: 'claude_code', append: buildHint(paths)},
-		settings: buildAskSettings(paths),
+		settings: buildAskSettings(paths, p.rulesDenyRead ?? []),
 		tools: [...ALLOWED_TOOLS],
 		disallowedTools: [...DISALLOWED_TOOLS],
 		permissionMode: 'default',
-		canUseTool: createCanUseTool(buildScope(paths)),
+		canUseTool: createCanUseTool(buildScope(paths), {refuseAsk: true}),
 		strictMcpConfig: true,
 		mcpServers: {},
 		maxTurns: MAX_TURNS,
@@ -349,6 +351,7 @@ export function buildChatHint(paths: ClaudePaths, scratch?: string): string {
 			? ''
 			: ` Scratch files, one-off scripts and command outputs you want to read back go to this chat's scratch folder ${scratch} (also $YENA_SCRATCH; Read, Edit and Write work there without asking; it is removed when the chat ends), never into the md hub or a project; the rest of $TMPDIR and /tmp is shared with other chats and closed to Read, Edit and Write.`) +
 		" Tool calls that run commands or change files (Bash, Edit, Write) need the user's approval in this interface." +
+		' Paths a .yenarules file or the project\'s rules list under deny are closed; under ask, the user approves each read or change; .yenarules and project rules files are only changed by the user.' +
 		' Bash runs as root in the project directory.' +
 		' If the user denies a call, do not retry it or work around the denial; explain what you needed and ask.' +
 		' The tools mcp__yena__list_commands and mcp__yena__run_command inspect and run yena console commands; commands that change state ask the user first.' +
@@ -416,8 +419,10 @@ export function buildChatOptions(p: {
 	sandbox?: SandboxSettings;
 	scratch?: string;
 	profile?: ChatProfile;
+	rulesDenyRead?: string[];
+	autoMode?: AutoMode;
 }): Options {
-	const {canUseTool, tuning, consoleServer, sandbox, scratch, profile, ...rest} = p;
+	const {canUseTool, tuning, consoleServer, sandbox, scratch, profile, rulesDenyRead, autoMode, ...rest} = p;
 	const {maxTurns: _askLimit, ...base} = buildOptions(rest);
 	const full = base.env ?? {};
 	const keep = p.cred.passthrough ? ['CLAUDE_CODE_OAUTH_TOKEN'] : Object.keys(full).filter(k => full[k] === p.cred.value && p.cred.value !== '');
@@ -430,7 +435,7 @@ export function buildChatOptions(p: {
 				preset: 'claude_code',
 				append: profile ? profile.appendSystemPrompt : buildChatHint(p.paths, scratch) + soulSection(p.paths),
 			},
-			settings: buildChatSettings(p.paths),
+			settings: {...buildChatSettings(p.paths, rulesDenyRead ?? []), ...(autoMode && {autoMode})},
 			...(sandbox && {sandbox}),
 			tools: CHAT_TOOLS.filter(t => !profile || profile.mainTools.includes(t)),
 			disallowedTools: [...CHAT_DISALLOWED_TOOLS],

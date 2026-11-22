@@ -3,7 +3,7 @@ import {accessSync, constants, readdirSync} from 'node:fs';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import type {ProjectAccess} from '../deps/project.js';
-import {accountPaths, authStatePath, CONFIG_HISTORY, CONFIG_SECRET, CONFIG_TRANSCRIPTS, hostLogsDir, HUB_ASK_FILES, PLANS_DIR, type PolicyPaths} from '../policy.js';
+import {accountPaths, authStatePath, CONFIG_HISTORY, CONFIG_SECRET, CONFIG_TRANSCRIPTS, hostLogsDir, PLANS_DIR, type PolicyPaths} from '../policy.js';
 
 export const SANDBOX_DOMAINS = ['github.com', '*.github.com', '*.githubusercontent.com', 'registry.npmjs.org'];
 
@@ -23,6 +23,7 @@ export const SANDBOX_DENIED_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 
 
 export type SandboxExtras = {
 	socketDirs?: string[];
+	rules?: {denyRead: string[]; denyWrite: string[]; rulesFiles: string[]};
 };
 
 export type ListDir = (dir: string) => string[];
@@ -49,14 +50,13 @@ function readOnlyEntries(dir: string, writable: string[], list: ListDir): string
 }
 
 export function buildSandbox(paths: PolicyPaths, access: ProjectAccess | undefined, list: ListDir = listDir, home = homedir(), extras: SandboxExtras = {}): SandboxSettings {
-	const hub = path.resolve(paths.hubDir ?? paths.mdDir);
 	const config = path.resolve(paths.configDir);
 	const writable = (access?.writable ?? []).map(d => path.resolve(d));
 	const managed = (access?.managed ?? []).map(d => path.resolve(d));
 	const denyWrite = [
 		...managed.flatMap(dir => readOnlyEntries(dir, writable, list)),
 		...readOnlyEntries(config, [path.join(config, PLANS_DIR)], list),
-		...HUB_ASK_FILES.map(f => path.join(hub, f)),
+		...(extras.rules ? [...extras.rules.denyRead, ...extras.rules.denyWrite, ...extras.rules.rulesFiles] : []),
 	];
 	const [accountsFile, accountsDir] = accountPaths(paths);
 	const denyRead = [
@@ -74,8 +74,10 @@ export function buildSandbox(paths: PolicyPaths, access: ProjectAccess | undefin
 		...(paths.projects?.dataDir ? [paths.projects.dataDir] : []),
 		...(paths.hostState ? [paths.hostState] : []),
 		...(extras.socketDirs ?? []),
+		...(extras.rules?.denyRead ?? []),
 		'/proc',
 	].map(p => path.resolve(p));
+	const keep = (p: string): boolean => !writable.some(w => within(w, p));
 	const unixSockets = paths.accountSecrets !== undefined;
 	return {
 		enabled: true,
@@ -85,8 +87,8 @@ export function buildSandbox(paths: PolicyPaths, access: ProjectAccess | undefin
 		enableWeakerNestedSandbox: true,
 		filesystem: {
 			allowWrite: ['/tmp'],
-			denyWrite: [...new Set(denyWrite)],
-			denyRead: [...new Set(denyRead)],
+			denyWrite: [...new Set(denyWrite.map(p => path.resolve(p)).filter(keep))],
+			denyRead: [...new Set(denyRead.filter(keep))],
 			...(paths.hostState && {allowRead: [hostLogsDir(paths.hostState)]}),
 		},
 		network: {allowedDomains: [...SANDBOX_DOMAINS], ...(unixSockets && {allowAllUnixSockets: true as const})},

@@ -1,9 +1,10 @@
-import {realpath, stat} from 'node:fs/promises';
+import {realpath} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import type {CanUseTool} from '@anthropic-ai/claude-agent-sdk';
 import type {AccountSecretPaths} from './deps/account.js';
 import type {ProjectAccess, ProjectAccessReader} from './deps/project.js';
+import {rulesVerdict, type RulesVerdict} from './rules.js';
 
 export const ALLOWED_TOOLS = ['Read', 'Glob', 'Grep'];
 
@@ -80,12 +81,12 @@ export type Scope = {
 	hostStateDenied?: string[];
 	hostStateReadable?: string[];
 	free?: string[];
-	askFiles?: string[];
 	transcriptDirs?: string[];
 	locked?: string[];
 	lockedExcept?: string[];
 	projects?: () => Promise<ProjectAccess | undefined>;
 	projectDataDir?: string;
+	rulesFile?: (name: string) => string | undefined;
 	shellDenied?: string[];
 	agentSocket?: string;
 	sessionTmp?: string;
@@ -115,8 +116,6 @@ export const SESSION_TMP_DENIED = ['bash-edit-diff'];
 export const SESSION_TMP_READ = ['bundled-skills'];
 
 export const hostLogsDir = (hostState: string): string => path.join(path.resolve(hostState), 'logs');
-
-export const HUB_ASK_FILES = ['CLAUDE.md', 'SOUL.md'];
 
 export const CONFIG_TRANSCRIPTS = 'projects';
 export const CONFIG_HISTORY = 'history.jsonl';
@@ -163,7 +162,6 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 	return {
 		roots: [paths.projectDir, hub, paths.configDir],
 		free: [hub],
-		askFiles: HUB_ASK_FILES.map(f => path.join(hub, f)),
 		transcriptDirs: [path.join(paths.configDir, CONFIG_TRANSCRIPTS)],
 		locked: paths.dataDir ? [paths.dataDir] : [],
 		lockedExcept: [path.join(paths.configDir, PLANS_DIR)],
@@ -190,10 +188,25 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 		...(paths.hostState && {hostStateDenied: [path.resolve(paths.hostState)], hostStateReadable: [hostLogsDir(paths.hostState)]}),
 		...(paths.projects && {projects: () => paths.projects!.read()}),
 		...(paths.projects?.dataDir && {projectDataDir: paths.projects.dataDir}),
+		...(paths.projects?.rulesFile && {rulesFile: (name: string) => paths.projects?.rulesFile?.(name)}),
 	};
 }
 
-export function buildAskSettings(paths: PolicyPaths): {
+const RULE_UNSAFE = /[*?[\]{}()\\\0\n]/;
+export const RULES_READ_DENY_MAX = 1000;
+
+// Concrete paths only: Claude Code skips glob patterns on Linux and a name with a glob character would widen the rule.
+export function rulesReadDeny(denyRead: string[]): string[] {
+	const out: string[] = [];
+	for (const p of denyRead) {
+		if (!path.isAbsolute(p) || RULE_UNSAFE.test(p)) continue;
+		out.push(`Read(${absRule(p)})`, `Read(${absRule(p)}/**)`);
+		if (out.length >= RULES_READ_DENY_MAX) break;
+	}
+	return out.slice(0, RULES_READ_DENY_MAX);
+}
+
+export function buildAskSettings(paths: PolicyPaths, denyRead: string[] = []): {
 	permissions: {deny: string[]};
 	disableAllHooks: true;
 } {
@@ -218,6 +231,7 @@ export function buildAskSettings(paths: PolicyPaths): {
 				'Read(**/id_rsa*)',
 				'Read(./.yena/**)',
 				...accountSecretRules(paths, 'Read'),
+			...rulesReadDeny(denyRead),
 			],
 		},
 		disableAllHooks: true,
@@ -246,10 +260,7 @@ export const freeEditAllow = (paths: PolicyPaths): string[] => [`Edit(${absRule(
 
 const CHAT_NARROWED: Record<string, string> = {'Read(**/.env*)': 'Read(**/.env)', 'Read(**/id_rsa*)': 'Read(**/id_rsa)'};
 
-export const hubAskEdit = (paths: PolicyPaths): string[] =>
-	HUB_ASK_FILES.map(f => `Edit(${absRule(path.join(paths.hubDir ?? paths.mdDir, f))})`);
-
-export function buildChatSettings(paths: PolicyPaths): {
+export function buildChatSettings(paths: PolicyPaths, denyRead: string[] = []): {
 	permissions: {allow: string[]; ask: string[]; deny: string[]};
 	disableAllHooks: true;
 } {
@@ -274,8 +285,8 @@ export function buildChatSettings(paths: PolicyPaths): {
 	return {
 		permissions: {
 			allow: freeEditAllow(paths),
-			ask: hubAskEdit(paths),
-			deny: [...buildAskSettings(paths).permissions.deny.map(r => CHAT_NARROWED[r] ?? r), ...editDeny],
+			ask: [],
+			deny: [...buildAskSettings(paths, denyRead).permissions.deny.map(r => CHAT_NARROWED[r] ?? r), ...editDeny],
 		},
 		disableAllHooks: true,
 	};
@@ -338,6 +349,13 @@ export async function inSharedTmp(p: string, scope: Scope): Promise<boolean> {
 	return shared.some(d => within(lexical, d) || within(real, d));
 }
 
+export async function rulesFor(p: string, scope: Scope, isDir?: boolean): Promise<RulesVerdict | undefined> {
+	const base = scope.roots[0];
+	if (base === undefined || typeof p !== 'string' || p === '' || p.includes('\0')) return undefined;
+	const real = await resolveReal(path.resolve(base, p)).catch(() => undefined);
+	return real === undefined ? undefined : rulesVerdict(real, scope, isDir);
+}
+
 export async function isPathAllowed(p: string, scope: Scope): Promise<boolean> {
 	if (typeof p !== 'string' || p === '' || p.includes('\0') || scope.roots.length === 0) {
 		return false;
@@ -367,6 +385,7 @@ export async function isPathAllowed(p: string, scope: Scope): Promise<boolean> {
 	if (deniedLen >= rootLen) {
 		return false;
 	}
+	if ((await rulesVerdict(real, scope)).read === 'deny') return false;
 	if (real.endsWith('.jsonl') && (await realList(scope.transcriptDirs ?? [])).some(d => within(real, d))) {
 		return false;
 	}
@@ -391,7 +410,8 @@ export function globBase(pattern: string, from: string): string | undefined {
 	return path.resolve(from, prefix === '' && path.isAbsolute(pattern) ? '/' : prefix);
 }
 
-export function createCanUseTool(scope: Scope): CanUseTool {
+// "chat ask" has no prompt, so a path a rules file asks about is refused there.
+export function createCanUseTool(scope: Scope, opts: {refuseAsk?: boolean} = {}): CanUseTool {
 	const notAvailable = (name: string) => ({
 		behavior: 'deny' as const,
 		message: `Tool "${name}" is not available in "chat ask" (read-only mode).`,
@@ -433,6 +453,7 @@ export function createCanUseTool(scope: Scope): CanUseTool {
 		}
 		for (const p of paths) {
 			if (!(await isPathAllowed(p, scope))) return pathDenied;
+			if (opts.refuseAsk && (await rulesFor(p, scope))?.read === 'ask') return pathDenied;
 		}
 		return {behavior: 'allow', updatedInput: input};
 	};
@@ -454,41 +475,9 @@ export type EditTargetClass =
 	| 'free'
 	| 'deny-locked'
 	| 'deny-readonly'
-	| 'deny-image';
-
-const NO_AUTO_EXACT = new Set([
-	'Makefile',
-	'yena',
-	'install.sh',
-	'Dockerfile',
-	'compose.yaml',
-	'seccomp.json',
-	'.dockerignore',
-	'package.json',
-	'package-lock.json',
-	'yena-modules.json',
-]);
-
-function noAutoAccept(rel: string): boolean {
-	const segs = rel.split(path.sep);
-	const first = segs[0] as string;
-	if (first.startsWith('.')) return true;
-	if (NO_AUTO_EXACT.has(rel) || first === 'scripts') return true;
-	if (first === 'modules') {
-		if (segs[2] === 'bin' || (segs.length === 3 && segs[2] === 'yena.json')) return true;
-		return segs[1] === 'claude' && segs[2] === 'src';
-	}
-	return false;
-}
-
-export async function isYenaCheckout(dir: string): Promise<boolean> {
-	const has = (rel: string) =>
-		stat(path.join(dir, rel)).then(
-			s => s.isFile(),
-			() => false,
-		);
-	return (await has('yena')) && (await has('compose.yaml')) && (await has(path.join('src', 'cli.ts')));
-}
+	| 'deny-image'
+	| 'deny-rules'
+	| 'ask-rules';
 
 async function projectTarget(real: string, access: ProjectAccess): Promise<'readonly' | {dir: string; docs: boolean} | undefined> {
 	const managed = await realList(access.managed);
@@ -498,15 +487,6 @@ async function projectTarget(real: string, access: ProjectAccess): Promise<'read
 	const dir = writable.filter(d => within(real, d)).sort((a, b) => b.length - a.length)[0];
 	if (dir === undefined || dir === real) return 'readonly';
 	return {dir, docs: within(dir, docsRoot)};
-}
-
-export async function isAskFile(filePath: string, scope: Scope): Promise<boolean> {
-	const projectDir = scope.roots[0];
-	if (projectDir === undefined || !scope.askFiles?.length) return false;
-	const lexical = path.resolve(projectDir, filePath);
-	const real = await resolveReal(lexical).catch(() => lexical);
-	const files = [...scope.askFiles.map(f => path.resolve(f)), ...(await realList(scope.askFiles))];
-	return files.includes(lexical) || files.includes(real);
 }
 
 export async function classifyEditTarget(filePath: string, scope: Scope): Promise<EditTargetClass> {
@@ -533,13 +513,12 @@ export async function classifyEditTarget(filePath: string, scope: Scope): Promis
 		const verdict = await projectTarget(real, access);
 		if (verdict === 'readonly') return 'deny-readonly';
 		if (verdict !== undefined) {
+			const rules = await rulesVerdict(real, scope);
+			if (rules.write === 'deny') return 'deny-rules';
 			if (!verdict.docs && isGuardedPath(real, verdict.dir)) return 'deny-guard';
 			if (!(await isPathAllowed(real, scope))) return 'deny-secret';
-			if (verdict.docs) return 'free';
-			const rel = path.relative(verdict.dir, real);
-			const [first] = rel.split(path.sep);
-			if (first === undefined || first.startsWith('.')) return 'prompt-only';
-			return (await isYenaCheckout(verdict.dir)) && noAutoAccept(rel) ? 'prompt-only' : 'auto-eligible';
+			if (rules.write === 'ask') return 'ask-rules';
+			return verdict.docs ? 'free' : 'auto-eligible';
 		}
 	}
 	const scratch = await ownScratch(scope);
@@ -549,10 +528,12 @@ export async function classifyEditTarget(filePath: string, scope: Scope): Promis
 	const roots = await realList(scope.roots);
 	const [realProject, ...promptRoots] = roots as [string, ...string[]];
 	if (!within(real, realProject) && !promptRoots.some(r => within(real, r))) return 'deny-outside';
+	const rules = await rulesVerdict(real, scope);
+	if (rules.write === 'deny') return 'deny-rules';
 	if (isGuardedPath(real, realProject)) return 'deny-guard';
 	if (!(await isPathAllowed(real, scope))) return 'deny-secret';
-	if (await isAskFile(filePath, scope)) return 'prompt-only';
+	if (rules.write === 'ask') return 'ask-rules';
 	if ((await realList(scope.free ?? [])).some(r => within(real, r))) return 'free';
 	if (!within(real, realProject) || promptRoots.some(r => within(real, r))) return 'prompt-only';
-	return noAutoAccept(path.relative(realProject, real)) ? 'prompt-only' : 'auto-eligible';
+	return 'auto-eligible';
 }

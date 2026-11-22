@@ -6,7 +6,7 @@ import {after, test} from 'node:test';
 import {createPolicyHook, policyHooks, webKey} from '../../src/chat/policy-hook.js';
 import {createLeftoverSweeper} from '../../src/chat/sandbox-leftovers.js';
 import {noopLog} from '../../src/log.js';
-import {POLICY_ASK, POLICY_DENY, scratchDenied} from '../../src/chat/permission.js';
+import {POLICY_DENY, scratchDenied} from '../../src/chat/permission.js';
 import {buildScope} from '../../src/policy.js';
 
 const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'claude-hook-')));
@@ -255,17 +255,16 @@ test('auth.json is denied in the scope, the settings, the sandbox and the Bash h
 	assert.equal(await decision('Bash', {command: 'cat src/auth.json'}), 'pass');
 });
 
-test('the hook forces a prompt for the hub instructions every session loads', async () => {
+test('the hub instructions are edited without a prompt, like the rest of the hub', async () => {
 	const md = (f: string) => path.join(paths.mdDir, f);
 	writeFileSync(md('SOUL.md'), 's');
-	assert.equal(await decision('Edit', {file_path: md('CLAUDE.md'), old_string: 'a', new_string: 'b'}), `ask:${POLICY_ASK.instructions}`);
-	assert.equal(await decision('Write', {file_path: md('SOUL.md'), content: 'x'}), `ask:${POLICY_ASK.instructions}`);
+	assert.equal(await decision('Edit', {file_path: md('CLAUDE.md'), old_string: 'a', new_string: 'b'}), 'pass');
+	assert.equal(await decision('Write', {file_path: md('SOUL.md'), content: 'x'}), 'pass');
 	assert.equal(await decision('Write', {file_path: md('notes.md'), content: 'x'}), 'pass');
 });
 
-test('the hook asks for the first fetch from a host until it is allowed for good', async () => {
-	const approved = new Set(['web:docs.example.com']);
-	const webHook = createPolicyHook(buildScope(paths, path.join(tmp, 'home')), paths.configDir, {approved: k => approved.has(k)});
+test('the hook lets a WebFetch through for any valid http or https URL', async () => {
+	const webHook = createPolicyHook(buildScope(paths, path.join(tmp, 'home')), paths.configDir);
 	const fetchDecision = async (url: unknown) => {
 		const out = (await webHook(
 			{hook_event_name: 'PreToolUse', tool_name: 'WebFetch', tool_input: {url, prompt: 'p'}, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: projectDir} as never,
@@ -276,11 +275,11 @@ test('the hook asks for the first fetch from a host until it is allowed for good
 	};
 	assert.equal(await fetchDecision('https://docs.example.com/a?q=1'), 'pass');
 	assert.equal(await fetchDecision('https://DOCS.Example.com/b'), 'pass');
-	assert.equal(await fetchDecision('https://evil.example.net/?d=secret'), 'ask');
-	assert.equal(await fetchDecision('https://docs.example.com.evil.net/'), 'ask');
+	assert.equal(await fetchDecision('https://evil.example.net/?d=secret'), 'pass');
+	assert.equal(await fetchDecision('https://docs.example.com.evil.net/'), 'pass');
 	assert.equal(await fetchDecision('ftp://docs.example.com/'), 'deny');
 	assert.equal(await fetchDecision(42), 'deny');
-	assert.equal(await decision('WebFetch', {url: 'https://docs.example.com/'}), `ask:${POLICY_ASK.newHost}`);
+	assert.equal(await decision('WebFetch', {url: 'https://docs.example.com/'}), 'pass');
 });
 
 test('webKey keys a fetch by its lower-case host', () => {

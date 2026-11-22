@@ -1,4 +1,6 @@
 import type {AuditEntry, ChatMode, PermissionDecision, PermissionRequest} from '../deps/chat.js';
+import {sanitizeText} from '../kit.js';
+import type {RulesVerdict} from '../rules.js';
 
 export const sdkPermissionMode = (mode: ChatMode): 'auto' | 'plan' | 'default' =>
 	mode === 'auto' || mode === 'plan' ? mode : 'default';
@@ -39,12 +41,29 @@ export const POLICY_DENY = {
 	isolation: 'Running an agent in a worktree or remotely is not available in the chat.',
 	invalidInput: 'The tool input is invalid.',
 	unknownTool: 'That tool is not available in the chat.',
+	rulesBash: `That command reads or changes a path the rules close. ${BASH_TEXT_NOTE}`,
+	rulesFile: '.yenarules and project rules files are changed only by the user, by hand; tell the user the exact change.',
 } as const;
+
+const SHOWN_MAX = 300;
+
+export function rulesDenied(v: RulesVerdict | undefined, op: 'read' | 'write'): string {
+	if (v?.malformed) {
+		const m = v.malformed;
+		const at = m.line === undefined ? '' : ` line ${m.line}`;
+		return `Access to that path is not allowed: ${sanitizeText(m.file, SHOWN_MAX)}${at}: ${sanitizeText(m.problem, SHOWN_MAX)}; everything in its folder is closed until the user fixes it.`;
+	}
+	if (v?.kind === 'rules-file') return POLICY_DENY.rulesFile;
+	const label = sanitizeText(v?.label ?? 'A rules file', SHOWN_MAX);
+	const section = v?.section ?? (op === 'read' ? 'deny read' : 'deny write');
+	return `Access to that path is not allowed: ${label} lists it under [${section}]. Do not work around the refusal; tell the user what you needed.`;
+}
 export const scratchDenied = (scratch: string): string =>
 	`Access to that path is not allowed: Claude Code's temporary folder and /tmp are shared by every chat. Put scratch files and script outputs in this chat's scratch folder, ${scratch} (also $YENA_SCRATCH); Read, Edit and Write work there.`;
 export const POLICY_ASK = {
-	instructions: 'CLAUDE.md and SOUL.md are loaded into every session: changes to them always need approval.',
-	newHost: 'First fetch from this host: a URL can carry data out.',
+	rulesRead: 'A rules file asks the user before this path is read.',
+	rulesWrite: 'A rules file asks the user before this path is changed.',
+	rulesBash: 'A rules file asks the user before a path this command names is read or changed.',
 } as const;
 export const toolUnavailableMessage = (name: string): string =>
 	`Tool "${name}" is not available in the chat`;

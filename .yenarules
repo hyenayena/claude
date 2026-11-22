@@ -1,0 +1,14 @@
+# Rules for the assistant in this repository (format: /data/md/architecture/claude/rules-files.md). Only the user edits this file.
+[ask write]
+/src/policy.ts
+/src/rules.ts
+/src/chat/bash-paths.ts
+/src/chat/policy-hook.ts
+/src/chat/permission-bridge.ts
+/src/chat/permission.ts
+/src/chat/sandbox.ts
+/src/chat/definition-guard.ts
+/src/chat/agent-policy.ts
+/src/chat/profile-guard.ts
+/src/chat/console-tools.ts
+/src/chat/auto-mode.ts

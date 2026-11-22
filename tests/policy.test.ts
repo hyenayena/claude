@@ -14,7 +14,7 @@ import {
 	createCanUseTool,
 	DISALLOWED_TOOLS,
 	GUARD_DENY,
-	isAskFile,
+
 	isGuardedPath,
 	inSharedTmp,
 	isPathAllowed,
@@ -313,7 +313,7 @@ describe('chat static policy', () => {
 		assert.deepEqual(s.permissions.allow, [`Edit(/${paths.mdDir}/**)`]);
 		const hubbed = buildChatSettings({...paths, hubDir: '/data/md'}).permissions;
 		assert.deepEqual(hubbed.allow, ['Edit(//data/md/**)']);
-		assert.deepEqual(hubbed.ask, ['Edit(//data/md/CLAUDE.md)', 'Edit(//data/md/SOUL.md)']);
+		assert.deepEqual(hubbed.ask, [], 'the hub instructions no longer ask');
 		assert.ok(s.permissions.deny.includes('Edit(./CLAUDE.md)'));
 		assert.ok(s.permissions.deny.includes(`Read(/${paths.configDir}/history.jsonl)`));
 		assert.ok(s.permissions.deny.includes(`Read(/${paths.configDir}/projects/**/*.jsonl)`));
@@ -379,21 +379,20 @@ describe('locked data dir', () => {
 		assert.equal(await cls(path.join(paths.configDir, 'plans', 'p.md')), 'prompt-only');
 	});
 
-	it('leaves the hub free at its own path, except the instructions every session loads', async () => {
+	it('leaves the whole hub free at its own path, the instructions included', async () => {
 		assert.equal(await cls(path.join(hub, 'notes.md')), 'free');
 		assert.equal(await cls(path.join(hub, 'agents', 'new', 'x.md')), 'free');
-		assert.equal(await cls(path.join(hub, 'CLAUDE.md')), 'prompt-only');
-		assert.equal(await cls(path.join(hub, 'SOUL.md')), 'prompt-only');
+		assert.equal(await cls(path.join(hub, 'CLAUDE.md')), 'free');
+		assert.equal(await cls(path.join(hub, 'SOUL.md')), 'free');
 		assert.equal(await cls(path.join(hub, 'projects', 'x', 'CLAUDE.md')), 'free');
-		assert.equal(await isAskFile(path.join(hub, 'SOUL.md'), lscope), true);
-		assert.equal(await isAskFile(path.join(hub, 'notes.md'), lscope), false);
+
 	});
 
-	it('asks for the instructions through a link into the hub', async () => {
+	it('also frees the instructions through a link into the hub', async () => {
 		const link = path.join(tmp, 'soul-link.md');
 		writeFileSync(path.join(hub, 'SOUL.md'), 's');
 		symlinkSync(path.join(hub, 'SOUL.md'), link);
-		assert.equal(await isAskFile(link, lscope), true);
+		assert.equal(await cls(link), 'free');
 	});
 });
 
@@ -457,9 +456,9 @@ describe('classifyEditTarget', () => {
 			assert.equal(await cls(f(name)), 'deny-secret', name);
 		}
 		for (const name of ['.env.example', '.env.sample', '.env.template', '.env.dist', '.env.local.example']) {
-			assert.equal(await cls(f(name)), 'prompt-only', name);
-		}
-		assert.equal(await cls(f('sub/.env.EXAMPLE')), 'auto-eligible');
+			assert.equal(await cls(f(name)), 'auto-eligible', name);
+			}
+			assert.equal(await cls(f('sub/.env.EXAMPLE')), 'auto-eligible');
 		for (const name of ['.env.d.ts', 'src/.environment.ts', 'docs/id_rsa.pub', 'keys/id_ed25519.pub', 'src/key.ts', 'monkey.json', '.npmrc.example']) {
 			assert.notEqual(await cls(f(name)), 'deny-secret', name);
 		}
@@ -477,13 +476,13 @@ describe('classifyEditTarget', () => {
 		assert.equal(await cls(path.join(paths.mdDir, '.env')), 'deny-secret');
 	});
 
-	it('prompts only for sensitive project files', async () => {
+	it('auto-accepts the project files that used to prompt when no rules file lists them', async () => {
 		for (const rel of [
 			'.git/config', '.github/w.yml', '.vscode/s.json', 'Makefile', 'yena', 'install.sh', 'Dockerfile', 'compose.yaml', 'seccomp.json',
 			'.dockerignore', 'package.json', 'package-lock.json', 'scripts/x.sh', 'modules/claude/bin/claude',
 			'modules/claude/yena.json', 'yena-modules.json', 'modules/claude/src/a.ts',
 		]) {
-			assert.equal(await cls(f(rel)), 'prompt-only', rel);
+			assert.equal(await cls(f(rel)), 'auto-eligible', rel);
 		}
 	});
 

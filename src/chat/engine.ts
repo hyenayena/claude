@@ -10,6 +10,9 @@ import {type ChooseOpts, pinnedAccount} from '../accounts.js';
 import {degradedReason, type ClaudeVault} from '../vault.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {buildScope} from '../policy.js';
+import {expandRules, type Expansion} from '../rules.js';
+import {sanitizeText} from '../kit.js';
+import {buildAutoMode} from './auto-mode.js';
 import type {ChatQueryFn, ClaudeState, Credential} from '../types.js';
 import {ChatSession, type RouteResult} from './chat-session.js';
 import {createConsoleFlags, createConsoleServer, type ConsoleSdk} from './console-tools.js';
@@ -183,6 +186,21 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 		log.warn('bash sandbox unavailable');
 		io.warn(`Warning: Bash in the chat runs without its sandbox, so it can write to projects that are not isolated: ${problem}.`);
 	}
+	if (paths.projects && typeof paths.projects.rulesFile !== 'function') log.info('project rules unavailable');
+	let rulesNow: Expansion | undefined;
+	try {
+		rulesNow = await expandRules(scope);
+	} catch (err) {
+		log.warn('rules expansion failed', {errClass: errClass(err)});
+	}
+	if (rulesNow && rulesNow.problems.length > 0) {
+		log.warn('rules file malformed', {count: rulesNow.problems.length});
+		for (const p of rulesNow.problems) {
+			const at = p.line === undefined ? '' : ` line ${p.line}`;
+			io.warn(`Warning: ${sanitizeText(p.file, 300)}${at}: ${sanitizeText(p.problem, 200)}. Everything in its folder is closed to the assistant until you fix it.`);
+		}
+	}
+	let truncatedNoted = false;
 	let keptNoted: string | undefined;
 	const noteKept = (sub: SessionSub | undefined): void => {
 		let kept: string | undefined;
@@ -199,7 +217,16 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	let created: ChatSession | undefined;
 	const sandboxExtras = {socketDirs: [sessionDirOf(shellTmpRoot(process.getuid?.() ?? 0))]};
 	const sandbox = createSandboxSync(
-		async () => buildSandbox(paths, await paths.projects?.read(), undefined, undefined, sandboxExtras),
+		async () => {
+			const rules = await expandRules(scope);
+			rulesNow = rules;
+			if (rules.truncated && !truncatedNoted) {
+				truncatedNoted = true;
+				log.warn('rules expansion truncated');
+				io.warn('Warning: the project folders are too large to list every path the rules close, so the Bash sandbox covers only part of them; the file tools still follow the rules.');
+			}
+			return buildSandbox(paths, await paths.projects?.read(), undefined, undefined, {...sandboxExtras, rules});
+		},
 		async s => {
 			await created?.applySandbox(s);
 		},
@@ -387,6 +414,14 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 				env: buildEnv(env, paths, cred, shellRoot, scratch?.dir),
 				...(scratch && {scratch: scratch.dir}),
 				...(box && {sandbox: box}),
+				rulesDenyRead: rulesNow?.denyRead ?? [],
+				autoMode: buildAutoMode({
+					hub: paths.hubDir,
+					configDir: paths.configDir,
+					...(scratch && {scratch: scratch.dir}),
+					...(access && access.roots.length >= 2 && {workplace: access.roots[0] as string, stage: access.roots[1] as string}),
+					...(paths.accountSecrets && {accountDir: paths.accountSecrets.dataDir}),
+				}),
 				...(consoleSdk && io.commandBridge && {
 					consoleServer: createConsoleServer({
 						bridge: io.commandBridge,
@@ -414,7 +449,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 			...(firstSpawn() && {...(fork && {forkSession: true}), ...(resumeAt && {resumeSessionAt: resumeAt})}),
 			permissionMode: sdkPermissionMode(prompter.mode),
 			hooks: policyHooks(scope, paths.configDir, {
-				approved: key => prompter.hasApproved(key),
+
 				bashTracker: leftovers,
 				...(box && {beforeBash: () => sandbox.refresh(), procHidden: true, sandboxed: true}),
 				...(guard

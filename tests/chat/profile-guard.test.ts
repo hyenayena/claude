@@ -364,7 +364,7 @@ test('the policy hook is unchanged without a profile', async () => {
 	const hook = createPolicyHook(scope, paths.configDir);
 	const out = await callHook(hook, 'Agent', {subagent_type: 'general-purpose'}, 'agent-9');
 	assert.equal(out.hookSpecificOutput, undefined);
-	assert.ok(POLICY_ASK.newHost);
+	assert.ok(POLICY_ASK.rulesBash);
 });
 
 test('the permission bridge denies what the guard refuses and passes the rest', async () => {

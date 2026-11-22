@@ -60,13 +60,36 @@ test('a writable folder deeper inside a managed dir splits its parent instead of
 	assert.ok(!deny.includes('/workplace/group/a'));
 });
 
-test('the Claude config dir is read-only for Bash except plans, and the hub instructions are protected', () => {
+test('the Claude config dir is read-only for Bash except plans, and the hub instructions are open', () => {
 	const deny = buildSandbox(paths, undefined, list, '/root').filesystem.denyWrite;
 	for (const p of ['/data/claude/config/projects', '/data/claude/config/settings.json', '/data/claude/config/agents']) assert.ok(deny.includes(p), p);
 	assert.ok(!deny.includes('/data/claude/config/plans'));
 	assert.ok(!deny.includes('/data/claude/config'));
-	assert.ok(deny.includes('/data/md/CLAUDE.md'));
-	assert.ok(deny.includes('/data/md/SOUL.md'));
+	assert.ok(!deny.includes('/data/md/CLAUDE.md'));
+	assert.ok(!deny.includes('/data/md/SOUL.md'));
+});
+
+test('rules entries go into the sandbox: deny read to both lists, deny write and rules files to denyWrite, nothing that asks', () => {
+	const rules = {
+		denyRead: ['/workplace/yena/.env', '/workplace/yena/secrets'],
+		denyWrite: ['/workplace/yena/scripts', '/workplace/yena/.git/hooks'],
+		rulesFiles: ['/workplace/yena/.yenarules'],
+	};
+	const box = buildSandbox(paths, access(['/workplace/yena']), list, '/root', {rules});
+	const fs = box.filesystem;
+	for (const p of rules.denyRead) assert.ok(fs.denyRead.includes(p) && fs.denyWrite.includes(p), p);
+	for (const p of [...rules.denyWrite, ...rules.rulesFiles]) assert.ok(fs.denyWrite.includes(p) && !fs.denyRead.includes(p), p);
+	assert.ok(fs.denyRead.includes('/app/.yena'), 'the .yena denial stays');
+	const withAsk = buildSandbox(paths, access(['/workplace/yena']), list, '/root', {rules: {...rules, askRead: ['/workplace/yena/a'], askWrite: ['/workplace/yena/.git/config']} as never});
+	for (const p of ['/workplace/yena/a', '/workplace/yena/.git/config']) assert.ok(!withAsk.filesystem.denyRead.includes(p) && !withAsk.filesystem.denyWrite.includes(p), p);
+});
+
+test('a rules entry equal to or above a writable folder is dropped, so no parent of a writable folder is denied', () => {
+	const rules = {denyRead: ['/workplace/yena', '/workplace', '/stage/yena-1/x'], denyWrite: ['/workplace/yena/docs', '/data/md/projects'], rulesFiles: []};
+	const fs = buildSandbox(paths, access(['/workplace/yena', '/data/md/projects/yena', '/stage/yena-1']), list, '/root', {rules}).filesystem;
+	for (const p of ['/workplace/yena', '/workplace', '/data/md/projects']) assert.ok(!fs.denyRead.includes(p) && !fs.denyWrite.includes(p), p);
+	for (const p of ['/stage/yena-1/x']) assert.ok(fs.denyRead.includes(p), p);
+	assert.ok(fs.denyWrite.includes('/workplace/yena/docs'));
 });
 
 test('the sandbox hides the host state but re-opens its logs for reading', () => {

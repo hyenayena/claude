@@ -7,7 +7,8 @@ import {createPolicyHook} from '../src/chat/policy-hook.js';
 import {POLICY_DENY} from '../src/chat/permission.js';
 import {isReadOnlyDir, resolvePaths, withProjects} from '../src/config.js';
 import type {ProjectAccess, ProjectAccessReader} from '../src/deps/project.js';
-import {buildScope, classifyEditTarget, isPathAllowed, isYenaCheckout} from '../src/policy.js';
+import {buildScope, classifyEditTarget, isPathAllowed} from '../src/policy.js';
+import {resetRulesCaches} from '../src/rules.js';
 
 const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'claude-image-policy-')));
 after(() => rmSync(tmp, {recursive: true, force: true}));
@@ -76,21 +77,29 @@ describe('policy with the read-only image', () => {
 
 	it('a writable project dir (today\'s bind mount) keeps the old classes', async () => {
 		assert.equal(await classifyEditTarget(path.join(image, 'src', 'cli.ts'), writableScope), 'auto-eligible');
-		assert.equal(await classifyEditTarget(path.join(image, 'yena'), writableScope), 'prompt-only');
+		assert.equal(await classifyEditTarget(path.join(image, 'yena'), writableScope), 'auto-eligible');
 	});
 
-	it('in an isolated yena checkout the files that run on the host stay prompt-only', async () => {
-		for (const rel of ['yena', 'compose.yaml', 'Dockerfile', '.dockerignore', 'package.json', 'scripts/each-module.sh', 'modules/claude/bin/claude', 'modules/claude/src/policy.ts', 'modules/core/yena.json', '.git/config']) {
-			assert.equal(await classifyEditTarget(path.join(yena, rel), imageScope), 'prompt-only', rel);
+	it('in an isolated yena checkout the files that run on the host follow its .yenarules', async () => {
+		const rules = path.join(yena, '.yenarules');
+		const runsOnHost = ['yena', 'compose.yaml', 'scripts/each-module.sh', 'modules/claude/bin/claude', '.git/hooks/pre-commit', '.yenarules'];
+		for (const rel of [...runsOnHost, '.git/config', 'package.json', 'Dockerfile', '.dockerignore', 'modules/claude/src/policy.ts', 'src/cli.ts']) {
+			assert.equal(await classifyEditTarget(path.join(yena, rel), imageScope), rel === '.yenarules' ? 'deny-rules' : 'auto-eligible', `${rel} without rules`);
 		}
-		for (const rel of ['src/cli.ts', 'modules/core/src/app.tsx', 'tests/x.test.ts']) {
-			assert.equal(await classifyEditTarget(path.join(yena, rel), imageScope), 'auto-eligible', rel);
+		writeFileSync(rules, '[deny write]\n/yena\n/compose.yaml\n/scripts/\n/modules/*/bin/\n**/.git/hooks/\n[ask write]\n**/.git/config\n');
+		try {
+			for (const rel of runsOnHost) assert.equal(await classifyEditTarget(path.join(yena, rel), imageScope), 'deny-rules', rel);
+			assert.equal(await classifyEditTarget(path.join(yena, '.git', 'config'), imageScope), 'ask-rules');
+			for (const rel of ['package.json', 'Dockerfile', 'modules/claude/src/policy.ts', 'src/cli.ts', 'tests/x.test.ts']) {
+				assert.equal(await classifyEditTarget(path.join(yena, rel), imageScope), 'auto-eligible', rel);
+			}
+		} finally {
+			rmSync(rules);
+			resetRulesCaches();
 		}
 	});
 
-	it('other projects are not treated as yena checkouts', async () => {
-		assert.ok(await isYenaCheckout(yena));
-		assert.ok(!(await isYenaCheckout(web)));
+	it('other projects get no rules of the yena checkout', async () => {
 		assert.equal(await classifyEditTarget(path.join(web, 'compose.yaml'), imageScope), 'auto-eligible');
 	});
 

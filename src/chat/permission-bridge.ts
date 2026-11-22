@@ -2,15 +2,16 @@ import {randomUUID} from 'node:crypto';
 import {realpath} from 'node:fs/promises';
 import path from 'node:path';
 import type {CanUseTool, PermissionResult} from '@anthropic-ai/claude-agent-sdk';
-import {classifyEditTarget, createCanUseTool, type Scope} from '../policy.js';
+import {classifyEditTarget, createCanUseTool, rulesFor, type Scope} from '../policy.js';
+import {analyzeBash, bashRulesVerdict} from './bash-paths.js';
 import {agentDenial} from './agent-policy.js';
 import {type ConsoleFlags} from './console-tools.js';
 import {LIST_COMMANDS_TOOL, RUN_COMMAND_TOOL} from '../deps/chat.js';
-import {POLICY_DENY, type PermissionPrompter, toolUnavailableMessage} from './permission.js';
+import {POLICY_ASK, POLICY_DENY, type PermissionPrompter, rulesDenied, toolUnavailableMessage} from './permission.js';
 import {BASH_REVIEW_MAX, CANCEL_MESSAGE, DENY_MESSAGE, DENY_REASON_PREFIX, DISMISS_MESSAGE, type Highlight, PAYLOAD_REVIEW_MAX, type PermissionDecision, type PermissionRequest, type Preview, QUESTION_LIMITS, type QuestionSpec, REASON_MAX} from '../deps/chat.js';
 import {sanitizeBlock, sanitizeText} from '../kit.js';
 import type {ProfileGuard} from './profile-guard.js';
-import {outsideReason, WEB_KEY_PREFIX, webKey} from './policy-hook.js';
+import {outsideReason, readRules, WEB_KEY_PREFIX, webKey} from './policy-hook.js';
 
 export type PermissionBridgeDeps = {
 	scope: Scope;
@@ -197,10 +198,13 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		if (input.dangerouslyDisableSandbox) {
 			return policyDeny('Bash', POLICY_DENY.background, 'sandbox override', b.id);
 		}
+		const rules = await bashRulesVerdict(analyzeBash(command, projectDir), scope);
+		if (rules.decision === 'deny') return policyDeny('Bash', POLICY_DENY.rulesBash, 'rules', b.id);
+		const rulesAsk = rules.decision === 'ask' || opts.decisionReason === POLICY_ASK.rulesBash;
 		const highlights = deps.highlights ? deps.highlights(command) : [];
 		const warn = highlights.some(h => h.level === 'warn');
 		const flagged = b.defaultToNo || b.reasonType === 'safetyCheck' || b.reasonType === 'rule' || b.interaction || warn;
-		if (!flagged && prompter.hasApproved(command)) {
+		if (!flagged && !rulesAsk && prompter.hasApproved(command)) {
 			prompter.audit({outcome: 'always-allowed', toolName: 'Bash', summary: command});
 			return {behavior: 'allow', updatedInput: input, toolUseID: b.id};
 		}
@@ -209,6 +213,7 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		);
 		const alwaysOk =
 			rulable &&
+			!rulesAsk &&
 			opts.suppressAlwaysAllowRule !== true &&
 			!b.defaultToNo &&
 			b.reasonType !== 'safetyCheck' &&
@@ -267,6 +272,7 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 		if (cls === 'deny-image') return policyDeny(toolName, POLICY_DENY.image, summaryPath, b.id);
 		if (cls === 'deny-guard') return policyDeny(toolName, POLICY_DENY.guard, summaryPath, b.id);
 		if (cls === 'deny-secret') return policyDeny(toolName, POLICY_DENY.secret, summaryPath, b.id);
+		if (cls === 'deny-rules') return policyDeny(toolName, rulesDenied(await rulesFor(filePath, scope), 'write'), summaryPath, b.id);
 
 		const added = countLines(String(input.new_string ?? input.content));
 		const removed = toolName === 'Edit' ? countLines(String(input.old_string)) : 0;
@@ -300,6 +306,31 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 				defaultToNo: b.defaultToNo,
 				always: false,
 				oversize,
+			},
+			opts.signal,
+		);
+		if (d.kind === 'allow') return {behavior: 'allow', updatedInput: input, toolUseID: b.id};
+		return denyFor(d, b.id);
+	};
+
+	const handleReadAsk = async (toolName: 'Read' | 'Grep' | 'Glob', input: Record<string, unknown>, opts: Opts): Promise<PermissionResult> => {
+		const b = base(opts);
+		const target = toolName === 'Read' ? input.file_path : (input.path ?? projectDir);
+		const shown = typeof target === 'string' ? path.resolve(projectDir, target) : projectDir;
+		const d = await ask(
+			{
+				kind: 'tool',
+				id: randomUUID(),
+				seq: ++seq,
+				toolName: toolName === 'Grep' ? 'Grep' : 'Read',
+				input,
+				cwd: projectDir,
+				path: shown,
+				...(b.description !== undefined && {description: b.description}),
+				highlights: [],
+				defaultToNo: b.defaultToNo,
+				always: false,
+				oversize: false,
 			},
 			opts.signal,
 		);
@@ -403,8 +434,10 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 			case 'Glob':
 			case 'Grep': {
 				const r = await readTool(toolName, input, opts);
-				if (r?.behavior === 'allow') return r;
-				prompter.audit({outcome: 'denied-by-policy', toolName, summary: 'outside scope'});
+				const rules = await readRules(scope, toolName, input);
+				if (r?.behavior === 'allow' && rules.deny === undefined) return rules.ask ? handleReadAsk(toolName, input, opts) : r;
+				prompter.audit({outcome: 'denied-by-policy', toolName, summary: rules.deny === undefined ? 'outside scope' : 'rules'});
+				if (rules.deny !== undefined) return deny(rules.deny, opts.toolUseID);
 				const reason = await outsideReason(scope, toolName === 'Read' ? input.file_path : input.path);
 				if (reason !== POLICY_DENY.outside) return deny(reason, opts.toolUseID);
 				return r ?? deny(POLICY_DENY.outside, opts.toolUseID);

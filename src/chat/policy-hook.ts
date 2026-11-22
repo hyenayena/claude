@@ -1,10 +1,12 @@
 import type {HookCallback, HookCallbackMatcher, HookEvent, HookJSONOutput} from '@anthropic-ai/claude-agent-sdk';
 import path from 'node:path';
-import {classifyEditTarget, createCanUseTool, inSharedTmp, isAskFile, PLANS_DIR, resolveReal, type Scope} from '../policy.js';
+import {classifyEditTarget, createCanUseTool, globBase, inSharedTmp, PLANS_DIR, resolveReal, rulesFor, type Scope} from '../policy.js';
+import {entriesInside, expandRules} from '../rules.js';
 import {agentDenial} from './agent-policy.js';
 import {addsPrivilegedFrontmatter, isDefinitionPath} from './definition-guard.js';
 import type {ProfileGuard} from './profile-guard.js';
-import {POLICY_ASK, POLICY_DENY, scratchDenied} from './permission.js';
+import {analyzeBash, bashRulesVerdict} from './bash-paths.js';
+import {POLICY_ASK, POLICY_DENY, rulesDenied, scratchDenied} from './permission.js';
 
 const AUTH_FILE = /credentials\.json|\.claude\.json|config\/backups|accounts\.json|claude\/accounts\b|claude\/auth\.json/;
 
@@ -33,6 +35,34 @@ export async function outsideReason(scope: Scope, target: unknown): Promise<stri
 	return POLICY_DENY.outside;
 }
 
+export type ReadRules = {deny?: string; ask?: boolean};
+
+// What the rules files say about a Read, Glob or Grep call, whether or not the root checks let it through.
+export async function readRules(scope: Scope, tool: string, args: Record<string, unknown>): Promise<ReadRules> {
+	const cwd = scope.roots[0] ?? '/';
+	const target = tool === 'Read' ? args.file_path : (args.path ?? cwd);
+	if (typeof target !== 'string') return {};
+	const own = await rulesFor(target, scope);
+	if (own?.read === 'deny') return {deny: rulesDenied(own, 'read')};
+	const pattern = tool === 'Glob' ? args.pattern : tool === 'Grep' ? args.glob : undefined;
+	if (typeof pattern === 'string' && (pattern.startsWith('/') || pattern.startsWith('~'))) {
+		const base = globBase(pattern, path.resolve(cwd, target));
+		const verdict = base === undefined ? undefined : await rulesFor(base, scope);
+		if (verdict?.read === 'deny') return {deny: rulesDenied(verdict, 'read')};
+	}
+	if (tool === 'Glob') return {};
+	if (own?.read === 'ask') return {ask: true};
+	if (tool !== 'Grep') return {};
+	const real = await resolveReal(path.resolve(cwd, target)).catch(() => undefined);
+	if (real === undefined) return {};
+	const expansion = await expandRules(scope);
+	return entriesInside(expansion.askRead, real).length > 0 ? {ask: true} : {};
+}
+
+export async function deniedReason(scope: Scope, tool: string, args: Record<string, unknown>): Promise<string | undefined> {
+	return (await readRules(scope, tool, args)).deny;
+}
+
 const allow: HookJSONOutput = {continue: true};
 
 const denyWith = (reason: string): HookJSONOutput => ({
@@ -56,7 +86,6 @@ export function webKey(url: unknown): string | undefined {
 }
 
 export type PolicyHookOptions = {
-	approved?: (key: string) => boolean;
 	beforeBash?: () => Promise<void>;
 	procHidden?: boolean;
 	sandboxed?: boolean;
@@ -88,7 +117,10 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 			case 'Glob':
 			case 'Grep': {
 				const r = await readTool(tool, args, opts);
-				return r?.behavior === 'allow' ? allow : denyWith(await outsideReason(scope, tool === 'Read' ? args.file_path : args.path));
+				const rules = await readRules(scope, tool, args);
+				if (r?.behavior !== 'allow') return denyWith(rules.deny ?? (await outsideReason(scope, tool === 'Read' ? args.file_path : args.path)));
+				if (rules.deny !== undefined) return denyWith(rules.deny);
+				return rules.ask ? askWith(POLICY_ASK.rulesRead) : allow;
 			}
 			case 'Edit':
 			case 'Write': {
@@ -98,6 +130,7 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 				if (cls === 'deny-locked') return denyWith(POLICY_DENY.locked);
 				if (cls === 'deny-readonly') return denyWith(POLICY_DENY.readonly);
 				if (cls === 'deny-image') return denyWith(POLICY_DENY.image);
+				if (cls === 'deny-rules') return denyWith(rulesDenied(await rulesFor(args.file_path, scope), 'write'));
 				if (config && plans) {
 					const target = await resolveReal(path.resolve(scope.roots[0] ?? '/', args.file_path)).catch(() => undefined);
 					const realConfig = await resolveReal(config).catch(() => config);
@@ -115,12 +148,10 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 				) {
 					return denyWith(POLICY_DENY.privileged);
 				}
-				return (await isAskFile(args.file_path, scope)) ? askWith(POLICY_ASK.instructions) : allow;
+				return cls === 'ask-rules' ? askWith(POLICY_ASK.rulesWrite) : allow;
 			}
 			case 'WebFetch': {
-				const key = webKey(args.url);
-				if (key === undefined) return denyWith(POLICY_DENY.invalidInput);
-				return hookOpts.approved?.(key) ? allow : askWith(POLICY_ASK.newHost);
+				return webKey(args.url) === undefined ? denyWith(POLICY_DENY.invalidInput) : allow;
 			}
 			case 'Bash': {
 				if (args.dangerouslyDisableSandbox) return denyWith(POLICY_DENY.background);
@@ -135,6 +166,8 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 				if (!hookOpts.procHidden && PROC_ENV.test(command)) return denyWith(POLICY_DENY.procEnv);
 				if (usesAgent(command, scope.agentSocket)) return denyWith(POLICY_DENY.sshAgent);
 				if (projectData && command.includes(projectData)) return denyWith(POLICY_DENY.projectState);
+				const rules = await bashRulesVerdict(analyzeBash(command, typeof input.cwd === 'string' ? input.cwd : (scope.roots[0] ?? '/')), scope);
+				if (rules.decision === 'deny') return denyWith(POLICY_DENY.rulesBash);
 				if (hookOpts.beforeBash) {
 					try {
 						await hookOpts.beforeBash();
@@ -143,7 +176,7 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 					}
 				}
 				hookOpts.bashTracker?.begin(input.tool_use_id);
-				return allow;
+				return rules.decision === 'ask' ? askWith(POLICY_ASK.rulesBash) : allow;
 			}
 			case 'Agent':
 			case 'Task': {

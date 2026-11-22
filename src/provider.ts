@@ -18,6 +18,8 @@ import {buildEnv, buildOptions, ensureMdLinks, resolvePaths, restrictDataDirs, r
 import {bindSession, sessionSubscription} from './session-accounts.js';
 import {runTurn, TurnFailure} from './session.js';
 import {clip, errClass} from './log.js';
+import {buildScope} from './policy.js';
+import {expandRules} from './rules.js';
 import {isModelId} from './store.js';
 import {isMissingModule, type SessionHub} from './session-hub.js';
 import {queryStatus, type SessionState} from './sessions/control.js';
@@ -120,7 +122,11 @@ export const createClaudeProvider = (hub: SessionHub, deps: ClaudeDeps): ChatPro
 			ensureMdLinks(p);
 			restrictDataDirs(p);
 			let result;
-			const options = buildOptions({paths: p, cred, abortController: controller, resume, env: buildEnv(env, p, cred)});
+			const rules = await expandRules(buildScope(p)).catch(err => {
+				log.warn('rules expansion failed', {errClass: errClass(err)});
+				return undefined;
+			});
+			const options = buildOptions({paths: p, cred, abortController: controller, resume, env: buildEnv(env, p, cred), ...(rules && {rulesDenyRead: rules.denyRead})});
 			try {
 				result = await runTurn({query, prompt: text, options, signal: controller.signal, redact, log});
 			} catch (err) {

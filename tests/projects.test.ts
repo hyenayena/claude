@@ -81,7 +81,7 @@ describe('policy with projects', () => {
 		current = access(['web']);
 		assert.equal(await cls(path.join(workplace, 'web', 'a.txt')), 'auto-eligible');
 		assert.equal(await cls(path.join(workplace, 'web', 'src', 'new.ts')), 'auto-eligible');
-		assert.equal(await cls(path.join(workplace, 'web', '.gitignore')), 'prompt-only');
+		assert.equal(await cls(path.join(workplace, 'web', '.gitignore')), 'auto-eligible');
 		assert.equal(await cls(path.join(workplace, 'web', '.env')), 'deny-secret');
 		assert.equal(await cls(path.join(workplace, 'web', 'CLAUDE.md')), 'deny-guard');
 		assert.equal(await cls(path.join(webStage, 'a.txt')), 'auto-eligible');

@@ -6,10 +6,12 @@ export type ProjectAccess = {
 	docs: string;
 	managed: string[];
 	writable: string[];
+	stages?: Array<{path: string; project: string}>;
 };
 
 export type ProjectAccessReader = {
 	dataDir: string;
+	rulesFile?: (name: string) => string | undefined;
 	read(): Promise<ProjectAccess | undefined>;
 	readSync(): ProjectAccess | undefined;
 };
