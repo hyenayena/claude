@@ -199,7 +199,7 @@ export function createChatCanUseTool(deps: PermissionBridgeDeps): CanUseTool {
 			return policyDeny('Bash', POLICY_DENY.background, 'sandbox override', b.id);
 		}
 		const rules = await bashRulesVerdict(analyzeBash(command, projectDir), scope);
-		if (rules.decision === 'deny') return policyDeny('Bash', POLICY_DENY.rulesBash, 'rules', b.id);
+		if (rules.decision === 'deny') return policyDeny('Bash', rules.askWrite ? POLICY_DENY.rulesBashAsk : POLICY_DENY.rulesBash, 'rules', b.id);
 		const rulesAsk = rules.decision === 'ask' || opts.decisionReason === POLICY_ASK.rulesBash;
 		const highlights = deps.highlights ? deps.highlights(command) : [];
 		const warn = highlights.some(h => h.level === 'warn');

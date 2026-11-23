@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {after, describe, it} from 'node:test';
 import {analyzeBash, bashRulesVerdict, MAX_COMMANDS, MAX_WORDS} from '../../src/chat/bash-paths.js';
-import {resetRulesCaches, type RulesScope} from '../../src/rules.js';
+import {resetRulesCaches, type RulesScope} from '../../src/deps/rules.js';
 
 const cwd = '/p';
 const show = (command: string, from = cwd): string[] => analyzeBash(command, from).uses.map(u => `${u.mode}${u.own ? '*' : ''}:${u.path}`);
@@ -207,12 +207,12 @@ describe('bashRulesVerdict', () => {
 		assert.equal(await run('ls -R .'), 'allow', 'listing names is not reading content');
 	});
 
-	it('asks when the rules ask, for reads and writes', async () => {
+	it('asks when the rules ask for a read, and denies a write to an ask write path', async () => {
 		assert.equal(await run('cat notes/private.md'), 'ask');
-		assert.equal(await run('echo {} > package.json'), 'ask');
-		assert.equal(await run('git config user.name x'), 'ask', 'the git config is ask write');
-		assert.equal(await run('git push -u origin main'), 'ask');
-		assert.equal(await run('git config --get user.name'), 'ask');
+		for (const c of ['echo {} > package.json', 'sed -i s/a/b/ package.json', 'rm package.json', 'mv package.json x.json', 'node run.js package.json', 'git config user.name x', 'git push -u origin main']) {
+			assert.equal(await run(c), 'deny', c);
+		}
+		assert.equal(await run('git config --get user.name'), 'allow', 'a config read is not a write');
 		assert.equal(await run('cat package.json'), 'allow', 'ask write does not ask for a read');
 	});
 

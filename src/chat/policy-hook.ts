@@ -1,7 +1,7 @@
 import type {HookCallback, HookCallbackMatcher, HookEvent, HookJSONOutput} from '@anthropic-ai/claude-agent-sdk';
 import path from 'node:path';
 import {classifyEditTarget, createCanUseTool, globBase, inSharedTmp, PLANS_DIR, resolveReal, rulesFor, type Scope} from '../policy.js';
-import {entriesInside, expandRules} from '../rules.js';
+import {entriesInside, INDEX_MAX_AGE_MS, rulesLists} from '../deps/rules.js';
 import {agentDenial} from './agent-policy.js';
 import {addsPrivilegedFrontmatter, isDefinitionPath} from './definition-guard.js';
 import type {ProfileGuard} from './profile-guard.js';
@@ -55,7 +55,7 @@ export async function readRules(scope: Scope, tool: string, args: Record<string,
 	if (tool !== 'Grep') return {};
 	const real = await resolveReal(path.resolve(cwd, target)).catch(() => undefined);
 	if (real === undefined) return {};
-	const expansion = await expandRules(scope);
+	const expansion = await rulesLists(scope, {maxAgeMs: INDEX_MAX_AGE_MS});
 	return entriesInside(expansion.askRead, real).length > 0 ? {ask: true} : {};
 }
 
@@ -167,7 +167,7 @@ export function createPolicyHook(scope: Scope, configDir?: string, hookOpts: Pol
 				if (usesAgent(command, scope.agentSocket)) return denyWith(POLICY_DENY.sshAgent);
 				if (projectData && command.includes(projectData)) return denyWith(POLICY_DENY.projectState);
 				const rules = await bashRulesVerdict(analyzeBash(command, typeof input.cwd === 'string' ? input.cwd : (scope.roots[0] ?? '/')), scope);
-				if (rules.decision === 'deny') return denyWith(POLICY_DENY.rulesBash);
+				if (rules.decision === 'deny') return denyWith(rules.askWrite ? POLICY_DENY.rulesBashAsk : POLICY_DENY.rulesBash);
 				if (hookOpts.beforeBash) {
 					try {
 						await hookOpts.beforeBash();

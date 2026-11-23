@@ -1,6 +1,6 @@
 import type {AuditEntry, ChatMode, PermissionDecision, PermissionRequest} from '../deps/chat.js';
 import {sanitizeText} from '../kit.js';
-import type {RulesVerdict} from '../rules.js';
+import type {RulesVerdict} from '../deps/rules.js';
 
 export const sdkPermissionMode = (mode: ChatMode): 'auto' | 'plan' | 'default' =>
 	mode === 'auto' || mode === 'plan' ? mode : 'default';
@@ -42,6 +42,7 @@ export const POLICY_DENY = {
 	invalidInput: 'The tool input is invalid.',
 	unknownTool: 'That tool is not available in the chat.',
 	rulesBash: `That command reads or changes a path the rules close. ${BASH_TEXT_NOTE}`,
+	rulesBashAsk: 'That file is changed only through Edit/Write, which ask the user; Bash cannot write it.',
 	rulesFile: '.yenarules and project rules files are changed only by the user, by hand; tell the user the exact change.',
 } as const;
 

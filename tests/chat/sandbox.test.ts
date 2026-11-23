@@ -69,7 +69,7 @@ test('the Claude config dir is read-only for Bash except plans, and the hub inst
 	assert.ok(!deny.includes('/data/md/SOUL.md'));
 });
 
-test('rules entries go into the sandbox: deny read to both lists, deny write and rules files to denyWrite, nothing that asks', () => {
+test('rules entries go into the sandbox: deny read to both lists, deny write, ask write and rules files to denyWrite, ask read stays out', () => {
 	const rules = {
 		denyRead: ['/workplace/yena/.env', '/workplace/yena/secrets'],
 		denyWrite: ['/workplace/yena/scripts', '/workplace/yena/.git/hooks'],
@@ -81,7 +81,10 @@ test('rules entries go into the sandbox: deny read to both lists, deny write and
 	for (const p of [...rules.denyWrite, ...rules.rulesFiles]) assert.ok(fs.denyWrite.includes(p) && !fs.denyRead.includes(p), p);
 	assert.ok(fs.denyRead.includes('/app/.yena'), 'the .yena denial stays');
 	const withAsk = buildSandbox(paths, access(['/workplace/yena']), list, '/root', {rules: {...rules, askRead: ['/workplace/yena/a'], askWrite: ['/workplace/yena/.git/config']} as never});
-	for (const p of ['/workplace/yena/a', '/workplace/yena/.git/config']) assert.ok(!withAsk.filesystem.denyRead.includes(p) && !withAsk.filesystem.denyWrite.includes(p), p);
+	assert.ok(!withAsk.filesystem.denyRead.includes('/workplace/yena/a') && !withAsk.filesystem.denyWrite.includes('/workplace/yena/a'), 'ask read stays out');
+	assert.ok(withAsk.filesystem.denyWrite.includes('/workplace/yena/.git/config') && !withAsk.filesystem.denyRead.includes('/workplace/yena/.git/config'), 'ask write files are not writable by Bash');
+	const above = buildSandbox(paths, access(['/workplace/yena']), list, '/root', {rules: {...rules, askWrite: ['/workplace/yena', '/workplace']} as never});
+	assert.ok(!above.filesystem.denyWrite.includes('/workplace/yena') && !above.filesystem.denyWrite.includes('/workplace'), 'a folder that holds a writable root is dropped');
 });
 
 test('a rules entry equal to or above a writable folder is dropped, so no parent of a writable folder is denied', () => {

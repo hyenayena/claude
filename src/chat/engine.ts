@@ -10,7 +10,7 @@ import {type ChooseOpts, pinnedAccount} from '../accounts.js';
 import {degradedReason, type ClaudeVault} from '../vault.js';
 import {clip, errClass, noopLog} from '../log.js';
 import {buildScope} from '../policy.js';
-import {expandRules, type Expansion} from '../rules.js';
+import {type Expansion, INDEX_MAX_AGE_MS, rulesLists} from '../deps/rules.js';
 import {sanitizeText} from '../kit.js';
 import {buildAutoMode} from './auto-mode.js';
 import type {ChatQueryFn, ClaudeState, Credential} from '../types.js';
@@ -189,7 +189,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	if (paths.projects && typeof paths.projects.rulesFile !== 'function') log.info('project rules unavailable');
 	let rulesNow: Expansion | undefined;
 	try {
-		rulesNow = await expandRules(scope);
+		rulesNow = await rulesLists(scope, {maxAgeMs: INDEX_MAX_AGE_MS});
 	} catch (err) {
 		log.warn('rules expansion failed', {errClass: errClass(err)});
 	}
@@ -218,7 +218,7 @@ export const createChatEngine = async (open: EngineOpen, deps: EngineDeps, io: E
 	const sandboxExtras = {socketDirs: [sessionDirOf(shellTmpRoot(process.getuid?.() ?? 0))]};
 	const sandbox = createSandboxSync(
 		async () => {
-			const rules = await expandRules(scope);
+			const rules = await rulesLists(scope, {maxAgeMs: INDEX_MAX_AGE_MS});
 			rulesNow = rules;
 			if (rules.truncated && !truncatedNoted) {
 				truncatedNoted = true;

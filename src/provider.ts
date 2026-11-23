@@ -19,7 +19,7 @@ import {bindSession, sessionSubscription} from './session-accounts.js';
 import {runTurn, TurnFailure} from './session.js';
 import {clip, errClass} from './log.js';
 import {buildScope} from './policy.js';
-import {expandRules} from './rules.js';
+import {INDEX_MAX_AGE_MS, rulesLists} from './deps/rules.js';
 import {isModelId} from './store.js';
 import {isMissingModule, type SessionHub} from './session-hub.js';
 import {queryStatus, type SessionState} from './sessions/control.js';
@@ -122,7 +122,7 @@ export const createClaudeProvider = (hub: SessionHub, deps: ClaudeDeps): ChatPro
 			ensureMdLinks(p);
 			restrictDataDirs(p);
 			let result;
-			const rules = await expandRules(buildScope(p)).catch(err => {
+			const rules = await rulesLists(buildScope(p), {maxAgeMs: INDEX_MAX_AGE_MS}).catch(err => {
 				log.warn('rules expansion failed', {errClass: errClass(err)});
 				return undefined;
 			});

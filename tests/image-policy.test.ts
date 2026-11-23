@@ -8,7 +8,7 @@ import {POLICY_DENY} from '../src/chat/permission.js';
 import {isReadOnlyDir, resolvePaths, withProjects} from '../src/config.js';
 import type {ProjectAccess, ProjectAccessReader} from '../src/deps/project.js';
 import {buildScope, classifyEditTarget, isPathAllowed} from '../src/policy.js';
-import {resetRulesCaches} from '../src/rules.js';
+import {resetRulesCaches} from '../src/deps/rules.js';
 
 const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'claude-image-policy-')));
 after(() => rmSync(tmp, {recursive: true, force: true}));

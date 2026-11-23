@@ -2,9 +2,10 @@ import {realpath} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import type {CanUseTool} from '@anthropic-ai/claude-agent-sdk';
+import type {ModuleDirs} from '../../../src/api.js';
 import type {AccountSecretPaths} from './deps/account.js';
 import type {ProjectAccess, ProjectAccessReader} from './deps/project.js';
-import {rulesVerdict, type RulesVerdict} from './rules.js';
+import {rulesIndex, rulesVerdict, type RulesIndexReader, type RulesVerdict} from './deps/rules.js';
 
 export const ALLOWED_TOOLS = ['Read', 'Glob', 'Grep'];
 
@@ -87,6 +88,8 @@ export type Scope = {
 	projects?: () => Promise<ProjectAccess | undefined>;
 	projectDataDir?: string;
 	rulesFile?: (name: string) => string | undefined;
+	modules?: () => Promise<ModuleDirs[]>;
+	index?: RulesIndexReader;
 	shellDenied?: string[];
 	agentSocket?: string;
 	sessionTmp?: string;
@@ -155,6 +158,7 @@ const absRule = (p: string) => `/${p}`;
 
 export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 	const hub = paths.hubDir ?? paths.mdDir;
+	const index = paths.dataDir ? rulesIndex(paths.dataDir, {root: paths.projectDir}) : undefined;
 	const readRoots = [
 		...(paths.sessionTmp ? SESSION_TMP_READ.map(x => path.join(paths.sessionTmp!, x)) : []),
 		...(paths.hostState ? [hostLogsDir(paths.hostState)] : []),
@@ -189,6 +193,7 @@ export function buildScope(paths: PolicyPaths, home = homedir()): Scope {
 		...(paths.projects && {projects: () => paths.projects!.read()}),
 		...(paths.projects?.dataDir && {projectDataDir: paths.projects.dataDir}),
 		...(paths.projects?.rulesFile && {rulesFile: (name: string) => paths.projects?.rulesFile?.(name)}),
+		...(index && {index, modules: async () => (await index.layout())?.modules ?? []}),
 	};
 }
 
@@ -231,7 +236,7 @@ export function buildAskSettings(paths: PolicyPaths, denyRead: string[] = []): {
 				'Read(**/id_rsa*)',
 				'Read(./.yena/**)',
 				...accountSecretRules(paths, 'Read'),
-			...rulesReadDeny(denyRead),
+				...rulesReadDeny(denyRead),
 			],
 		},
 		disableAllHooks: true,

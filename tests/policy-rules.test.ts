@@ -15,7 +15,7 @@ import {
 	rulesFor,
 	rulesReadDeny,
 } from '../src/policy.js';
-import {resetRulesCaches} from '../src/rules.js';
+import {resetRulesCaches} from '../src/deps/rules.js';
 
 const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'claude-policy-rules-')));
 after(() => rmSync(tmp, {recursive: true, force: true}));

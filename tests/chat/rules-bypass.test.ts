@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {after, describe, it} from 'node:test';
 import {analyzeBash, bashRulesVerdict} from '../../src/chat/bash-paths.js';
-import {resetRulesCaches, type RulesScope} from '../../src/rules.js';
+import {resetRulesCaches, type RulesScope} from '../../src/deps/rules.js';
 
 const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'claude-bypass-')));
 after(() => rmSync(root, {recursive: true, force: true}));

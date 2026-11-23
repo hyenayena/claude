@@ -5,7 +5,7 @@ import type {CanUseTool} from '@anthropic-ai/claude-agent-sdk';
 import {createChatCanUseTool} from '../../src/chat/permission-bridge.js';
 import {type PermissionPrompter, POLICY_ASK, POLICY_DENY} from '../../src/chat/permission.js';
 import type {AuditEntry, ChatMode, PermissionDecision, PermissionRequest} from '../../src/deps/chat.js';
-import {resetRulesCaches} from '../../src/rules.js';
+import {resetRulesCaches} from '../../src/deps/rules.js';
 import {rulesFixture} from './rules-fixture.js';
 
 const fx = rulesFixture();

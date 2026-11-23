@@ -3,7 +3,7 @@ import path from 'node:path';
 import {after, beforeEach, describe, it} from 'node:test';
 import {POLICY_ASK, POLICY_DENY} from '../../src/chat/permission.js';
 import {createPolicyHook, deniedReason} from '../../src/chat/policy-hook.js';
-import {resetRulesCaches} from '../../src/rules.js';
+import {resetRulesCaches} from '../../src/deps/rules.js';
 import {rulesFixture} from './rules-fixture.js';
 
 const fx = rulesFixture();
@@ -115,9 +115,15 @@ describe('Bash', () => {
 		assert.equal(await run('Bash', {command: './unknown --out=compose.yaml'}), `deny:${POLICY_DENY.rulesBash}`);
 	});
 
-	it('asks for ask read and ask write paths and for a folder that holds an ask read entry', async () => {
-		for (const c of ['cat notes/private.md', 'echo {} > package.json', 'grep -r x notes', 'git config user.name x', 'git push -u origin main']) {
+	it('asks for ask read paths and for a folder that holds an ask read entry', async () => {
+		for (const c of ['cat notes/private.md', 'grep -r x notes']) {
 			assert.equal(await run('Bash', {command: c}), `ask:${POLICY_ASK.rulesBash}`, c);
+		}
+	});
+
+	it('denies a command that writes an ask write path: only Edit and Write ask the user', async () => {
+		for (const c of ['echo {} > package.json', 'sed -i s/a/b/ package.json', 'rm package.json', 'git config user.name x', 'git push -u origin main']) {
+			assert.equal(await run('Bash', {command: c}), `deny:${POLICY_DENY.rulesBashAsk}`, c);
 		}
 	});
 

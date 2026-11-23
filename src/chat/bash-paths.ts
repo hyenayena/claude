@@ -2,7 +2,7 @@ import {stat} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import {resolveReal} from '../policy.js';
-import {entriesInside, expandRules, RULES_FILE, rulesVerdict, type RulesScope} from '../rules.js';
+import {entriesInside, type Expansion, INDEX_MAX_AGE_MS, RULES_FILE, rulesLists, rulesVerdict, type RulesScope} from '../deps/rules.js';
 
 export type BashUse = {path: string; mode: 'read' | 'write' | 'both'; own?: true};
 export type BashAnalysis = {uses: BashUse[]; unparsed: boolean};
@@ -335,8 +335,21 @@ function tarUses(ctx: Ctx, args: string[]): void {
 	} else addUses(ctx, [...(archive === undefined ? [] : [archive]), ...(dest === undefined ? [] : [dest]), ...rest], 'both');
 }
 
+const CONFIG_READ = /^(?:--get(?:-all|-regexp|-urlmatch|-color|-colorbool)?|--list|-l)$/;
+const CONFIG_SHOW = /^(?:--show-origin|--show-scope|--name-only)$/;
+const CONFIG_WRITE = /^(?:--unset(?:-all)?|--add|--replace-all|--rename-section|--remove-section|--edit|--set|-[a-zA-Z]*e[a-zA-Z]*)$/;
+
+// A read form that names no value; anything that could set, unset or edit stays a write.
+function configIsRead(rest: string[]): boolean {
+	const flags = rest.filter(a => a.startsWith('-'));
+	if (flags.some(a => CONFIG_WRITE.test(a))) return false;
+	const operands = rest.filter(a => !a.startsWith('-'));
+	if (flags.some(a => CONFIG_READ.test(a))) return true;
+	return flags.some(a => CONFIG_SHOW.test(a)) && operands.length <= 1;
+}
+
 const changesGitConfig = (sub: string, rest: string[]): boolean =>
-	sub === 'config' ||
+	(sub === 'config' && !configIsRead(rest)) ||
 	(sub === 'remote' && rest.some(a => !a.startsWith('-') && a !== 'show' && a !== 'get-url')) ||
 	(sub === 'push' && rest.some(a => a === '-u' || a === '--set-upstream')) ||
 	(sub === 'branch' && rest.some(a => a === '-u' || a.startsWith('--set-upstream') || a === '--unset-upstream'));
@@ -507,11 +520,11 @@ export function analyzeBash(command: string, cwd: string): BashAnalysis {
 	return {uses: ctx.uses, unparsed: ctx.capped};
 }
 
-export type BashRulesVerdict = {decision: 'allow' | 'ask' | 'deny'; path?: string};
+export type BashRulesVerdict = {decision: 'allow' | 'ask' | 'deny'; path?: string; askWrite?: true};
 
 export async function bashRulesVerdict(analysis: BashAnalysis, scope: RulesScope): Promise<BashRulesVerdict> {
 	let ask: string | undefined;
-	let expansion: Awaited<ReturnType<typeof expandRules>> | undefined;
+	let expansion: Expansion | undefined;
 	for (const use of analysis.uses) {
 		const mode = analysis.unparsed ? 'both' : use.mode;
 		const reads = mode !== 'write';
@@ -522,13 +535,15 @@ export async function bashRulesVerdict(analysis: BashAnalysis, scope: RulesScope
 		const isDir = await stat(real).then(s => s.isDirectory(), () => false);
 		const v = await rulesVerdict(real, scope, isDir);
 		if ((reads && v.read === 'deny') || (writes && v.write === 'deny')) return {decision: 'deny', path: use.path};
-		if ((reads && v.read === 'ask') || (writes && v.write === 'ask')) ask ??= use.path;
+		if (writes && v.write === 'ask') return {decision: 'deny', path: use.path, askWrite: true};
+		if (reads && v.read === 'ask') ask ??= use.path;
 		if (!isDir || (use.own && !analysis.unparsed)) continue;
-		expansion ??= await expandRules(scope);
+		expansion ??= await rulesLists(scope, {maxAgeMs: INDEX_MAX_AGE_MS});
 		const hit = (list: string[]): boolean => entriesInside(list, real).length > 0;
 		if (reads && hit(expansion.denyRead)) return {decision: 'deny', path: use.path};
 		if (writes && (hit(expansion.denyRead) || hit(expansion.denyWrite))) return {decision: 'deny', path: use.path};
-		if ((reads && hit(expansion.askRead)) || (writes && hit(expansion.askWrite))) ask ??= use.path;
+		if (writes && hit(expansion.askWrite)) return {decision: 'deny', path: use.path, askWrite: true};
+		if (reads && hit(expansion.askRead)) ask ??= use.path;
 	}
 	return ask === undefined ? {decision: 'allow'} : {decision: 'ask', path: ask};
 }

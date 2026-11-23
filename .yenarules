@@ -12,3 +12,6 @@
 /src/chat/profile-guard.ts
 /src/chat/console-tools.ts
 /src/chat/auto-mode.ts
+
+[deny export]
+@**

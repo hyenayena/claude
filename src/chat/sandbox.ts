@@ -23,7 +23,7 @@ export const SANDBOX_DENIED_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 
 
 export type SandboxExtras = {
 	socketDirs?: string[];
-	rules?: {denyRead: string[]; denyWrite: string[]; rulesFiles: string[]};
+	rules?: {denyRead: string[]; denyWrite: string[]; rulesFiles: string[]; askWrite?: string[]};
 };
 
 export type ListDir = (dir: string) => string[];
@@ -56,7 +56,7 @@ export function buildSandbox(paths: PolicyPaths, access: ProjectAccess | undefin
 	const denyWrite = [
 		...managed.flatMap(dir => readOnlyEntries(dir, writable, list)),
 		...readOnlyEntries(config, [path.join(config, PLANS_DIR)], list),
-		...(extras.rules ? [...extras.rules.denyRead, ...extras.rules.denyWrite, ...extras.rules.rulesFiles] : []),
+		...(extras.rules ? [...extras.rules.denyRead, ...extras.rules.denyWrite, ...(extras.rules.askWrite ?? []), ...extras.rules.rulesFiles] : []),
 	];
 	const [accountsFile, accountsDir] = accountPaths(paths);
 	const denyRead = [
