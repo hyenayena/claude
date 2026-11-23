@@ -15,3 +15,6 @@
 
 [deny export]
 @**
+
+[ask write]
+/src/deps/rules.ts
