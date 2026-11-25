@@ -390,3 +390,13 @@ test('send carries the shell context in its frame, and no key without one', asyn
 	await plain.until(() => plain.frames.some(f => f.type === 'send'));
 	assert.ok(!('context' in (plain.frames.find(f => f.type === 'send') as object)));
 });
+
+test('send writes the time context into the frame', async () => {
+	const r = await fakeRunner();
+	holdLock(r.socketPath, r.socketPath);
+	const s = await connect(r.socketPath);
+	cleanup.push(() => s.close());
+	const time = 'Current time: 2026-11-25 Wed 09:14 (Europe/Kyiv, UTC+02:00)';
+	s.send('hi', {time});
+	await r.until(() => r.frames.some(f => f.type === 'send' && (f as {time?: string}).time === time));
+});

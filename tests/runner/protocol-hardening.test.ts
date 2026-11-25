@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {SHELL_LIMITS} from '../../src/deps/chat.js';
+import {SHELL_LIMITS, TIME_CONTEXT_MAX} from '../../src/deps/chat.js';
 import {createDecoder, encodeFrame, MAX_FRAME_BYTES, ProtocolError, validateFrame, type ClientFrame} from '../../src/runner/protocol.js';
 
 const line = (o: unknown): string => `${JSON.stringify(o)}\n`;
@@ -174,4 +174,10 @@ test('a send frame context must be a string within the shell context cap', () =>
 	assert.throws(() => createDecoder('toRunner').push(line({v: 1, type: 'send', text: 'x', context: 'c'.repeat(cap + 1)})), ProtocolError);
 	assert.throws(() => createDecoder('toRunner').push(line({v: 1, type: 'send', text: 'x', context: 5})), ProtocolError);
 	assert.throws(() => createDecoder('toRunner').push(line({v: 1, type: 'send', text: 'x', context: ['a']})), ProtocolError);
+});
+
+test('a send frame time must be a string within the time context cap', () => {
+	assert.equal(createDecoder('toRunner').push(line({v: 1, type: 'send', text: 'x', time: 't'.repeat(TIME_CONTEXT_MAX)})).length, 1);
+	assert.throws(() => createDecoder('toRunner').push(line({v: 1, type: 'send', text: 'x', time: 't'.repeat(TIME_CONTEXT_MAX + 1)})), ProtocolError);
+	assert.throws(() => createDecoder('toRunner').push(line({v: 1, type: 'send', text: 'x', time: 5})), ProtocolError);
 });

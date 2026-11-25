@@ -1,7 +1,7 @@
 import {open, readdir, stat} from 'node:fs/promises';
 import path from 'node:path';
 import type {DetailFile, DetailLine, DetailText, HistoryMessage, PromptEntry, SessionSummary, ToolPatch} from '../deps/chat.js';
-import {isShellContext} from '../deps/chat.js';
+import {isShellContext, isTimeContext} from '../deps/chat.js';
 import {toolPatch} from './normalize.js';
 import {titleFromPrompt, transcriptFile} from './title.js';
 
@@ -68,7 +68,7 @@ const promptOf = (e: Entry): string | undefined => {
 	if (e.type !== 'user' || e.isMeta === true || e.isSidechain === true) return undefined;
 	const content = e.message?.content;
 	if (typeof content === 'string') return content;
-	const prompt = textBlocks(content)?.filter(t => !isShellContext(t));
+	const prompt = textBlocks(content)?.filter(t => !isShellContext(t) && !isTimeContext(t));
 	return prompt !== undefined && prompt.length > 0 ? prompt.join('\n') : undefined;
 };
 
@@ -210,7 +210,7 @@ export async function readTranscriptDetail(file: string): Promise<DetailLine[]> 
 			}
 			const blocks = textBlocks(content);
 			if (blocks !== undefined) {
-				const prompt = blocks.filter(t => !isShellContext(t)).join('\n');
+				const prompt = blocks.filter(t => !isShellContext(t) && !isTimeContext(t)).join('\n');
 				push('', ...blocks.filter(isShellContext).flatMap(c => c.split('\n').map(l => `  ${l}`)));
 				if (prompt !== '') push(...prompt.split('\n').map((l, i) => (i === 0 ? `> ${l}` : `  ${l}`)));
 				continue;

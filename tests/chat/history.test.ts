@@ -142,3 +142,35 @@ test('readTranscriptDetail shows the shell context indented above the prompt, an
 		{kind: 'text', text: 'Because.'},
 	]);
 });
+
+const TIME_LINE = 'Current time: 2026-11-25 Wed 09:14 (Europe/Kyiv, UTC+02:00)';
+
+test('a prompt sent with a time block shows the typed text only in history, titles and the detail view', async () => {
+	const {listPrompts, readTranscriptDetail} = await import('../../src/chat/history.js');
+	const configDir = await mkdtemp(join(tmpdir(), 'claude-history-'));
+	const dir = join(configDir, 'projects', '-app');
+	await mkdir(dir, {recursive: true});
+	const file = join(dir, `${A}.jsonl`);
+	await writeFile(file, jsonl([user([{type: 'text', text: TIME_LINE}, {type: 'text', text: CONTEXT}, {type: 'text', text: 'why?'}], {uuid: 'u-why'}), assistant('m1', 'Because.')]));
+	assert.deepEqual(await readHistory(file), [
+		{role: 'user', text: 'why?'},
+		{role: 'assistant', text: 'Because.'},
+	]);
+	assert.deepEqual((await listSessions(configDir, '/app')).map(s => [s.title, s.prompts]), [['why?', 1]]);
+	assert.deepEqual((await listPrompts(file)).map(p => p.text), ['why?']);
+	const detail = (await readTranscriptDetail(file)).filter((l): l is string => typeof l === 'string');
+	assert.ok(!detail.some(l => l.includes('Current time')));
+	assert.ok(detail.includes('> why?'));
+});
+
+test('a prompt that only starts like the time line is kept as typed', async () => {
+	const {listPrompts} = await import('../../src/chat/history.js');
+	const configDir = await mkdtemp(join(tmpdir(), 'claude-history-'));
+	const dir = join(configDir, 'projects', '-app');
+	await mkdir(dir, {recursive: true});
+	const file = join(dir, `${A}.jsonl`);
+	const typed = ['Current time: is it noon?', `${TIME_LINE}\nand more`, `${TIME_LINE} `];
+	await writeFile(file, jsonl(typed.map((t, i) => user([{type: 'text', text: TIME_LINE}, {type: 'text', text: t}], {uuid: `u-${i}`}))));
+	assert.deepEqual((await listPrompts(file)).map(p => p.text), typed);
+	assert.deepEqual(await readHistory(file), typed.map(text => ({role: 'user', text})));
+});

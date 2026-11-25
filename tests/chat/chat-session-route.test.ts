@@ -293,3 +293,11 @@ test('the routed path pushes the shell context blocks, and a slash line skips bo
 	assert.deepEqual(seen, ['hello']);
 	assert.deepEqual(queries[0]?.sent[0]?.message.content, [{type: 'text', text: context}, {type: 'text', text: 'hello'}]);
 });
+
+test('a routed message keeps its time block before the prompt', async () => {
+	const {session, queries} = setup(async () => ({info: {outcome: 'rated', main: 'standard', rated: 'standard'}}));
+	const time = 'Current time: 2026-11-25 Wed 09:14 (Europe/Kyiv, UTC+02:00)';
+	session.send('hello', {time});
+	await settle();
+	assert.deepEqual(queries[0]?.sent?.[0]?.message, {role: 'user', content: [{type: 'text', text: time}, {type: 'text', text: 'hello'}]});
+});

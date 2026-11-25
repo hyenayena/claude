@@ -3,6 +3,7 @@ import {realpathSync} from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import type {Logger} from '../../../../src/api.js';
+import {currentTimeZone} from '../kit.js';
 import {noopLog} from '../log.js';
 import {RUNNER_ENTRY_TAIL} from '../sessions/stop.js';
 
@@ -56,7 +57,7 @@ export async function spawnRunner(opts: SpawnRunnerOptions): Promise<{socketPath
 		cwd: process.cwd(),
 		detached: true,
 		stdio: 'ignore',
-		env: {...opts.env, YENA_RUNNER_DIR: opts.sessionDir},
+		env: {...opts.env, TZ: currentTimeZone(), YENA_RUNNER_DIR: opts.sessionDir},
 	});
 	child.unref();
 	let exited = false;

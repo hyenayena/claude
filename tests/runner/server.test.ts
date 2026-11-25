@@ -46,8 +46,8 @@ class FakeSession {
 	emit = (e: ChatEvent): void => {
 		for (const cb of [...this.cbs]) cb(e);
 	};
-	sentOpts: Array<{command?: boolean; context?: string} | undefined> = [];
-	send = (text: string, opts?: {command?: boolean; context?: string}): void => {
+	sentOpts: Array<{command?: boolean; context?: string; time?: string} | undefined> = [];
+	send = (text: string, opts?: {command?: boolean; context?: string; time?: string}): void => {
 		this.sent.push(text);
 		this.sentOpts.push(opts);
 		this.state = 'running';
@@ -263,6 +263,7 @@ test('keep on: the queue is sent once after an ok turn, then the runner exits', 
 	r.session.endTurn('ok');
 	await until(() => r.session.sent.length === 2, 'queue flushed');
 	assert.equal(r.session.sent[1], 'a\n\nb');
+	assert.match(r.session.sentOpts[1]?.time ?? '', /^Current time: /);
 	r.session.endTurn('ok');
 	const exit = await r.handle.done;
 	assert.equal(exit.reason, 'idle');
@@ -864,4 +865,13 @@ test('a send frame passes its shell context and command flag to the session', as
 	c.send({type: 'send', text: 'plain'});
 	await until(() => r.session.sent.length === 2, 'plain send');
 	assert.deepEqual(r.session.sentOpts[1], {});
+});
+
+test('a send frame passes its time context to the session', async () => {
+	const r = await rig();
+	const c = await attach(r, {open: {fresh: true}});
+	const time = 'Current time: 2026-11-25 Wed 09:14 (Europe/Kyiv, UTC+02:00)';
+	c.send({type: 'send', text: 'hi', time});
+	await until(() => r.session.sent.length === 1, 'send with time');
+	assert.deepEqual(r.session.sentOpts[0], {time});
 });

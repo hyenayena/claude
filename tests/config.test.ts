@@ -21,6 +21,7 @@ import {
 } from '../src/config.js';
 import {buildChatSettings, CHAT_DISALLOWED_TOOLS, CHAT_TOOLS} from '../src/policy.js';
 import type {Credential} from '../src/types.js';
+import {currentTimeZone} from '../src/kit.js';
 
 const SECRET = 'sk-ant-oat-TESTVALUE0123456789abcdef';
 const oauth: Credential = {kind: 'oauth', source: 'env', value: '', passthrough: true};
@@ -69,6 +70,13 @@ describe('buildEnv', () => {
 		assert.equal(env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD, '1');
 		assert.equal(env.DISABLE_AUTOUPDATER, '1');
 		assert.equal(env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS, '1');
+		assert.equal(env.TZ, currentTimeZone());
+	});
+
+	it('replaces any TZ in the base environment with the current zone', () => {
+		for (const hostile of ['../x', 'Europe/Kyiv\nX=1', ':UTC', '']) {
+			assert.equal(buildEnv({TZ: hostile, PATH: ''}, paths, oauth).TZ, currentTimeZone(), JSON.stringify(hostile));
+		}
 	});
 
 	it('sets USE_BUILTIN_RIPGREP only when rg is on PATH', () => {

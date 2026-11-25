@@ -6,7 +6,7 @@ import type {LivePatch} from '../chat-prefs.js';
 import type {ChatSession} from '../chat/chat-session.js';
 import type {ChatEvent} from '../deps/chat.js';
 import type {EngineIo, EngineOpen} from '../chat/engine.js';
-import type {Tier} from '../deps/chat.js';
+import {sendWithTime, type Tier} from '../deps/chat.js';
 import {resolveCommandLine} from '../kit.js';
 import {clip, errClass} from '../log.js';
 import {removeLeftoverSocket, type ControlStatus} from '../sessions/control.js';
@@ -375,7 +375,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 			setImmediate(() => {
 				if (closing || client) return;
 				try {
-					s.send(text);
+					sendWithTime(s, text);
 					log.info('queue flushed', {count});
 				} catch (err) {
 					log.warn('queue flush failed', {err});
@@ -528,7 +528,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 			switch (frame.type) {
 				case 'send':
 					try {
-						s.send(frame.text, {...(frame.command && {command: true}), ...(frame.context !== undefined && {context: frame.context})});
+						s.send(frame.text, {...(frame.command && {command: true}), ...(frame.context !== undefined && {context: frame.context}), ...(frame.time !== undefined && {time: frame.time})});
 					} catch (err) {
 						const error = clip(redact(err instanceof Error ? err.message : 'The message was not sent'), 1000);
 						write(c, {type: 'event', event: {type: 'turn-end', outcome: 'error', error}});
@@ -537,7 +537,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 					break;
 				case 'steer':
 					try {
-						if (s.state === 'idle') s.send(frame.text);
+						if (s.state === 'idle') sendWithTime(s, frame.text);
 						else s.steer(frame.text);
 					} catch {
 						write(c, {type: 'event', event: {type: 'steer-failed', text: frame.text}});

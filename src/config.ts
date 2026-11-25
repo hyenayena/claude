@@ -15,6 +15,7 @@ import {
 	MAX_TURNS,
 } from './policy.js';
 import {CONSOLE_SERVER_NAME, type ChatProfile} from './deps/chat.js';
+import {currentTimeZone} from './kit.js';
 import {ROUTER_SYSTEM} from './chat/router.js';
 import type {AutoMode} from './chat/auto-mode.js';
 import type {SandboxSettings} from './chat/sandbox.js';
@@ -192,6 +193,7 @@ export function buildEnv(
 	const env: Record<string, string | undefined> = {...base};
 	env.CLAUDE_CONFIG_DIR = paths.configDir;
 	env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1';
+	env.TZ = currentTimeZone();
 	env.DISABLE_AUTOUPDATER = '1';
 	env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
 	if (onPath('rg', base.PATH)) {
