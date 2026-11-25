@@ -46,8 +46,10 @@ class FakeSession {
 	emit = (e: ChatEvent): void => {
 		for (const cb of [...this.cbs]) cb(e);
 	};
-	send = (text: string): void => {
+	sentOpts: Array<{command?: boolean; context?: string} | undefined> = [];
+	send = (text: string, opts?: {command?: boolean; context?: string}): void => {
 		this.sent.push(text);
+		this.sentOpts.push(opts);
 		this.state = 'running';
 		this.emit({type: 'state', state: 'running'});
 		this.emit({type: 'sent', text});
@@ -849,4 +851,17 @@ test('the snapshot carries the plan only when there is one', async () => {
 	assert.deepEqual(snap.plan, [{id: '1', content: 'A', status: 'pending'}]);
 	const plain = await attach(await rig());
 	assert.equal((plain.frames.find(f => f.type === 'snapshot') as Extract<RunnerFrame, {type: 'snapshot'}>).plan, undefined);
+});
+
+test('a send frame passes its shell context and command flag to the session', async () => {
+	const r = await rig();
+	const c = await attach(r, {open: {fresh: true}});
+	c.send({type: 'send', text: 'hi', context: 'CTX'});
+	await until(() => r.session.sent.length === 1, 'send with context');
+	assert.deepEqual(r.session.sentOpts[0], {context: 'CTX'});
+	await until(() => r.session.state === 'running', 'running');
+	r.session.state = 'idle';
+	c.send({type: 'send', text: 'plain'});
+	await until(() => r.session.sent.length === 2, 'plain send');
+	assert.deepEqual(r.session.sentOpts[1], {});
 });

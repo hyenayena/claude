@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {SHELL_LIMITS} from '../../src/deps/chat.js';
 import {createDecoder, encodeFrame, MAX_FRAME_BYTES, ProtocolError, validateFrame, type ClientFrame} from '../../src/runner/protocol.js';
 
 const line = (o: unknown): string => `${JSON.stringify(o)}\n`;
@@ -165,4 +166,12 @@ test('the runner-side decoder is unchanged: bad client frames stay fatal and the
 	assert.throws(() => dec.push(line({v: 1, type: 'answer', id: 'a', decision: {kind: 'bogus'}})), ProtocolError);
 	assert.throws(() => dec.push(line({v: 1, type: 'answer', id: 'a', decision: {kind: 'allow'}})), ProtocolError);
 	assert.deepEqual(drops, []);
+});
+
+test('a send frame context must be a string within the shell context cap', () => {
+	const cap = SHELL_LIMITS.contextChars;
+	assert.equal(createDecoder('toRunner').push(line({v: 1, type: 'send', text: 'x', context: 'c'.repeat(cap)})).length, 1);
+	assert.throws(() => createDecoder('toRunner').push(line({v: 1, type: 'send', text: 'x', context: 'c'.repeat(cap + 1)})), ProtocolError);
+	assert.throws(() => createDecoder('toRunner').push(line({v: 1, type: 'send', text: 'x', context: 5})), ProtocolError);
+	assert.throws(() => createDecoder('toRunner').push(line({v: 1, type: 'send', text: 'x', context: ['a']})), ProtocolError);
 });

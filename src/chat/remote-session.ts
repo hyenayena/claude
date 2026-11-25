@@ -229,7 +229,7 @@ export class RemoteChatSession implements ClaudeChatHandle {
 		};
 	}
 
-	send(text: string, opts: {command?: boolean} = {}): void {
+	send(text: string, opts: {command?: boolean; context?: string} = {}): void {
 		if (this._state === 'closed') throw new Error('The chat is closed');
 		if (this._state === 'running') throw new Error('A request is already running');
 		if (this._needsNewSession) throw new Error(RESUME_MESSAGE);
@@ -247,7 +247,7 @@ export class RemoteChatSession implements ClaudeChatHandle {
 			}
 		}
 		this._state = 'running';
-		this.write({v: 1, type: 'send', text, ...(opts.command && {command: true})});
+		this.write({v: 1, type: 'send', text, ...(opts.command && {command: true}), ...(opts.context && {context: opts.context})});
 	}
 
 	steer(text: string): void {

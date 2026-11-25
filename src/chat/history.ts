@@ -1,6 +1,7 @@
 import {open, readdir, stat} from 'node:fs/promises';
 import path from 'node:path';
 import type {DetailFile, DetailLine, DetailText, HistoryMessage, PromptEntry, SessionSummary, ToolPatch} from '../deps/chat.js';
+import {isShellContext} from '../deps/chat.js';
 import {toolPatch} from './normalize.js';
 import {titleFromPrompt, transcriptFile} from './title.js';
 
@@ -52,10 +53,24 @@ function* entries(text: string): Generator<Entry> {
 	}
 }
 
-const promptOf = (e: Entry): string | undefined =>
-	e.type === 'user' && e.isMeta !== true && e.isSidechain !== true && typeof e.message?.content === 'string'
-		? e.message.content
-		: undefined;
+// A message sent with shell context is stored as text blocks: the context block, then the prompt.
+const textBlocks = (content: unknown): string[] | undefined => {
+	if (!Array.isArray(content) || content.length === 0) return undefined;
+	const texts: string[] = [];
+	for (const b of content as Array<Record<string, unknown> | null>) {
+		if (b?.['type'] !== 'text' || typeof b['text'] !== 'string') return undefined;
+		texts.push(b['text']);
+	}
+	return texts;
+};
+
+const promptOf = (e: Entry): string | undefined => {
+	if (e.type !== 'user' || e.isMeta === true || e.isSidechain === true) return undefined;
+	const content = e.message?.content;
+	if (typeof content === 'string') return content;
+	const prompt = textBlocks(content)?.filter(t => !isShellContext(t));
+	return prompt !== undefined && prompt.length > 0 ? prompt.join('\n') : undefined;
+};
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 
@@ -191,6 +206,13 @@ export async function readTranscriptDetail(file: string): Promise<DetailLine[]> 
 			if (e.isMeta === true) continue;
 			if (typeof content === 'string') {
 				push('', ...content.split('\n').map((l, i) => (i === 0 ? `> ${l}` : `  ${l}`)));
+				continue;
+			}
+			const blocks = textBlocks(content);
+			if (blocks !== undefined) {
+				const prompt = blocks.filter(t => !isShellContext(t)).join('\n');
+				push('', ...blocks.filter(isShellContext).flatMap(c => c.split('\n').map(l => `  ${l}`)));
+				if (prompt !== '') push(...prompt.split('\n').map((l, i) => (i === 0 ? `> ${l}` : `  ${l}`)));
 				continue;
 			}
 			if (!Array.isArray(content)) continue;

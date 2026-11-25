@@ -528,7 +528,7 @@ export async function runRunner(opts: RunnerOptions): Promise<RunnerHandle> {
 			switch (frame.type) {
 				case 'send':
 					try {
-						s.send(frame.text, frame.command ? {command: true} : {});
+						s.send(frame.text, {...(frame.command && {command: true}), ...(frame.context !== undefined && {context: frame.context})});
 					} catch (err) {
 						const error = clip(redact(err instanceof Error ? err.message : 'The message was not sent'), 1000);
 						write(c, {type: 'event', event: {type: 'turn-end', outcome: 'error', error}});

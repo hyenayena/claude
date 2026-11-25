@@ -2,7 +2,7 @@ import type {AgentPolicy, CommandConfirmRequest, CommandInfo, CommandInfoSub, Co
 import type {ChatTuning, LivePatch} from '../chat-prefs.js';
 import type {SlashCommandInfo, TaskInfo} from '../chat/chat-session.js';
 import type {ChatMode, ChatEvent, ChatState, ContextInfo, PermissionDecision, PermissionRequest, PlanItem, RateLimitInfo, RouteInfo} from '../deps/chat.js';
-import {ContractError, readChatEvent, readContextInfo, readPermissionDecision, readPermissionRequest, readPlanItems, readProviderCommand, readRateLimit, readRouteInfo, readTaskInfo, TIERS, type Tier} from '../deps/chat.js';
+import {ContractError, readChatEvent, readContextInfo, readPermissionDecision, readPermissionRequest, readPlanItems, readProviderCommand, readRateLimit, readRouteInfo, readTaskInfo, SHELL_LIMITS, TIERS, type Tier} from '../deps/chat.js';
 import {ACCOUNT_NAME_RE} from '../accounts.js';
 import {MAX_ENTRIES, type WireBundle, type WireEntry} from '../vault.js';
 
@@ -71,7 +71,7 @@ export type ClientFrame = Base &
 	(
 		| {type: 'hello'; role: 'attach' | 'control'}
 		| {type: 'open'; open: OpenSpec; tuning: ChatTuning; mode?: ChatMode; keep: boolean}
-		| {type: 'send'; text: string; command?: boolean}
+		| {type: 'send'; text: string; command?: boolean; context?: string}
 		| {type: 'steer'; text: string}
 		| {type: 'interrupt'}
 		| {type: 'setMode'; mode: ChatMode}
@@ -367,7 +367,7 @@ const CLIENT: Record<string, Reader> = {
 		...(has(o, 'mode') && {mode: oneOf(o.mode, MODES, 'mode')}),
 		keep: bool(o.keep, 'keep'),
 	}),
-	send: o => ({text: str(o.text, 'text'), ...(o.command === true && {command: true})}),
+	send: o => ({text: str(o.text, 'text'), ...(o.command === true && {command: true}), ...(has(o, 'context') && {context: str(o.context, 'context', SHELL_LIMITS.contextChars)})}),
 	steer: o => ({text: str(o.text, 'text')}),
 	interrupt: () => ({}),
 	setMode: o => ({mode: oneOf(o.mode, MODES, 'mode')}),

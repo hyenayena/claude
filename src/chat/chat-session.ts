@@ -10,7 +10,7 @@ import type {CacheInfo} from './router.js';
 import type {ProviderCommand, TaskInfo, Tier} from '../deps/chat.js';
 import {InputQueue} from './input-queue.js';
 import {classifyFailure, failureMessage, type FailureKind} from './limits.js';
-import {type Clock, type RateLimitInfo, systemClock} from '../deps/chat.js';
+import {type Clock, type RateLimitInfo, SHELL_LIMITS, systemClock} from '../deps/chat.js';
 import {normalize} from './normalize.js';
 import {PlanTracker} from './plan.js';
 import {type PlanItem} from '../deps/chat.js';
@@ -356,10 +356,13 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		};
 	}
 
-	send(text: string, opts: {command?: boolean} = {}): void {
+	send(text: string, opts: {command?: boolean; context?: string} = {}): void {
 		if (this._state === 'closed') throw new Error('The chat is closed');
 		if (this._state === 'running') throw new Error('A request is already running');
 		if (this._needsNewSession) throw new Error(RESUME_MESSAGE);
+		const command = opts.command === true;
+		const context = !command && !text.startsWith('/') && opts.context ? opts.context : undefined;
+		if (context !== undefined && context.length > SHELL_LIMITS.contextChars) throw new Error('The shell context is too long');
 
 		if (!this.lockHeld && this.opts.turnLock) {
 			this.opts.turnLock.acquire();
@@ -397,26 +400,25 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.turnUsageFrom = this.usage;
 		this.stats = new TurnStats();
 		this.turnClockStart = this.clock.now();
-		this.log.info('turn started', {chars: text.length});
+		this.log.info('turn started', {chars: text.length, contextChars: context?.length ?? 0});
 		this.turnHandle = handle;
 		this.armTurnTimer(this.timeoutMs);
-		const command = opts.command === true;
 		if (this.opts.route && !command && !text.startsWith('/')) {
 			this.emit({type: 'sent', text});
-			this.startRouting(handle, text);
+			this.startRouting(handle, text, context);
 			return;
 		}
-		this.pushUser(handle, text, command);
+		this.pushUser(handle, text, command, undefined, context);
 		this.emit({type: 'sent', text});
 	}
 
-	private startRouting(handle: Handle, text: string): void {
+	private startRouting(handle: Handle, text: string, context: string | undefined): void {
 		const routing: Routing = {ac: new AbortController(), steers: [], done: Promise.resolve()};
 		this.routing = routing;
-		routing.done = this.runRoute(handle, text, routing);
+		routing.done = this.runRoute(handle, text, routing, context);
 	}
 
-	private async runRoute(handle: Handle, text: string, routing: Routing): Promise<void> {
+	private async runRoute(handle: Handle, text: string, routing: Routing, context: string | undefined): Promise<void> {
 		let result: RouteResult | undefined;
 		try {
 			let announced = false;
@@ -447,7 +449,7 @@ export class ChatSession implements ChatController, PermissionPrompter {
 			this._route = info;
 			const previous = cut ? undefined : result?.previous;
 			this.emit({type: 'route', route: info, ...(previous !== undefined && {previous}), source: 'message'});
-			this.pushUser(handle, text, false);
+			this.pushUser(handle, text, false, undefined, context);
 			for (const steer of routing.steers) this.pushUser(handle, steer, false, 'next');
 		} finally {
 			if (result?.apply) result.settled?.(applied);
@@ -511,11 +513,11 @@ export class ChatSession implements ChatController, PermissionPrompter {
 		this.emit({type: 'sent', text});
 	}
 
-	private pushUser(handle: Handle, text: string, command: boolean, priority?: 'next'): void {
+	private pushUser(handle: Handle, text: string, command: boolean, priority?: 'next', context?: string): void {
 		handle.input.push({
 			...(priority && {priority}),
 			type: 'user',
-			message: {role: 'user', content: text},
+			message: {role: 'user', content: context ? [{type: 'text' as const, text: context}, {type: 'text' as const, text}] : text},
 			parent_tool_use_id: null,
 			uuid: randomUUID(),
 			session_id: this._sessionId ?? '',

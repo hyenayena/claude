@@ -373,3 +373,20 @@ test('a snapshot without a plan leaves it empty', async () => {
 	cleanup.push(() => s.close());
 	assert.deepEqual(s.plan, []);
 });
+
+test('send carries the shell context in its frame, and no key without one', async () => {
+	const r = await fakeRunner();
+	const s = await connect(r.socketPath);
+	cleanup.push(() => s.close());
+	s.send('hi', {context: 'CTX'});
+	await r.until(() => r.frames.some(f => f.type === 'send'));
+	const frame = r.frames.find(f => f.type === 'send') as Extract<ClientFrame, {type: 'send'}>;
+	assert.equal(frame.context, 'CTX');
+	assert.equal(frame.text, 'hi');
+	const plain = await fakeRunner();
+	const p = await connect(plain.socketPath);
+	cleanup.push(() => p.close());
+	p.send('hi');
+	await plain.until(() => plain.frames.some(f => f.type === 'send'));
+	assert.ok(!('context' in (plain.frames.find(f => f.type === 'send') as object)));
+});

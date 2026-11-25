@@ -204,3 +204,9 @@ test('control frames and broken lines stay fatal after a dropped event', () => {
 		assert.throws(() => dec.push(Buffer.from(bad)), ProtocolError);
 	}
 });
+
+test('a send frame with shell context round-trips and the field is optional', () => {
+	const frame: ClientFrame = {v: 1, type: 'send', text: 'hi', context: 'ctx\n<bash-input>ls</bash-input>'};
+	assert.deepEqual(createDecoder('toRunner').push(Buffer.from(encodeFrame(frame))), [frame]);
+	assert.deepEqual(createDecoder('toRunner').push(line({v: 1, type: 'send', text: 'hi', context: null})), [{v: 1, type: 'send', text: 'hi'}]);
+});
